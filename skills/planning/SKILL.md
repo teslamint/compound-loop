@@ -29,56 +29,66 @@ Map files to create or modify before defining units: one responsibility per file
 
 ## 4. Deliverable-type gate
 
-Classify the spec's deliverable once: `code` (source, schema, CLI, API changes) or `non-code` (docs, skill files, config-only). Record it in the plan frontmatter's `execution` field per `schemas/plan-schema.md` — never in a side-channel file. This selects the unit template in step 6.
+Classify the spec's deliverable once: `code` (source, schema, CLI, API changes) or `non-code` (docs, skill files, config-only). Record it in the plan frontmatter's `execution` field per `schemas/plan-schema.md` — never in a side-channel file. This selects the unit template in step 7.
 
-## 5. Decomposition
+## 5. Scenario flow analysis
+
+Before cutting units, walk every User Scenario (S-ID) in the spec end to end: what has to exist, in what order, for this scenario to complete? The walkthrough produces two artifacts consumed downstream (`enforces: P3`):
+
+- The plan's **Scenario coverage map** (hard-floor section per `schemas/plan-schema.md`): S-ID → ordered unit chain → the integration test scenario(s) that walk it.
+- The **integration test scenarios** themselves — derive them from user scenarios first, before inventing technical integration cases. A user scenario no test walks is untested motivation; a scenario no unit chain completes is a plan gap that blocks approval (add the missing unit, or send the scenario back to `designing` for explicit descoping — never silently drop it).
+
+Specs without a User Scenarios section (or plans with no spec) record that fact in the coverage map section explicitly. Decomposition in step 6 takes this walkthrough as input: unit boundaries that would strand a scenario mid-flow are wrong boundaries.
+
+## 6. Decomposition
 
 A unit is the smallest change worth a fresh reviewer's gate — small enough that a reviewer could reject one unit while approving its neighbor, but not a 2–5 minute micro-step. Fold setup and scaffolding into the unit that needs them.
 
-U-IDs follow the stability rule in `schemas/plan-schema.md` (never renumbered on reorder, split, or delete) — this matters most during the deepening pass in step 11, the likeliest accidental-renumber vector.
+U-IDs follow the stability rule in `schemas/plan-schema.md` (never renumbered on reorder, split, or delete) — this matters most during the deepening pass in step 12, the likeliest accidental-renumber vector.
 
 Smell test: 3–7 units is typical. More than 10 suggests under-decomposition — split the plan or revisit the spec. Fewer than 3 suggests step 1 may have been wrong to write a plan doc at all.
 
-## 6. Unit authoring
+## 7. Unit authoring
 
-Use the code or non-code unit template from `schemas/plan-schema.md` as-is — do not redefine it here. For code units, fill test scenarios by category (happy / edge / error / integration); every category that applies to the unit gets a scenario, right-sized to its risk. Link a scenario to a spec acceptance criterion with `Covers AE<n>` only when it directly enforces that criterion — sparse by design, since most scenarios are finer-grained than an AE. A `Covers AE<n>` naming a nonexistent criterion is a validation error, not a soft note.
+Use the code or non-code unit template from `schemas/plan-schema.md` as-is — do not redefine it here. For code units, fill test scenarios by category (happy / edge / error / integration); every category that applies to the unit gets a scenario, right-sized to its risk. Integration scenarios come from step 5's walkthrough first — tag the ones that walk a user scenario with `Covers S<n>`. Link a scenario to a spec acceptance criterion with `Covers AE<n>` only when it directly enforces that criterion — sparse by design, since most scenarios are finer-grained than an AE. A `Covers AE<n>` or `Covers S<n>` naming a nonexistent target is a validation error, not a soft note.
 
-## 7. Planning-time vs. implementation-time unknowns
+## 8. Planning-time vs. implementation-time unknowns
 
 Split every open unknown by when it can resolve. Planning-time unknowns block approval — resolve them, or ask, before finalizing the plan. Implementation-time unknowns (exact method or helper names, final SQL, runtime-dependent behavior only discoverable once code is touched) are not gaps — record them under the implementation-time half of Open unknowns so they read as deferred-by-design, never as something missed.
 
-## 8. Anti-expansion
+## 9. Anti-expansion
 
-Distinct from step 7: this is *known but tangential* work noticed while planning — an adjacent refactor, a "while we're here" cleanup, a scope-adjacent nice-to-have. Route it to Deferred to Follow-Up Work, never into an active unit (`enforces: P4, P6`). The user's explicit ask overrides this default — if they asked for the refactor, it's in scope, not deferred. Worked example: a version bump or CHANGELOG entry belongs to `shipping`, never to a planning unit.
+Distinct from step 8: this is *known but tangential* work noticed while planning — an adjacent refactor, a "while we're here" cleanup, a scope-adjacent nice-to-have. Route it to Deferred to Follow-Up Work, never into an active unit (`enforces: P4, P6`). The user's explicit ask overrides this default — if they asked for the refactor, it's in scope, not deferred. Worked example: a version bump or CHANGELOG entry belongs to `shipping`, never to a planning unit.
 
-## 9. No-placeholder rule
+## 10. No-placeholder rule
 
 Banned in any unit: "TBD", "TODO", "similar to Task N" / "see U3", "as appropriate", "etc.", "add appropriate error handling", steps that describe what to do without showing how, and references to types or functions not defined in any unit. Units may be read out of order by their implementer — repeat content rather than pointing sideways.
 
-## 10. Self-review
+## 11. Self-review
 
 Before finalizing, the author (not a subagent) checks:
 - **Spec coverage** — every spec requirement traces to a unit; list gaps.
-- **Placeholder scan** — search for step 9's red flags; fix inline.
+- **Scenario coverage** — re-walk the Scenario coverage map against the final unit set: every S-ID still completes end to end (deepening and unit edits are the likeliest breakage vector), and every map row names a real integration test scenario. `enforces: P3`
+- **Placeholder scan** — search for step 10's red flags; fix inline.
 - **Type consistency** — do signatures, names, and types agree across units (a function `clearLayers()` in U2 and `clearFullLayers()` in U5 is a bug)?
 - **Callers + invariants** — for code units, who calls the functions being changed, and what invariants must still hold afterward?
 - **Retro carryover** — does a prior retrospective's carry-forward item belong in this plan? Check the durable tracker before finalizing.
 
 Fix issues inline; no separate review pass is needed.
 
-## 11. Deepening pass
+## 12. Deepening pass
 
-After self-review, run the confidence check in `references/deepening.md`: five trigger categories score the plan (vague rationale, missing risk treatment, weak sequencing, thin external grounding, unclear verification) — skip deepening entirely when nothing scores. When triggered, dispatch reviewer personas — Architecture and Feasibility always-on, Security/Risk and Scope/Coherence conditional on activation signals — per the dispatch ladder in `references/dispatch-degradation.md` (native parallel → sequential passes; correctness never depends on parallelism being available). Change discipline: tightening prose is in scope; writing implementation code is not; U-IDs are never renumbered; superseded text is resolved in place, never stacked as a separate layer.
+After self-review, run the confidence check in `references/deepening.md`: six trigger categories score the plan (vague rationale, missing risk treatment, weak sequencing, thin external grounding, unclear verification, thin scenario coverage) — skip deepening entirely when nothing scores. When triggered, dispatch reviewer personas — Architecture and Feasibility always-on, Security/Risk and Scope/Coherence conditional on activation signals — per the dispatch ladder in `references/dispatch-degradation.md` (native parallel → sequential passes; correctness never depends on parallelism being available). Change discipline: tightening prose is in scope; writing implementation code is not; U-IDs are never renumbered; superseded text is resolved in place, never stacked as a separate layer.
 
-## 12. Outstanding-question triage
+## 13. Outstanding-question triage
 
 Classify every open question as planning-owned (resolvable from repo context, docs, or a user choice made now) or a product blocker (would change scope, behavior, or success criteria). Never plan over a live product blocker — surface it and either send the user back to `designing` to resolve it, or convert it to an explicit assumption before continuing.
 
-## 13. Commit the plan
+## 14. Commit the plan
 
 Write to `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md` per the naming rule in `schemas/plan-schema.md`, then `git add` and commit following the repo's commit protocol. From this point the plan is a decision artifact — `implementing` never edits its body.
 
-## 14. Handoff
+## 15. Handoff
 
 Offer a 2-option menu: **Subagent-driven** (fresh subagent per unit, review between units — recommended) or **Inline** (execute in this session with checkpoints between units). Fire the chosen path; don't just announce it.
 

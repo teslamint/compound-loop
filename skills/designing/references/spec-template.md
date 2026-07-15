@@ -26,7 +26,13 @@ _Created YYYY-MM-DD._
 [1-3 sentences: what this builds and why]
 
 ## User Scenarios
-[3-6 concrete scenarios: who, why, and how (with CLI/MCP examples)]
+[3-6 concrete scenarios: who, why, and how (with CLI/MCP examples). Each gets a stable
+ID — S1, S2, ... — never renumbered on reorder or deletion. Downstream, `planning`'s
+scenario coverage map and integration test scenarios trace back to these S-IDs, so an
+unlabeled scenario is invisible to the rest of the pipeline.]
+
+### S1: <scenario title>
+[who / why / how]
 
 ## Scope
 ### In
@@ -79,7 +85,7 @@ Anything the spec author deliberately left unresolved: forks not worth blocking 
 
 A good spec:
 - Can be handed to someone with zero conversation context
-- Has concrete user scenarios with CLI/MCP examples showing who uses it and why
+- Has concrete, S-ID-labeled user scenarios with CLI/MCP examples showing who uses it and why
 - Has explicit scope boundaries (In/Out)
 - Names concrete files, tables, functions -- not just concepts
 - Addresses risks and mitigations

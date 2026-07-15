@@ -29,7 +29,7 @@ Mentally execute the diff -- trace inputs through branches, track state across c
 
 ## tests (always-on)
 
-**Focus**: coverage gaps, weak assertions, brittle tests, missing edge-case tests for the scenarios the diff introduces.
+**Focus**: coverage gaps, weak assertions, brittle tests, missing edge-case tests for the scenarios the diff introduces. When a plan was provided (`plan:` token or discovered), also verify its Scenario coverage map: every `Covers S<n>` integration test the map names exists in the diff or the tree, and no user scenario (S-ID) is left without a walking test — file a finding per missing walk, citing the S-ID. `enforces: P3`
 
 **Non-flags**: test code style; adding tests for trivial getters or pure boilerplate with no branching.
 
