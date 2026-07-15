@@ -1,0 +1,11 @@
+{
+  "name": "compound-loop",
+  "version": "0.1.0",
+  "description": "Cross-harness engineering lifecycle skills: design, plan, implement, review, ship, retrospect, and compound knowledge. Distilled from superpowers, compound-engineering, and release-loop.",
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Compound Loop",
+    "shortDescription": "Engineering lifecycle skills that work identically in Claude Code and Codex."
+  }
+}
