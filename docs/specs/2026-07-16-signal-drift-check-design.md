@@ -1,6 +1,6 @@
 ---
 title: Terminal-Signal Drift Check
-status: draft
+status: approved
 date: 2026-07-16
 schema: spec/v1
 ---
