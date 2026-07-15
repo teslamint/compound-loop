@@ -42,18 +42,26 @@ Ship without Retro is an incomplete release: after merge, the loop always enters
 ## Resuming (`resume` argument)
 
 1. Read `.release-loop/progress.md`; reject unknown `schema:` versions rather than guessing.
-2. Verify the recorded branch exists and is checked out; verify recorded artifact pointers (spec/plan paths) still exist. On mismatch or corruption, rebuild state from git evidence — **the progress file and `git log` always outrank conversation memory**. `enforces: P8`
+2. Verify the recorded branch exists and is checked out; verify recorded artifact pointers (spec/plan paths) still exist. On mismatch, corruption, **or a progress.md that is absent entirely** (a predecessor died before writing one — treat identically), rebuild state from git evidence — **the progress file and `git log` always outrank conversation memory**. `enforces: P8`
 3. Resume at the recorded phase and unit.
 
 ## Gate handling
 
 - USER gates use the harness's blocking question tool per `references/question-tools.md` (plugin root). Record the approval in progress.md (`approved_by: user`, timestamp) — this is the evidence `--skip-design` later relies on.
+- **Gate approval is not execution authorization** (pilot-proven, `enforces: P7`): a relayed "the human approved" message lets the loop *advance*, but protected or outward executions (merging to the default branch, pushing) are performed by whoever holds first-hand consent — the human, or the session that received the approval directly. A phase worker acting on relay will be (correctly) refused by harness permission systems; it prepares the exact command and hands it up instead of executing.
 - Workers/phase skills never ask the user directly in `--auto` mode; they return structured results and this orchestrator decides (see `references/dispatch-degradation.md`, worker protocol).
 - On any gate failure or cap exhaustion escalated by a phase skill: pause the loop, record the blocked state + reason in progress.md, and surface it to the user. Never loop past an escalation.
 
 ## State updates
 
 Update `.release-loop/progress.md` after every phase transition, unit completion, CI attempt, and review round — at the moment it happens, not batched at phase end. Schema: `references/progress-schema.md`.
+
+## Worker liveness
+
+Silence is the default failure mode of a long-running dispatched worker — a dead worker looks identical to a busy one. Defenses (pilot-proven):
+- Workers write the ledger **before** starting substantive work and at every transition (P8) — death before the first ledger write cost a full phase once.
+- Workers send their first gate/status message early, not after long silent stretches.
+- The orchestrator watches ledger mtime/phase (not the worker's chat) and treats prolonged no-write as presumed-dead: verify via file evidence, then stop and resume with a successor — the ledger makes replacement cheap.
 
 ## Anti-patterns
 

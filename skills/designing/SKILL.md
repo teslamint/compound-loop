@@ -53,6 +53,8 @@ Tier gates probe depth (Step 5) and which spec sections are material (Step 8). I
 
 ## Step 4: Fast Path
 
+*(Scope note: the fast path skips dialogue steps only — Steps 10–12, independent review through the human gate, always still apply.)*
+
 If the request already has specific acceptance criteria, references an existing pattern to follow, and describes exact expected behavior with constrained scope, skip Steps 5-6. Confirm understanding, present a short spec only when a durable handoff to `planning` would help, and move on.
 
 ## Step 5: Rigor-Gap Probes
@@ -116,6 +118,8 @@ Requirements get stable R-IDs, grouped by concern, only when the spec's scope wa
 Before the user sees the spec, get a review from a fresh perspective — distinct from the user's own review in Step 12. Dispatch per `references/dispatch-degradation.md`: native reviewer subagent (most capable model) first; the `advisor` tool if the harness provides one and no subagent primitive exists; if neither is available, state that explicitly and perform a distanced self-review pass instead of skipping silently.
 
 Scope the review to internal consistency, missing edge cases, scope creep, and feasibility. Independent review has caught critical design flaws (pipeline forks, missing rebuild triggers) that self-review missed — treat it as mandatory for schema or pipeline changes, not optional ceremony.
+
+**Empirical grounding sub-step** (pilot-proven, `enforces: P3`): any spec example that names a specific existing file, line, or behavior — especially Testing-section fixture targets — must be checked against the live repo (grep/dry-run), not just reviewed for internal logic. Two independent reviews of the same spec both missed a fixture target that a one-line grep would have falsified; internal-logic review and live-repo grounding are different checks (see docs/solutions/workflow-issues/spec-review-empirical-grounding-gap.md where present).
 
 ## Step 11: Spec Self-Review
 

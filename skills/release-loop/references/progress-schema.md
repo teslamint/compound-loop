@@ -48,6 +48,7 @@ blocked_reason: null                    # set when phase_status: blocked
 
 - Write at the moment of the event, not batched (`enforces: P3` — the record is the evidence).
 - **Gate transitions record their evidence inline**: the proving command, its observed result, and the timestamp (see the `ship: verification gate` log line above). A transition line without command + result is a claim, not a record — resumed and headless runs inherit evidence only through these lines. `enforces: P3, P8`
-- Timestamps are ISO-8601 with timezone.
+- Timestamps are ISO-8601 with timezone, **fetched fresh via command (`date -u +%Y-%m-%dT%H:%M:%SZ`) at each write — never estimated or interpolated** (pilot-proven: estimated timestamps produced a non-monotonic log).
+- **Status flips are atomic with their evidence**: changing `phase`/`phase_status` and writing the explaining Log line (plus `blocked_reason` when the status is blocked) happen in the same edit — a bare `blocked` with `blocked_reason: null` is a schema violation, not a placeholder.
 - Corrupt/unparsable file on resume → rebuild frontmatter from git evidence (branch, committed artifacts, PR state via `gh pr view`), keep the old file as `progress.md.corrupt-<timestamp>`, and note the rebuild in the Log.
 - `.release-loop/` (briefs/, reports/, reviews/, progress.md) is local working state: gitignore it by default; the durable artifacts are the committed spec/plan/retro docs.

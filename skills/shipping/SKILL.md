@@ -112,6 +112,8 @@ gh pr merge <number> --squash --delete-branch [--auto]
 
 ## Step 8: Cleanup
 
+**Who executes the merge**: when this skill runs as a dispatched phase worker, the relayed gate decision authorizes the outcome but not the execution — the merge itself is run by the orchestrating session or the human (first-hand consent), with this worker supplying the exact command and the prepared commit message. Harness permission classifiers refuse relay-authorized protected-branch merges by design. `enforces: P7`
+
 Runs only for the **merge** and **discard** outcomes -- "keep as-is" and "PR open for iteration" always preserve the worktree, since the user needs it alive.
 
 Ordering invariant, never reordered: **merge -> verify tests on the merged result -> remove worktree -> delete branch.** Only remove a worktree this tooling created (path under `.worktrees/` or `worktrees/`); anything else is harness- or user-owned -- leave it. Discard requires a typed `discard` confirmation, not a menu click, per `references/question-tools.md`; on confirmation, force-delete (`git branch -D`) only after worktree removal succeeds.

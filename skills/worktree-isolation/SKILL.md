@@ -81,6 +81,8 @@ Follow this priority order. Explicit user preference always beats observed files
 git check-ignore -q .worktrees 2>/dev/null || git check-ignore -q worktrees 2>/dev/null
 ```
 
+**Who owns the ignore commit**: enabling `.worktrees/` in `.gitignore` is a default-branch concern — commit that one-line change to the default branch (it is setup, not feature work), even when every other rule says feature work never touches the default branch directly. Note it in your report so the orchestrator knows the default branch moved.
+
 **If NOT ignored:** Add to .gitignore, commit the change, then proceed.
 
 **Why critical:** Prevents accidentally committing worktree contents to repository.
