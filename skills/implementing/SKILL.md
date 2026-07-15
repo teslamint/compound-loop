@@ -1,0 +1,76 @@
+---
+name: implementing
+description: Execute an approved plan to completion with review checkpoints, surviving context loss, on any harness
+---
+
+# Implementing
+
+**Entry:** an approved plan file (`schemas/plan-schema.md` contract) or a bare prompt already triaged Trivial/Small-Medium by the caller.
+**Exit:** every Implementation Unit complete, tests passing, final branch review clean (or only Minor findings remain).
+**Gate:** AUTO — advances to `reviewing` once every unit passes its review.
+
+Plan consumption follows `schemas/plan-schema.md` exactly; this skill does not restate the unit template.
+
+## Pre-flight
+
+1. Read the plan once. It is a **decision artifact, not an execution script** (`enforces: P8`) — never edit its body during execution; progress lives in commits and the ledger, not plan edits.
+2. **Contradiction scan**: before Unit 1, scan the whole plan once for units that contradict each other or a Global Constraint, or that mandate something the review rubric below would flag as a defect. Batch every finding into **one** blocking question (`references/question-tools.md` at the plugin root); a clean scan proceeds without comment.
+3. **Ledger resume check**: read `.release-loop/progress.md`. Units it lists complete are done — do not re-dispatch them (`enforces: P8`); trust the ledger and `git log` over recollection. Resume at the first incomplete unit.
+4. **Worktree setup**: invoke `worktree-isolation` to obtain or confirm an isolated workspace before any unit touches files.
+
+## Execution strategy
+
+| Strategy | When |
+|---|---|
+| Inline | 1–2 units, or units needing mid-flight user interaction |
+| Serial subagents | 3+ units with dependencies between them; fresh context per unit |
+| Parallel subagents | 3+ independent units that pass the Parallel Safety Check below |
+
+**Parallel Safety Check**: map every candidate unit's `Files:` (Create/Modify/Test) to its unit; any path claimed by 2+ units is overlap. Overlap + no worktree isolation → downgrade to serial, log the reason (e.g. "Units 2 and 4 share `config/routes.rb`"). Overlap + worktree isolation available → parallel stays safe: the overlap becomes an expected merge conflict handled by the worktree-isolated protocol in `references/merge-protocols.md`, not silent data loss.
+
+**Capability check**: select the dispatch tier via `references/dispatch-degradation.md` at the plugin root (`enforces: P9`) — native parallel subagents → sequential passes → single-call fallback. No harness subagent primitive at all → **no-subagent fallback**: execute units inline, sequentially, with a human checkpoint between units. This floor is the correctness baseline; every tier above it buys speed and context freshness, never correctness.
+
+## Per-unit loop
+
+For each unit, in dependency order:
+
+1. **Brief**: write the unit's full text (exact values, signatures, Files, Interfaces, Test scenarios, Execution note) to `.release-loop/briefs/U<N>-brief.md`. A dispatch prompt describes one unit, not the session's history — never paste prior-unit summaries into a later dispatch.
+2. **Dispatch implementer**: one line on where the unit fits, the brief path introduced as "read this first — your requirements," interfaces/decisions from earlier units the brief cannot know, your resolution of any ambiguity you noticed, and the report path `.release-loop/reports/U<N>-report.md`. Code units follow `tdd`'s Execution note; non-code units write → self-review against spec → commit.
+3. **Status protocol**:
+
+| Status | Orchestrator response |
+|---|---|
+| DONE | Proceed to task review |
+| DONE_WITH_CONCERNS | Correctness/scope concerns → address before review; pure observations → note and proceed |
+| NEEDS_CONTEXT | Supply the missing context, re-dispatch |
+| BLOCKED | Context gap → re-dispatch with context; reasoning gap → re-dispatch with a more capable model; too large → split; plan itself wrong → escalate to the human |
+
+Never force the same model to retry unchanged — if the implementer said it's stuck, something has to change.
+
+4. **Task review**: generate a diff (`base-before-unit..HEAD`) to `.release-loop/reviews/U<N>-diff.txt`. Dispatch a reviewer with the brief path, report path, diff path, and Global Constraints copied verbatim from the plan. The reviewer returns **both** verdicts — spec compliance and quality — missing either makes the review incomplete. Reviewer-prompt rules: never pre-judge or pre-rate a finding's severity, never tell the reviewer what not to flag; the constraints block is the reviewer's attention lens, copied verbatim, not paraphrased or softened.
+5. **"Cannot verify from diff"** items are the orchestrator's to resolve, not the reviewer's — they require cross-unit context only you hold. A confirmed gap is a failed spec review: send it back to the implementer.
+6. **Plan-mandated conflicts** — a finding that conflicts with what the plan's own text requires is the human's decision, like any plan contradiction: present the finding and the plan text, ask which governs. Never silently dismiss a finding because "the plan says so," and never dispatch a fix that contradicts the plan without asking.
+7. **Fix loop**: Critical/Important findings → one fix subagent with the complete findings list, then re-review. **Cap: 3 rounds per unit**; on cap exhaustion, escalate to the human with the surviving findings. Minor findings → record under the ledger's `MinorFindings:`, do not fix now — the final branch review triages which of these must land before merge.
+8. Mark the unit complete in the ledger only once both verdicts are clean (or only Minor remains).
+
+## Test gates
+
+Before writing a unit's tests, check scenario completeness against the Test Scenario Completeness table in `references/test-checks.md` (happy/edge/error/integration) and supplement any gap from the unit's own Goal/Approach — vague scenarios ("validates correctly") are a gap too. Before marking a unit done, run the System-Wide Test Check in the same reference file; **skip it** for leaf-node changes with no callbacks, no persisted state, and no parallel interfaces.
+
+## Incremental commits
+
+Heuristic: can you write a commit message that isn't "WIP" or "partial X"? If yes, commit now. Stage only the files for this logical change — never `git add -A`.
+
+## Simplify-as-you-go
+
+`enforces: P4, P5`. At phase boundaries — every 2–3 units, not after every single unit — review recently changed files for duplication and consolidation opportunities. Do not simplify after every unit: early duplication between units may be intentional divergence that hasn't finished revealing itself, and premature merging couples code that changes for different reasons.
+
+## Progress ledger
+
+`enforces: P8`. `.release-loop/progress.md` survives context compaction; conversation memory does not. After each unit's review passes, append one line: `Unit <N>: complete (commits <base7>..<head7>, review clean)`. On any resume, trust the ledger plus `git log` over recollection — the commits it names exist in git even when context no longer remembers creating them.
+
+## Final branch review
+
+After all units complete: generate the full branch diff (`merge-base(base, HEAD)..HEAD`) to `.release-loop/reviews/branch-diff.txt`. Dispatch one final reviewer on the most capable available model with the branch diff, the spec, the accumulated Minor findings, and Global Constraints. It checks cross-unit integration (task reviewers only ever saw their own diff), spec coverage across all units, which Minor findings need fixing, and anything visible only from the full diff. Findings get **ONE** fix subagent with the complete list — never one fixer per finding. Re-review under the same 3-round cap; escalate on cap exhaustion with any surviving Critical/Important findings named explicitly.
+
+Merge mechanics for worktree-isolated or shared-directory parallel dispatch: `references/merge-protocols.md`.
