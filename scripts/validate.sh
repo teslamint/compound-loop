@@ -92,6 +92,100 @@ if bad:
 print("ok:   all enforces: tags reference existing principles")
 PY
 
+# 6. Terminal signal lines in consumer SKILL.md files match schemas/headless-contract.md
+python3 - "$ROOT" <<'PY' || FAIL=1
+import re, sys, pathlib
+
+root = pathlib.Path(sys.argv[1])
+TAG = "[signal-drift]"
+failures = []
+
+def fail(msg):
+    failures.append(f"FAIL: {TAG} {msg}")
+
+contract_path = root / "schemas/headless-contract.md"
+try:
+    contract_text = contract_path.read_text(encoding="utf-8")
+except OSError:
+    fail("schemas/headless-contract.md missing or unreadable")
+    contract_text = None
+
+canonical = {}  # producer -> {state: canonical text}
+if contract_text is not None:
+    for producer in ("compound", "compound-refresh", "retrospective"):
+        pattern = (
+            r"^\|\s*`" + re.escape(producer) + r"`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*$"
+        )
+        m = re.search(pattern, contract_text, re.M)
+        if m:
+            canonical[producer] = {
+                "success": m.group(1),
+                "skipped": m.group(2),
+                "failed": m.group(3),
+            }
+    flat = [(p, s, t) for p, states in canonical.items() for s, t in states.items()]
+    distinct = {t for _, _, t in flat}
+    if len(flat) != 9 or len(distinct) != 9:
+        fail(
+            f"schemas/headless-contract.md did not yield exactly 9 canonical, "
+            f"pairwise-distinct signal lines (found {len(flat)}, {len(distinct)} distinct)"
+        )
+        canonical = {}
+
+seen = set()
+candidate_re = re.compile(r"`([^`]+)`")
+state_re = re.compile(r"^(Documentation|Refresh|Retrospective)\s+(complete|skipped|failed)\b", re.I)
+state_key = {"complete": "success", "skipped": "skipped", "failed": "failed"}
+producer_key = {"documentation": "compound", "refresh": "compound-refresh", "retrospective": "retrospective"}
+
+consumer_files = [
+    "skills/compound/SKILL.md",
+    "skills/compound-refresh/SKILL.md",
+    "skills/retrospective/SKILL.md",
+]
+
+if canonical:
+    for rel in consumer_files:
+        path = root / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            fail(f"{rel} missing or unreadable")
+            continue
+        for m in candidate_re.finditer(text):
+            span = m.group(1)
+            sm = state_re.match(span)
+            if not sm:
+                continue
+            producer = producer_key[sm.group(1).lower()]
+            state = state_key[sm.group(2).lower()]
+            triplet = canonical.get(producer)
+            if triplet is None:
+                continue
+            line = text.count("\n", 0, m.start()) + 1
+            if span == triplet[state]:
+                seen.add((producer, state))
+            else:
+                fail(
+                    f"{rel}:{line}: signal text mismatch — found {span!r}, "
+                    f"expected one of producer '{producer}': "
+                    f"success={triplet['success']!r} skipped={triplet['skipped']!r} failed={triplet['failed']!r}"
+                )
+
+    for producer, states in canonical.items():
+        for state, text_ in states.items():
+            if (producer, state) not in seen:
+                fail(
+                    f"canonical line not found in any consumer file — "
+                    f"producer '{producer}' state '{state}': {text_!r}"
+                )
+
+if failures:
+    print("\n".join(failures))
+    sys.exit(1)
+print("ok:   terminal signal lines match schemas/headless-contract.md")
+PY
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"
