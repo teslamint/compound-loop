@@ -1,6 +1,6 @@
 # compound-loop
 
-Engineering lifecycle skills that work identically in Claude Code and Codex.
+Engineering lifecycle skills with identical contracts, gates, and safety invariants in Claude Code and Codex.
 
 compound-loop merges three lineages into one curated skill set:
 
@@ -38,8 +38,10 @@ Read [PRINCIPLES.md](PRINCIPLES.md) first — it is the charter every skill enfo
 
 ### Codex
 
+User-level skill discovery root is `~/.agents/skills/` (current official docs; verify with your Codex version — legacy setups used `~/.codex/skills/`):
+
 ```bash
-ln -s "$(pwd)/skills" ~/.codex/skills/compound-loop   # or per-skill symlinks
+for s in skills/*/; do ln -s "$(pwd)/$s" ~/.agents/skills/"$(basename "$s")"; done
 ```
 
 Skills are invoked as `/name` in Claude Code and `$name` in Codex.

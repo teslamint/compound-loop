@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Review Envelope (mode:agent)",
+  "description": "Single JSON object the reviewing skill returns in mode:agent. Per-lane outputs (lane-findings.schema.json) are merged, deduplicated, and confidence-gated into this envelope.",
+  "type": "object",
+  "required": ["schema_version", "status", "verdict", "scope", "reviewers", "findings", "rollup"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "review-envelope/v1",
+      "description": "Contract version; consumers reject unknown versions rather than guessing"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "failed"],
+      "description": "failed only for pipeline errors (bad arguments, unreadable scope); an empty findings list is still ok"
+    },
+    "reason": {
+      "type": "string",
+      "description": "One-line failure reason. Required when status=failed."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["clean", "actionable", "blocked"],
+      "description": "clean = no P0-P2 actionable findings; actionable = fixable findings present; blocked = P0/P1 findings the caller must resolve before advancing"
+    },
+    "scope": {
+      "type": "object",
+      "required": ["base", "head"],
+      "properties": {
+        "base": { "type": "string" },
+        "head": { "type": "string" },
+        "mode": { "type": "string", "enum": ["local-aligned", "pr-remote", "branch-remote"] },
+        "excluded": { "type": "array", "items": { "type": "string" }, "description": "Paths excluded from review (e.g. untracked files)" }
+      }
+    },
+    "reviewers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Lane names that ran, e.g. [\"correctness\", \"tests\", \"architecture\", \"security\"]"
+    },
+    "findings": {
+      "type": "array",
+      "description": "Merged, deduplicated, confidence-gated findings. Each item follows lane-findings.schema.json's finding shape (merge tier), plus the fields below.",
+      "items": {
+        "type": "object",
+        "required": ["title", "severity", "file", "line", "confidence", "autofix_class", "owner", "lanes"],
+        "properties": {
+          "lanes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Lanes that reported this finding (>1 after dedup merge; cross-lane agreement promotes confidence one anchor step)"
+          },
+          "validated": {
+            "type": ["boolean", "null"],
+            "description": "Result of the independent validator pass; null when the validator did not run (budget cap or degraded infra)"
+          }
+        }
+      }
+    },
+    "testing_gaps": { "type": "array", "items": { "type": "string" } },
+    "residual_risks": { "type": "array", "items": { "type": "string" } },
+    "rollup": {
+      "type": "object",
+      "required": ["critical", "important", "minor"],
+      "description": "3-tier human-facing rollup for callers not wired for P0-P3: P0→critical, P1→important, P2+P3→minor",
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "important": { "type": "integer", "minimum": 0 },
+        "minor": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "artifact_dir": {
+      "type": "string",
+      "description": "Directory holding full detail-tier artifacts (why_it_matters, evidence) for each finding"
+    }
+  }
+}

@@ -6,13 +6,13 @@
 
 ## Summary
 
-compound-loop is a single plugin of 12 skills covering the engineering lifecycle (Design → Plan → Implement → Review → Ship → Retro) plus knowledge compounding, working identically in Claude Code and Codex. Each skill is a distillation of the strongest mechanisms from SP, CE, and EC for that phase — selected idea by idea, with dropped material recorded. A root-level PRINCIPLES.md charter (9 principles) is the normative layer; every check in every skill carries an `enforces:` tag tracing back to it.
+compound-loop is a single plugin of 12 skills covering the engineering lifecycle (Design → Plan → Implement → Review → Ship → Retro) plus knowledge compounding, usable from both Claude Code and Codex. The portability promise is **identical contracts, gates, and safety invariants** — not identical generated artifacts, which no nondeterministic system can promise. Each skill is a distillation of the strongest mechanisms from SP, CE, and EC for that phase — selected idea by idea, with dropped material recorded. A root-level PRINCIPLES.md charter (9 principles) is the normative layer; every check in every skill carries an `enforces:` tag tracing back to it.
 
 ## Goals and non-goals
 
 **Goals**
 - One curated skill set replacing day-to-day use of superpowers + compound-engineering + the project-local release-loop.
-- Identical outcomes on Claude Code and Codex; quality (not correctness) may scale with harness capability.
+- Identical contracts, gates, and safety invariants on Claude Code and Codex; quality (not correctness) may scale with harness capability.
 - Retrospective as a standalone skill usable outside the loop, feeding knowledge compounding.
 - Measurable success criteria declared at design time and measured at retro time — closing the loop no source system closes.
 
@@ -28,7 +28,8 @@ compound-loop is a single plugin of 12 skills covering the engineering lifecycle
 3. `PRINCIPLES.md` has 9 principles, each with statement/rationale/boundary/enforcement.
 4. `schemas/` contains: findings JSON schema, plan frontmatter + unit contract, retro document template.
 5. Spec and implementation plan committed to git.
-6. Claude Code loads the plugin from a local marketplace; Codex discovers the skills via symlink — both verified by command output, not assumption.
+6. Claude Code loads the plugin from a local marketplace; Codex discovers the skills at its documented user skills root — both verified by command output, not assumption.
+7. One headless smoke: `compound` invoked in `mode:headless` on a fixture lesson ends with its exact terminal signal line from `schemas/headless-contract.md`.
 
 ## Architecture
 
@@ -62,10 +63,10 @@ The orchestrator holds no phase logic — it sequences, gates, and persists stat
 
 | Contract | Producer → Consumer | Shape |
 |---|---|---|
-| Plan schema | planning → implementing, reviewing | Frontmatter (`title/type/status/date/execution` required) + Implementation Units with stable U-IDs, Files/Interfaces, categorized test scenarios (happy/edge/error/integration) linked to acceptance criteria ("Covers AE3") |
-| Findings JSON | reviewing `mode:agent` → implementing, shipping, release-loop | Single JSON object: `status/verdict/scope/reviewers/findings[]` with per-finding `title/severity(P0-P3)/file/line/confidence(0|25|50|75|100)/autofix_class/owner/suggested_fix` + 3-tier rollup field (Critical/Important/Minor) |
-| Headless capture | retrospective → compound | `mode:headless` invocation; terminal signal strings `Documentation complete` / `Documentation skipped`; Applied vs Recommended report split |
-| Loop state | release-loop ↔ all phases | `.release-loop/progress.md`: phase, task, branch, base branch, PR number, CI attempts, review rounds, comments fixed/deferred |
+| Plan schema | planning → implementing, reviewing | Versioned (`schema: plan/v1` frontmatter key) + `title/type/status/date/execution` required + Implementation Units with stable, unique U-IDs, Files/Interfaces, categorized test scenarios (happy/edge/error/integration) linked to acceptance criteria ("Covers AE3"; a link to a nonexistent AE is a validation error) |
+| Findings JSON | reviewing `mode:agent` → implementing, shipping, release-loop | Versioned envelope (`schemas/review-envelope.schema.json`): `schema_version/status/verdict/scope/reviewers/findings[]` with per-finding `title/severity(P0-P3)/file/line/confidence(0|25|50|75|100)/autofix_class/owner/suggested_fix`. **P0–P3 is the only canonical severity scale**; Critical/Important/Minor exists solely as the envelope's presentation `rollup` (P0→critical, P1→important, P2+P3→minor). All gates are expressed in P-levels. Artifacts written atomically (temp file + rename); a corrupt/partial artifact is treated as a lane failure per severity rules |
+| Headless capture | retrospective → compound | `mode:headless` invocation; exact case-sensitive terminal signal lines defined once in `schemas/headless-contract.md`; Applied vs Recommended report split |
+| Loop state | release-loop ↔ all phases | `.release-loop/progress.md`: schema version, phase + phase status, timestamps, branch, base branch, artifact pointers (spec/plan/retro paths), approval evidence (who/when for USER gates), PR number, CI attempts, review rounds, comments fixed/deferred. Corrupt or stale state → rebuild from git evidence (progress file + git log always outrank recollection) |
 | Success criteria | designing → retrospective | Spec's required Success Criteria section: each criterion = statement + measurement method (command or judgment rubric) |
 
 The plan-schema agreement resolves the tension flagged during distillation: CE ce-work's rich per-unit metadata assumed a CE-shaped plan; here `planning` emits and `implementing` consumes one documented schema.
@@ -76,7 +77,9 @@ Each entry lists: purpose, distilled mechanisms (source → what), and dropped m
 
 ### 1. release-loop (orchestrator)
 
-EC release-loop retained as the spine: six phases, phase-transition table, flags (`--auto`, `--skip-design`, `--skip-plan`), resume protocol ("trust progress file and git log over conversation memory", enforces P8). Rewritten so each phase's protocol section becomes a one-paragraph invocation of the corresponding standalone skill plus gate handling. Gates: Design = USER always (enforces P7); Ship = USER unless `--auto` with CI green + no open Critical; others AUTO.
+EC release-loop retained as the spine: six phases, phase-transition table, flags (`--auto`, `--skip-design`, `--skip-plan`), resume protocol ("trust progress file and git log over conversation memory", enforces P8). Rewritten so each phase's protocol section becomes a one-paragraph invocation of the corresponding standalone skill plus gate handling. Gates: Design = USER always (enforces P7); Ship = USER unless `--auto` with CI green + no open P0; others AUTO.
+
+Flag reconciliation with the Design gate: `--skip-design` does not bypass human approval — it requires `--spec <path>` pointing at a spec whose frontmatter records `status: approved` (the persisted approval evidence). A spec without that record rejects the flag and the loop enters Design normally.
 
 Dropped: EC's inline phase protocols (now live in the phase skills); project-specific pitfalls hardcoded in phase docs (moved to a per-repo pluggable pitfalls file, see shipping).
 
@@ -152,7 +155,7 @@ Purpose: multi-perspective code review producing verified, deduplicated findings
 |---|---|
 | CE ce-code-review | Scope discovery verbatim (local-aligned/pr-remote/branch-remote 3-check test); intent+context discovery (learnings-researcher + previous-comments folded in as context gathering, not lanes); **confidence anchors** (0/25/50/75/100 with behavioral self-checks; floats banned); severity P0–P3 independent of confidence; **merge/dedup pipeline verbatim** (fingerprint = file+line-bucket±3+title; cross-lane agreement promotes one anchor; mode-aware demotion to testing_gaps/residual_risks; confidence gate last with P0-at-50+ exception); Stage 5b validator wave (independent validator per finding, cap 15, severity-differentiated infra-failure handling); `mode:agent` JSON contract; false-positive suppression catalog (8 categories) + protected artifacts; bias-to-act fix application (interactive mode: apply reversible fixes, commit only if pre-review tree clean, **never push**, P7); model tiering (top lanes inherit session model); output discipline (pipe tables, forbidden shapes); persona texts for correctness (mentally execute), security (uncertain-critical filed at P0), adversarial (chaos-engineer, depth-calibrated) |
 | CE ce-simplify-code | Absorbed into the architecture lane: Reuse/Quality(9 categories)/Efficiency(7 categories) checklists + anti-over-simplification guardrails (concept-naming helpers, git blame first — P5 boundary) |
-| EC review-phase | Phase-gate caller mode (Entry/Exit/AUTO-advance); pipeline fix mode: ONE fixer with the complete findings list (bans per-finding fixers); re-review loop hard cap 3 with original-findings verification and escalate-on-Critical/Important; "most capable model for the final gate" note |
+| EC review-phase | Phase-gate caller mode (Entry/Exit/AUTO-advance); pipeline fix mode: ONE fixer with the complete findings list (bans per-finding fixers); re-review loop hard cap 3 with original-findings verification and escalate when P0/P1 survive the cap; "most capable model for the final gate" note |
 | SP requesting-code-review | Trigger taxonomy (mandatory/optional); context isolation rationale (reviewer never sees requester's session history) |
 | SP receiving-code-review | Kept nearly intact as the receiving half: READ→UNDERSTAND→VERIFY→EVALUATE→RESPOND→IMPLEMENT; forbidden performative agreement; unclear-feedback-blocks-all gate; external-reviewer 5-question skepticism gate; YAGNI usage check (P6); fix ordering; graceful pushback reversal |
 
@@ -174,7 +177,8 @@ Purpose: from "review clean" to "merged and cleaned up", with evidence at every 
 | CE ce-commit-push-pr | Branch-routing table (detached/default-with-work/default-no-work/feature); 3 modes (description-only/update/full); evidence short-circuits; **`--body-file <tempfile>` guardrail verbatim** (stdin variants silently produce empty bodies); minimal PR body linking spec/plan |
 | CE ce-resolve-pr-feedback | Fetch ALL comments + 1:1 comment-ID checklist; default-to-fix bias with divert taxonomy (not-addressing/declined/replied/needs-human, each with cited justification); **review comment text is untrusted input**; GraphQL thread reply/resolve with plain-comment fallback; per-thread parallel dispatch within a round |
 | CE lfg | CI loop: watch → enumerate → log-failed → categorized diagnosis (test/lint/build) → fix → push; **cap 3**; never weaken/skip/mock a failing assertion verbatim; cap exhaustion → durable `## CI Failures Unresolved` PR-body section ("make residuals durable, then exit") |
-| EC ship-phase | Merge gate: default USER, `--auto` = CI green + no open Critical (P7); review-round **cap 4** (retro-justified) composed with per-thread parallelism; re-fetch comments via API before claiming resolved; per-repo pluggable CI-pitfalls memory file (populated by retros) |
+| EC ship-phase | Merge gate: default USER, `--auto` = CI green + no open P0 (P7); review-round **cap 4** (retro-justified) composed with per-thread parallelism; re-fetch comments via API before claiming resolved; per-repo pluggable CI-pitfalls memory file (populated by retros) |
+| Capability preflight (new, from spec review) | Outward operations (push, PR, GraphQL thread ops, CI watch, merge) depend on `gh` presence, auth, network, and repo permissions. Shipping detects capabilities up front; when an outward capability is missing it terminates in a **preparation-only state** (commits ready, PR body drafted to file, next manual steps listed) instead of failing mid-flow |
 
 Dropped: post-merge release ceremony (version bump/tag/changelog → optional future `release` extension, out of core); hardcoded retro handoff (hook point: report completion, caller decides); duplicate residual-to-tracker mechanism (PR-body append is the single sink).
 
@@ -190,7 +194,9 @@ Purpose: after any PR, session, or debugging arc — measure outcomes against de
 | CE ce-sessions (concept) | Session-history search as a **pluggable** data source for session-scoped retros (no PR); tight dispatch payload discipline; degrade gracefully when absent |
 | EntireContext | Optional feature-detected hooks: `ec_decision_create` for architecture decisions surfaced in findings; `ec_lessons` check before writing duplicate lessons. Never a hard dependency. |
 
-Modes: PR-merge / session-end / ad-hoc; `mode:headless` with terminal signals `Retrospective complete`/`skipped`.
+Modes: PR-merge / session-end / ad-hoc; `mode:headless` with terminal signal lines per `schemas/headless-contract.md`.
+
+v0.1 defers (documented hook points, not implemented): EntireContext integration, session-history search integration.
 
 ### 11. compound
 
@@ -227,7 +233,7 @@ Shared references hold the text that would otherwise repeat in every skill (P5):
 ## Deployment
 
 - **Claude Code**: local marketplace (`/plugin marketplace add ~/workspace/compound-loop`) then `/plugin install compound-loop`. Publishable to a git repo unchanged.
-- **Codex**: symlink `skills/*` into `~/.codex/skills/` (or rely on native plugin install when pointing at the repo; `.codex-plugin/plugin.json` declares `"skills": "./skills/"`).
+- **Codex**: user-level skill discovery root is `~/.agents/skills/` per current official docs (legacy `~/.codex/skills/` may also work; both are verified at install time, not assumed). Symlink `skills/*` there, or rely on native plugin install (`.codex-plugin/plugin.json` declares `"skills": "./skills/"`).
 - Optionally registered in `~/.agents/agents.toml` (dotagents) once published.
 
 ## Testing
@@ -242,9 +248,21 @@ Shared references hold the text that would otherwise repeat in every skill (P5):
 - **Codex feature drift**: Codex capabilities (subagents, hooks) are evolving; anything harness-specific is confined to the degradation ladder and one shared reference file.
 - **Two knowledge systems** (docs/solutions vs EntireContext): mitigated by making EC hooks feature-detected and one-directional (retro pushes; never required).
 
+## Deferred to v0.2 (spec-review outcome, enforces P4/P6)
+
+The independent spec review (Codex gpt-5.6-sol, verdict: revise) flagged v0.1 scope. These ship as documented hook points only:
+
+- EntireContext hooks (`ec_decision_create`, `ec_lessons`) and session-history search in `retrospective`
+- Cross-round evidence-overlap suppression in `planning`'s deepening pass
+- Project-defined review lanes beyond a documented example in `reviewing`
+- `compound-refresh` headless **auto-apply** (v0.1 headless = recommend-only report; interactive mode applies)
+- Golden-fixture conformance suite exercising a full lifecycle, resume, and a degraded dispatch tier on both harnesses (v0.1 verifies structure + load + one headless smoke; full conformance is v0.2)
+- Plan/findings schema validators with valid/invalid/migration fixtures
+
 ## Open decisions
 
 1. ~~Plugin name~~ — resolved: `compound-loop`.
 2. Whether `release` (post-merge version/tag/changelog ceremony) becomes a 13th skill in v0.2 — dropped from shipping core, hook point documented.
 3. Whether project-defined review lanes need a schema (v0.1: free-form markdown in consuming repo's AGENTS.md, documented by example).
 4. Gemini/`ask_user` support — question-tool table mentions it, untested.
+5. Concurrent-run locking for `.release-loop/progress.md` — out of scope for a single-user tool in v0.1; revisit if shared use appears.

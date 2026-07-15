@@ -24,7 +24,7 @@ Checks inside skills carry an `enforces:` tag naming the principle they implemen
 
 ## P3. No completion claims without fresh verification evidence
 
-- **Statement**: Before claiming "done", "fixed", or "passing", run the proving command in full, in this message, and read its output. Extrapolation, memory, and subagent self-reports are not evidence.
+- **Statement**: Before claiming "done", "fixed", or "passing", run the proving command in full, in the current execution, and read its output. When a durable record exists (progress ledger, retro doc, PR body), persist the command, result, and timestamp there so resumed and headless runs inherit evidence, not claims. Extrapolation, memory, and subagent self-reports are not evidence.
 - **Rationale**: The most expensive failures are false completions — they end investigation while the defect survives.
 - **Boundary**: None. Violating the letter of this rule is violating its spirit.
 - **Enforcement**: `shipping` (verification gate, re-fetch-before-claiming-resolved), `retrospective` (measured-vs-declared comparison runs measurements fresh), `implementing` (verify-red/verify-green), `reviewing` (validator pass).
@@ -54,7 +54,7 @@ Checks inside skills carry an `enforces:` tag naming the principle they implemen
 
 - **Statement**: Skills may commit locally and prepare artifacts, but pushing, merging, publishing, and anything that leaves the machine requires explicit human approval or an explicit `--auto` grant with stated conditions.
 - **Rationale**: Outward actions are hard to reverse and carry the user's name. Autonomy ends where the blast radius leaves the working tree.
-- **Boundary**: `--auto` mode may auto-merge only when its declared conditions hold (CI green, no open Critical findings); the design-approval gate is never automated.
+- **Boundary**: `--auto` mode may auto-merge only when its declared conditions hold (CI green, no open P0 findings); the design-approval gate is never automated.
 - **Enforcement**: `shipping` (merge gate default USER), `release-loop` (Design gate always USER), `reviewing` (never pushes), `designing` (human approval gate).
 
 ## P8. State lives in files, not in the conversation
