@@ -1,7 +1,7 @@
 # compound-loop Design Spec
 
 - Date: 2026-07-15
-- Status: draft
+- Status: approved (user approval 2026-07-16, after two review rounds: Codex initial + Codex re-review / drift / coherence)
 - Sources distilled: superpowers 6.1.1 (SP), compound-engineering 3.11.2 (CE), entirecontext release-loop (EC)
 
 ## Summary
