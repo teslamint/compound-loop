@@ -1,0 +1,13 @@
+{
+  "name": "compound-loop",
+  "owner": {
+    "name": "Jaehoon You"
+  },
+  "plugins": [
+    {
+      "name": "compound-loop",
+      "source": "./",
+      "description": "Cross-harness engineering lifecycle skills: design, plan, implement, review, ship, retrospect, and compound knowledge."
+    }
+  ]
+}
