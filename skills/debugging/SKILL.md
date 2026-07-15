@@ -39,6 +39,8 @@ Investigate before asking questions. Only ask when a genuine ambiguity blocks in
 
 ### Phase 1: Investigate
 
+**Known-solution check** (first move when the repo has a `docs/solutions/` knowledge base): search it for the symptom, module, or error signature before instrumenting anything — a documented prior fix turns investigation into verification of a known cause and carries its prevention rule. Cite the doc as "Known Pattern" evidence when it matches; note the miss and continue normally when it doesn't. `enforces: P5` — this is the consumption half of the compounding loop that `compound` writes.
+
 Reproduce the bug, then verify environment sanity (branch, dependencies, runtime version, env vars, stale build artifacts, dependent services) before trusting any code-level theory — a stale environment is a frequent false lead.
 
 Trace data flow backward from the symptom toward where valid state first became invalid; read code-shape to form a hypothesis, then confirm with observed values, not assumptions. See `references/techniques.md` for the backward-tracing recipe and the multi-component boundary-instrumentation recipe. Check recent changes (`git log`, `git bisect` for suspected regressions) and any observability tools the project has (error trackers, logs, console output, database state).

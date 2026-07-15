@@ -134,10 +134,16 @@ Then the **contradiction-in-one-pass test**: could a careful reader find a contr
 
 Wait for the user's response. Changes requested → revise, re-run Step 11, re-commit. Approved → set `status: approved` in the frontmatter, commit, advance. **USER — always human. Never auto-skip.** `enforces: P7`
 
+## Step 13: Vocabulary Capture (tail, conditional)
+
+Runs only when `CONCEPTS.md` already exists at repo root — creation and bootstrapping stay owned by `compound`/`compound-refresh`. Domain terms are born in design dialogue, and waiting for a solved problem to capture them leaves the glossary blind to them; this step is the capture point at birth. `enforces: P5` (one canonical term, defined once).
+
+After the approval gate: scan the dialogue and the spec for **resolved** domain terms — terms whose precise local meaning the conversation actively pinned down, not terms mentioned in passing. Resolved means settled, not still under discussion; it runs last because the final canonical name often emerges only at approval. For each: add if missing, refine if new precision surfaced, no action if consistent. Glossary purity rules follow `compound`'s: domain entities, named processes, and status concepts only — no file paths, class names, or implementation decisions. Apply edits silently.
+
 ## Handoff
 
 The only skill invoked after `designing` is `planning`. Do not invoke any implementation, frontend, or scaffolding skill from here.
 
 ## Out of Scope
 
-Dropped by design (not oversight): the upstream idea-generation engine that precedes brainstorming (reference only, don't merge); HTML output rendering; CONCEPTS.md vocabulary capture (optional tail step, only if `CONCEPTS.md` already exists at repo root — owned by `compound`/`compound-refresh`); a two-path synthesis-gate nuance (simplified here to one-line synthesis always, full confirmation gate at Standard tier and above); a browser-based visual companion (Claude-Code-specific; add as a project-local appendix if needed).
+Dropped by design (not oversight): the upstream idea-generation engine that precedes brainstorming (reference only, don't merge); HTML output rendering; a two-path synthesis-gate nuance (simplified here to one-line synthesis always, full confirmation gate at Standard tier and above); a browser-based visual companion (Claude-Code-specific; add as a project-local appendix if needed).
