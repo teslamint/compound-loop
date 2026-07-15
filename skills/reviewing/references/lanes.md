@@ -2,6 +2,10 @@
 
 Every lane -- always-on, conditional, or project-defined -- emits `schemas/lane-findings.schema.json` findings. Only a lane's trigger and internal checklist differ; never its output shape. Confidence anchors (0/25/50/75/100) and their behavioral criteria are the schema's `_meta.confidence_anchors` -- reference, don't restate them per lane.
 
+**Evidence is not optional** (`enforces: P3`): every finding carries at least one piece of code-grounded evidence (snippet, line reference, or traced pattern) and a `why_it_matters` that names what breaks -- not what is wrong. If you cannot cite code you read, the finding does not exist yet; go read it or drop it. This applies with full force in the single-call degradation tier, where no schema validator will catch an empty evidence field.
+
+**Pre-delivery quality gate** (every lane, every tier): before returning, re-read each of your findings for vagueness (no nameable failure mode), false positives from skimming (did you actually trace it?), severity calibration against the schema's P0-P3 definitions, and line-number accuracy. A finding that fails this re-read gets fixed or dropped, never delivered as-is.
+
 **Scope tiers** (every lane): primary = changed lines, full confidence. Secondary = unchanged code in the same block/function whose bug becomes reachable through the diff -- report it, `pre_existing: false`. Pre-existing = unrelated unchanged code the diff doesn't interact with -- `pre_existing: true`, reported separately, never counted toward the verdict. Test: if you'd flag the same issue on an identical diff without the surrounding file, it's pre-existing.
 
 ## Roster
