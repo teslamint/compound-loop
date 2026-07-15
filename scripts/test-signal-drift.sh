@@ -61,6 +61,12 @@ case_a() {
 }
 
 # --- Case B: one-byte drift in skills/compound/SKILL.md:77 ---
+# The mutated byte must land in the <path> placeholder, not in the leading
+# "Documentation complete" keyword itself: the candidate-detection regex
+# requires that keyword intact to recognize a span as a candidate at all
+# (spec Risks: keyword-level typos aren't caught as a malformed-candidate
+# failure by design). Mutating the keyword would silently drop the span from
+# candidate detection instead of producing a byte-mismatch failure.
 case_b() {
   local dir out code result=0
   dir="$(setup_copy)" || return 1
@@ -70,7 +76,7 @@ path = sys.argv[1]
 lines = open(path, encoding="utf-8").read().split("\n")
 i = 76  # 0-indexed line 77
 assert "`Documentation complete — <path>`" in lines[i], "fixture assumption broken: expected span not found on line 77"
-lines[i] = lines[i].replace("Documentation complete — <path>", "Documentation complet — <path>", 1)
+lines[i] = lines[i].replace("Documentation complete — <path>", "Documentation complete — <pat>", 1)
 open(path, "w", encoding="utf-8").write("\n".join(lines))
 PY
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
@@ -91,7 +97,7 @@ path = sys.argv[1]
 lines = open(path, encoding="utf-8").read().split("\n")
 i = 76  # 0-indexed line 77
 assert "`Refresh complete — <n> applied, <n> recommended`" in lines[i], "fixture assumption broken: expected span not found on line 77"
-lines[i] = lines[i].replace("Refresh complete — <n> applied, <n> recommended", "Refresh complet — <n> applied, <n> recommended", 1)
+lines[i] = lines[i].replace("Refresh complete — <n> applied, <n> recommended", "Refresh complete — <n> applied, <n> recommende", 1)
 open(path, "w", encoding="utf-8").write("\n".join(lines))
 PY
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
@@ -112,7 +118,7 @@ path = sys.argv[1]
 lines = open(path, encoding="utf-8").read().split("\n")
 i = 76  # 0-indexed line 77 - the cross-quoted `compound` triplet in Phase 7
 assert "`Documentation complete — <path>`" in lines[i], "fixture assumption broken: expected span not found on line 77"
-lines[i] = lines[i].replace("Documentation complete — <path>", "Documentation complet — <path>", 1)
+lines[i] = lines[i].replace("Documentation complete — <path>", "Documentation complete — <pat>", 1)
 open(path, "w", encoding="utf-8").write("\n".join(lines))
 PY
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
@@ -146,21 +152,30 @@ case_e() {
 }
 
 # --- Case F: deleted signal line (coverage pass) ---
+# Target skills/compound-refresh/SKILL.md, not skills/compound/SKILL.md: the
+# spec's own S3/Case F illustration names compound/SKILL.md, but its
+# `Documentation skipped — <reason>` line is cross-quoted a second time inside
+# skills/retrospective/SKILL.md's Phase 7 section (verified in this repo) --
+# deleting only the compound/SKILL.md copy leaves the canonical line "seen"
+# via that cross-quote, so the coverage pass would never fire and this case
+# would pass for the wrong reason (no real gap exists). compound-refresh's
+# `Refresh skipped — <reason>` line has exactly one quote anywhere in the
+# three consumer files (verified), so deleting it creates a genuine gap.
 case_f() {
   local dir out code result=0
   dir="$(setup_copy)" || return 1
-  python3 - "$dir/skills/compound/SKILL.md" <<'PY'
+  python3 - "$dir/skills/compound-refresh/SKILL.md" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
-clause = "`Documentation skipped — <reason>` (e.g. no solved problem found), "
+clause = "`Refresh skipped — <reason>` (e.g. no candidate docs found), "
 assert clause in text, "fixture assumption broken: expected clause not found"
 open(path, "w", encoding="utf-8").write(text.replace(clause, "", 1))
 PY
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
   assert_contains "$out" "[signal-drift]" "reported by the new check specifically" || result=1
-  assert_contains "$out" "producer 'compound'" "names the uncovered producer" || result=1
+  assert_contains "$out" "producer 'compound-refresh'" "names the uncovered producer" || result=1
   assert_contains "$out" "state 'skipped'" "names the uncovered state" || result=1
   rm -rf "$dir"
   return $result
