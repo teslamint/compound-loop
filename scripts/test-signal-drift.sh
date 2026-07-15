@@ -70,7 +70,7 @@ case_a() {
 case_b() {
   local dir out code result=0
   dir="$(setup_copy)" || return 1
-  python3 - "$dir/skills/compound/SKILL.md" <<'PY'
+  python3 - "$dir/skills/compound/SKILL.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
 import sys
 path = sys.argv[1]
 lines = open(path, encoding="utf-8").read().split("\n")
@@ -91,7 +91,7 @@ PY
 case_c() {
   local dir out code result=0
   dir="$(setup_copy)" || return 1
-  python3 - "$dir/skills/compound-refresh/SKILL.md" <<'PY'
+  python3 - "$dir/skills/compound-refresh/SKILL.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
 import sys
 path = sys.argv[1]
 lines = open(path, encoding="utf-8").read().split("\n")
@@ -112,7 +112,7 @@ PY
 case_d() {
   local dir out code result=0
   dir="$(setup_copy)" || return 1
-  python3 - "$dir/skills/retrospective/SKILL.md" <<'PY'
+  python3 - "$dir/skills/retrospective/SKILL.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
 import sys
 path = sys.argv[1]
 lines = open(path, encoding="utf-8").read().split("\n")
@@ -164,7 +164,7 @@ case_e() {
 case_f() {
   local dir out code result=0
   dir="$(setup_copy)" || return 1
-  python3 - "$dir/skills/compound-refresh/SKILL.md" <<'PY'
+  python3 - "$dir/skills/compound-refresh/SKILL.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
 import sys
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
