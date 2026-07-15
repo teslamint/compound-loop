@@ -67,6 +67,6 @@ Checks inside skills carry an `enforces:` tag naming the principle they implemen
 ## P9. Never fight the harness
 
 - **Statement**: Prefer native capabilities in this order: harness-native tool → portable fallback → graceful sequential degradation. Detect capabilities; never assume them, and never hard-depend on one harness's feature for correctness.
-- **Rationale**: The same skill must produce the same outcome in Claude Code and Codex. Correctness that depends on hooks, parallel subagents, or a specific tool name is not portable — it is a silent fork.
+- **Rationale**: The same skill must uphold the same contracts, gates, and safety invariants in Claude Code and Codex — identical generated artifacts are not promised, identical correctness is. Correctness that depends on hooks, parallel subagents, or a specific tool name is not portable — it is a silent fork.
 - **Boundary**: Quality enhancements (parallel review lanes, worktree isolation) may exploit native features when present; only correctness must not.
 - **Enforcement**: every skill's dispatch section (native parallel → sequential passes → single-call fallback), `worktree-isolation` (native tool → git worktree → work in place), cross-harness question-tool table (blocking tool per harness → numbered options fallback), file-based inter-skill contracts (`mode:agent` JSON, `mode:headless` terminal signals).

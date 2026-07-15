@@ -26,7 +26,7 @@ for s in schemas/lane-findings.schema.json schemas/review-envelope.schema.json; 
     fail "$s missing or invalid JSON"
   fi
 done
-for s in schemas/plan-schema.md schemas/retro-template.md; do
+for s in schemas/plan-schema.md schemas/retro-template.md schemas/headless-contract.md; do
   [ -s "$ROOT/$s" ] && ok "$s present" || fail "$s missing or empty"
 done
 

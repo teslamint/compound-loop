@@ -47,6 +47,8 @@ For each unit, in dependency order:
 
 Never force the same model to retry unchanged — if the implementer said it's stuck, something has to change.
 
+Workers never invoke blocking-question tools or address the user directly — returning `NEEDS_CONTEXT`/`BLOCKED` is their only escalation channel; the orchestrator alone decides whether to answer from its own context or ask the human (worker protocol in `references/dispatch-degradation.md` at the plugin root). `enforces: P7, P9`
+
 4. **Task review**: generate a diff (`base-before-unit..HEAD`) to `.release-loop/reviews/U<N>-diff.txt`. Dispatch a reviewer with the brief path, report path, diff path, and Global Constraints copied verbatim from the plan. The reviewer returns **both** verdicts — spec compliance and quality — missing either makes the review incomplete. Reviewer-prompt rules: never pre-judge or pre-rate a finding's severity, never tell the reviewer what not to flag; the constraints block is the reviewer's attention lens, copied verbatim, not paraphrased or softened.
 5. **"Cannot verify from diff"** items are the orchestrator's to resolve, not the reviewer's — they require cross-unit context only you hold. A confirmed gap is a failed spec review: send it back to the implementer.
 6. **Plan-mandated conflicts** — a finding that conflicts with what the plan's own text requires is the human's decision, like any plan contradiction: present the finding and the plan text, ask which governs. Never silently dismiss a finding because "the plan says so," and never dispatch a fix that contradicts the plan without asking.

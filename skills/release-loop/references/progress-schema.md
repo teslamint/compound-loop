@@ -41,11 +41,13 @@ blocked_reason: null                    # set when phase_status: blocked
 - <timestamp> design: spec committed (<sha>), user approved
 - <timestamp> implement: U1 DONE (<sha>), task review clean
 - <timestamp> implement: U2 DONE_WITH_CONCERNS — <one line>, resolved by <sha>
+- <timestamp> ship: verification gate — `pytest -q` → 124 passed, 0 failed (fresh)
 ```
 
 ## Rules
 
 - Write at the moment of the event, not batched (`enforces: P3` — the record is the evidence).
+- **Gate transitions record their evidence inline**: the proving command, its observed result, and the timestamp (see the `ship: verification gate` log line above). A transition line without command + result is a claim, not a record — resumed and headless runs inherit evidence only through these lines. `enforces: P3, P8`
 - Timestamps are ISO-8601 with timezone.
 - Corrupt/unparsable file on resume → rebuild frontmatter from git evidence (branch, committed artifacts, PR state via `gh pr view`), keep the old file as `progress.md.corrupt-<timestamp>`, and note the rebuild in the Log.
 - `.release-loop/` (briefs/, reports/, reviews/, progress.md) is local working state: gitignore it by default; the durable artifacts are the committed spec/plan/retro docs.

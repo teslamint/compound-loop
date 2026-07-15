@@ -27,7 +27,7 @@ One compressed confirmation before spending research or authoring budget: state 
 
 Plans are written for a zero-context implementer, which makes the planner the one who must carry the context (`enforces: P5` — reuse before new).
 
-**Local research — always runs.** Read at least one similar feature's implementation end to end before structuring anything; identify the existing patterns, utilities, and conventions units must follow (name them in the units — implementers see only their own unit). Check `docs/solutions/` for prior learnings touching the planned modules and surface hits as "Known Pattern"; read `CONCEPTS.md` if present and use its canonical vocabulary. Any claim that something does not exist in the codebase must be verified against source or labeled an unverified assumption.
+**Local research — always runs.** Search for a similar feature and read its implementation end to end before structuring anything; when the work is genuinely greenfield, record the verified absence and read the nearest analogue instead (the search is unconditional, the find is not). Identify the existing patterns, utilities, and conventions units must follow (name them in the units — implementers see only their own unit). Check `docs/solutions/` for prior learnings touching the planned modules and surface hits as "Known Pattern"; read `CONCEPTS.md` if present and use its canonical vocabulary. Any claim that something does not exist in the codebase must be verified against source or labeled an unverified assumption.
 
 **External research — conditional.** Escalate to documentation or web sources only when one holds: the user explicitly asked; the plan makes claims about an unfamiliar library, framework, or API version; or the work touches a high-risk surface with sparse local precedent (fewer than 3 direct examples). Record findings in Architecture notes with sources — unbacked external claims are exactly what the deepening trigger "thin external grounding" catches later.
 
@@ -41,7 +41,7 @@ Classify the spec's deliverable once: `code` (source, schema, CLI, API changes) 
 
 ## 6. Scenario flow analysis
 
-Before cutting units, walk every User Scenario (S-ID) in the spec end to end: what has to exist, in what order, for this scenario to complete? The walkthrough produces two artifacts consumed downstream (`enforces: P3`):
+Before cutting units, walk every User Scenario (S-ID) in the spec end to end: what has to exist, in what order, for this scenario to complete? The walkthrough produces two artifacts — the durable record downstream fresh-verification runs against (`enforces: P8`):
 
 - The plan's **Scenario coverage map** (hard-floor section per `schemas/plan-schema.md`): S-ID → ordered unit chain → the integration test scenario(s) that walk it.
 - The **integration test scenarios** themselves — derive them from user scenarios first, before inventing technical integration cases. A user scenario no test walks is untested motivation; a scenario no unit chain completes is a plan gap that blocks approval (add the missing unit, or send the scenario back to `designing` for explicit descoping — never silently drop it).
@@ -76,7 +76,7 @@ Banned in any unit: "TBD", "TODO", "similar to Task N" / "see U3", "as appropria
 
 Before finalizing, the author (not a subagent) checks:
 - **Spec coverage** — every spec requirement traces to a unit; list gaps.
-- **Scenario coverage** — re-walk the Scenario coverage map against the final unit set: every S-ID still completes end to end (deepening and unit edits are the likeliest breakage vector), and every map row names a real integration test scenario. `enforces: P3`
+- **Scenario coverage** — re-walk the Scenario coverage map against the final unit set: every S-ID still completes end to end (deepening and unit edits are the likeliest breakage vector), and every map row names real scenario evidence (integration test, or observable verification for non-code plans). `enforces: P8`
 - **Placeholder scan** — search for step 11's red flags; fix inline.
 - **Type consistency** — do signatures, names, and types agree across units (a function `clearLayers()` in U2 and `clearFullLayers()` in U5 is a bug)?
 - **Callers + invariants** — for code units, who calls the functions being changed, and what invariants must still hold afterward?

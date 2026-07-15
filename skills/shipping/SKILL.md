@@ -45,6 +45,8 @@ GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
 | differ, named branch | worktree | ownership-checked removal (Step 8) |
 | differ, detached HEAD | externally managed | no cleanup -- not ours |
 
+This is the same detection primitive as `worktree-isolation`'s Step 0 (including its submodule caveat: `GIT_DIR ≠ GIT_COMMON` is also true inside a submodule) — deliberately repeated here rather than invoked, because shipping needs only the two-variable comparison, not that skill's full creation flow. `enforces: P5` boundary: same reason to change (git's worktree layout), so drift between the two copies is a defect.
+
 Then route by branch state:
 
 | Branch state | Action |

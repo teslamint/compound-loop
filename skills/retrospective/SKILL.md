@@ -49,6 +49,17 @@ Read the previous retro doc (most recent under `docs/retros/`), if any. For ever
 
 Register this cycle's new carry-forward items: type (architecture / performance / feature / edge-case / process) × priority (P1–P4). Push every item to a durable tracker (ROADMAP, issue tracker, or equivalent) — **never PR comments alone**, which are lost after merge.
 
+## Interview Protocol (governs Phases 4–5)
+
+The narrative half of a retro is where self-assessment bias lives: the agent that did the work grades its own work. Split the roles (`enforces: P3` — self-reports are not evidence):
+
+- **Facilitator** — an independent agent with fresh context. Receives only artifacts (spec, plan, progress ledger, PR data, Phase 2–3 outputs), never the working conversation. Asks evidence-demanding probes from `references/interview-probes.md` and **rejects vague answers** ("mostly fine", "went well") by re-asking for the commit, measurement, or concrete event — an unevidenced answer cannot become a finding.
+- **Respondent** — the agent that did the work (the main session, or in standalone runs whoever holds the context), answering from its record.
+
+**Facilitator model selection**: fresh context is the minimum; a *heterogeneous* model is better when the environment offers one (from Claude Code, `codex exec` for a GPT-family facilitator; from Codex, a Claude subagent) — shared model biases produce shared blind spots, so heterogeneity adds a defense self-review cannot. Degrade per `references/dispatch-degradation.md` (plugin root): heterogeneous facilitator → same-model independent-context subagent → sequential passes (facilitator pass generates probes from artifacts, respondent pass answers, facilitator pass critiques the evidence) → headless/single-agent: skip the interview and run the probe list as a fixed self-checklist. `enforces: P9`
+
+Cap the exchange at 5 rounds; the facilitator's accepted answers become the raw material for Phase 5's findings. Data collection (Phase 2) and measurement (Phase 3) are never interviewed — they are commands, not narratives (`enforces: P4`).
+
 ## Phase 5: Findings & Lessons
 
 Findings use the three-part shape — **What happened / Why / How to apply** — bucketed into What Worked Well, What to Improve, Process Observations. Every finding cites something specific (a PR comment, a CI run, a review round); "tests caught bugs" is too vague, "the branch-level review caught the commit-threading bug that per-task review missed" is the bar. Never frame an acted-on review finding as "noise" or "trivial" — if it was worth fixing, it was legitimate.

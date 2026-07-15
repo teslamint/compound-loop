@@ -26,10 +26,12 @@ compound-loop is a single plugin of 12 skills covering the engineering lifecycle
 1. `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` exist and parse as valid JSON.
 2. 12 skills, each `skills/<name>/SKILL.md` with valid frontmatter (`name`, `description`) passing a stdlib validation script.
 3. `PRINCIPLES.md` has 9 principles, each with statement/rationale/boundary/enforcement.
-4. `schemas/` contains: findings JSON schema, plan frontmatter + unit contract, retro document template.
+4. `schemas/` contains: `lane-findings.schema.json`, `review-envelope.schema.json`, `plan-schema.md`, `retro-template.md`, and `headless-contract.md` — all five checked by `scripts/validate.sh`.
 5. Spec and implementation plan committed to git.
 6. Claude Code loads the plugin from a local marketplace; Codex discovers the skills at its documented user skills root — both verified by command output, not assumption.
 7. One headless smoke: `compound` invoked in `mode:headless` on a fixture lesson ends with its exact terminal signal line from `schemas/headless-contract.md`.
+
+**Verification record (2026-07-15, persisted per P3/P8):** 1–4: `bash scripts/validate.sh` → `ALL CHECKS PASSED`. 5: `git log` — spec (2 commits), plan (1 commit). 6: `claude plugin install compound-loop@compound-loop` → "Successfully installed", `claude plugin list` → enabled v0.1.0; `codex exec` probe listed all 12 skills as `compound-loop:*`. 7: smoke run on a scratch fixture — `validate-frontmatter.py` exit 0, terminal line `Documentation complete — <fixture path>` byte-identical to the contract. Criteria are re-measured at each retro; this record is the v0.1 baseline.
 
 ## Architecture
 
@@ -63,13 +65,15 @@ The orchestrator holds no phase logic — it sequences, gates, and persists stat
 
 | Contract | Producer → Consumer | Shape |
 |---|---|---|
-| Plan schema | planning → implementing, reviewing | Versioned (`schema: plan/v1` frontmatter key) + `title/type/status/date/execution` required + hard-floor **Scenario coverage map** (spec S-ID → ordered unit chain → `Covers S<n>` integration tests; an uncovered scenario blocks approval) + Implementation Units with stable, unique U-IDs, Files/Interfaces, categorized test scenarios (happy/edge/error/integration) linked to acceptance criteria ("Covers AE3") and user scenarios ("Covers S2"); a link to a nonexistent AE/S is a validation error |
-| Findings JSON | reviewing `mode:agent` → implementing, shipping, release-loop | Versioned envelope (`schemas/review-envelope.schema.json`): `schema_version/status/verdict/scope/reviewers/findings[]` with per-finding `title/severity(P0-P3)/file/line/confidence(0|25|50|75|100)/autofix_class/owner/suggested_fix`. **P0–P3 is the only canonical severity scale**; Critical/Important/Minor exists solely as the envelope's presentation `rollup` (P0→critical, P1→important, P2+P3→minor). All gates are expressed in P-levels. Artifacts written atomically (temp file + rename); a corrupt/partial artifact is treated as a lane failure per severity rules |
+| Plan schema | planning → implementing, reviewing | Versioned (`schema: plan/v1` frontmatter key) + `title/type/status/date/execution` required + hard-floor **Scenario coverage map** (spec S-ID → ordered unit chain → `Covers S<n>` integration tests; an uncovered scenario blocks approval) + Implementation Units with stable, unique U-IDs, Files/Interfaces, categorized test scenarios (happy/edge/error/integration) linked to acceptance-criterion IDs (AE-IDs — the spec's numbered acceptance criteria; "Covers AE3") and user scenarios ("Covers S2"); a link to a nonexistent AE/S is a validation error |
+| Findings JSON | reviewing `mode:agent` → implementing, shipping, release-loop | Versioned envelope (`schemas/review-envelope.schema.json`): `schema_version/status/verdict/scope/reviewers/findings[]` with per-finding required fields `title/severity(P0-P3)/file/line/confidence(0|25|50|75|100)/autofix_class/owner/lanes` (`lanes` = the lane(s) that reported it, ≥1 after dedup) plus optional `suggested_fix`/`validated`. **P0–P3 is the only canonical severity scale**; Critical/Important/Minor exists solely as the envelope's presentation `rollup` (P0→critical, P1→important, P2+P3→minor). All gates are expressed in P-levels. Artifacts written atomically (temp file + rename); a corrupt/partial artifact is treated as a lane failure per severity rules |
 | Headless capture | retrospective → compound | `mode:headless` invocation; exact case-sensitive terminal signal lines defined once in `schemas/headless-contract.md`; Applied vs Recommended report split |
 | Loop state | release-loop ↔ all phases | `.release-loop/progress.md`: schema version, phase + phase status, timestamps, branch, base branch, artifact pointers (spec/plan/retro paths), approval evidence (who/when for USER gates), PR number, CI attempts, review rounds, comments fixed/deferred. Corrupt or stale state → rebuild from git evidence (progress file + git log always outrank recollection) |
 | Success criteria | designing → retrospective | Spec's required Success Criteria section: each criterion = statement + measurement method (command or judgment rubric) |
 
 The plan-schema agreement resolves the tension flagged during distillation: CE ce-work's rich per-unit metadata assumed a CE-shaped plan; here `planning` emits and `implementing` consumes one documented schema.
+
+Four distinct capped loops exist and share nothing but the word "review" — named here once to prevent conflation: the **task-review loop** (implementing, per-unit review-fix, cap 3), the **branch-review loop** (implementing final review / reviewing pipeline re-review, cap 3, re-review carries the original findings list), the **CI-fix loop** (shipping, cap 3, never weaken a failing assertion), and the **PR-comment rounds** (shipping, cap 4, per-thread parallel within a round).
 
 ## Skill specifications
 
@@ -77,9 +81,11 @@ Each entry lists: purpose, distilled mechanisms (source → what), and dropped m
 
 ### 1. release-loop (orchestrator)
 
+Purpose: sequence the six phases, own the gates, persist loop state — no phase logic of its own.
+
 EC release-loop retained as the spine: six phases, phase-transition table, flags (`--auto`, `--skip-design`, `--skip-plan`), resume protocol ("trust progress file and git log over conversation memory", enforces P8). Rewritten so each phase's protocol section becomes a one-paragraph invocation of the corresponding standalone skill plus gate handling. Gates: Design = USER always (enforces P7); Ship = USER unless `--auto` with CI green + no open P0; others AUTO.
 
-Flag reconciliation with the Design gate: `--skip-design` does not bypass human approval — it requires `--spec <path>` pointing at a spec whose frontmatter records `status: approved` (the persisted approval evidence). A spec without that record rejects the flag and the loop enters Design normally.
+Flag reconciliation with the Design gate: `--skip-design` does not bypass human approval — it requires `--spec <path>` pointing at a spec whose frontmatter records `status: approved` (the persisted approval evidence). A spec without that record rejects the flag and the loop enters Design normally. `--skip-plan` carries no analogous evidence rule by design: Plan's gate is AUTO, so a conforming plan file (`schema: plan/v1`) is the only prerequisite.
 
 Dropped: EC's inline phase protocols (now live in the phase skills); project-specific pitfalls hardcoded in phase docs (moved to a per-repo pluggable pitfalls file, see shipping).
 
@@ -89,9 +95,9 @@ Purpose: turn an idea into an approved spec with measurable success criteria. WH
 
 | Source | Distilled |
 |---|---|
-| EC design-phase | Entry/Exit/Gate contract; context scan as literal commands (git log, AGENTS.md, ROADMAP, previous retros for carry-forward); approach template; User Scenarios before Architecture ("motivation before mechanism"), each scenario carrying a stable S-ID that planning/implementing/reviewing trace; spec doc skeleton incl. Open Decisions; **independent review gate before the user sees the spec** (reviewer subagent or advisor tool; retro-cited: caught 2 critical flaws self-review missed); Spec Quality Signals (good-vs-bad contrastive pairs) near-verbatim; "Gate: USER — always human, never auto-skip" |
+| EC design-phase | Entry/Exit/Gate contract; context scan as literal commands (git log, AGENTS.md, ROADMAP, previous retros for carry-forward); approach template; User Scenarios before Architecture ("motivation before mechanism"), each scenario carrying a stable S-ID that planning/implementing/reviewing trace; spec doc skeleton incl. Open Decisions; **independent review gate before the user sees the spec** (a reviewer subagent is the portable default on both harnesses; an `advisor`-style tool is a harness-local enhancement where present; retro-cited: caught 2 critical flaws self-review missed); Spec Quality Signals (good-vs-bad contrastive pairs) near-verbatim; "Gate: USER — always human, never auto-skip" |
 | SP brainstorming | HARD-GATE (no implementation before approval) + "This Is Too Simple To Need A Design" anti-pattern verbatim; 4-point spec self-review (placeholder/consistency/scope/ambiguity), fix inline; decomposition trigger for multi-subsystem requests; design-for-isolation test; terminal-state constraint (only `planning` is invoked next) |
-| CE ce-brainstorm | **Scope tiering** (Lightweight/Standard/Deep + Deep-feature vs Deep-product) gating all downstream ceremony; **rigor-gap probes** (evidence/specificity/counterfactual/attachment + durability for Deep-product; one gap = one open-ended probe); Interaction Rules 1–6 verbatim (one question per turn, single-select preferred, cross-harness blocking-tool table, precise open-ended test); "requirements already clear" fast path; integration check before exiting dialogue; approach granularity (mechanism, never implementation specifics); anti-anchoring order; optional higher-upside challenger; "verify before claiming absence"; YAGNI-on-carrying-cost principle; prose economy + contradiction-in-one-pass test; R-ID convention when warranted; vocabulary capture into an existing CONCEPTS.md as a conditional tail step (resolved terms only, restored post-v0.1 audit — terms are born in design, and compound only captures them after a solved problem) |
+| CE ce-brainstorm | **Scope tiering** (Lightweight/Standard/Deep + Deep-feature vs Deep-product) gating all downstream ceremony; **rigor-gap probes** (evidence/specificity/counterfactual/attachment + durability for Deep-product; one gap = one open-ended probe); the dialogue discipline distilled into the shared `references/question-tools.md` (one question per turn, single-select preferred, cross-harness blocking-tool table, precise open-ended test); "requirements already clear" fast path; integration check before exiting dialogue; approach granularity (mechanism, never implementation specifics); anti-anchoring order; optional higher-upside challenger; "verify before claiming absence"; YAGNI-on-carrying-cost principle; prose economy + contradiction-in-one-pass test; stable requirement IDs (R-IDs — one per spec requirement, grouped by concern) when warranted; vocabulary capture into an existing CONCEPTS.md as a conditional tail step (resolved terms only, restored post-v0.1 audit — terms are born in design, and compound only captures them after a solved problem) |
 | Elevation beyond all sources | **Success Criteria is a required spec section**: every criterion states what is measured and how (command for hard metrics, judgment rubric for soft ones). No source mandates this; ce-optimize's measurable-goal discipline is its ancestor. Consumed by `retrospective`. |
 
 Dropped: ce-ideate engine (upstream concern; one-line pointer only); HTML output machinery; Path A/B synthesis nuance (simplified: one-line synthesis always, full confirmation gate for Standard+); SP visual companion (Claude-Code-specific; optional appendix note).
@@ -105,7 +111,7 @@ Purpose: turn an approved spec into a plan executable by an engineer (or agent) 
 | CE ce-plan 1.1/1.2 (restored post-v0.1 audit) | **Context research step**: local research always (read one similar feature end to end, name patterns/utilities in units, check docs/solutions for Known Patterns, use CONCEPTS.md vocabulary, verify-before-claiming-absence); external research conditional (explicit request / unfamiliar dependency claims / high-risk surface with <3 local precedents). Initially dropped; without it the zero-context plan invites training-prior code instead of codebase-first code |
 | CE ce-plan | Entry check — **is a plan doc warranted at all** (skip-criteria + false-atomic stress tests, near-verbatim); compressed scope confirmation before research spend; **U-ID stability rule** (never renumber); **planning-time vs implementation-time unknowns** (3.6, verbatim); **anti-expansion** (3.7: tangential discoveries → Deferred to Follow-Up Work); test-scenario taxonomy (happy/edge/error/integration + AE-links); metadata/frontmatter contract; prose economy; file naming `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md`; **risk-scored deepening pass** compressed to 6 trigger categories (vague rationale, missing risk treatment, weak sequencing, thin external grounding, unclear verification, thin scenario coverage) — skip when nothing scores; deepening change discipline (tighten prose OK, implementation code NOT, never renumber U-IDs); outstanding-question triage (planning-owned vs product blocker) |
 | CE ce-plan 1.5 (restored post-v0.1-review) | **Scenario flow analysis**: before decomposition, walk every spec User Scenario (S-ID) end to end; produce the plan's Scenario coverage map and derive integration test scenarios from user scenarios first. An uncovered scenario blocks approval (add the unit or send back to `designing` for explicit descoping). Consumed downstream: implementing's final branch review verifies scenario delivery on the actual branch; reviewing's tests lane checks `Covers S<n>` tests when a plan is provided. Initially dropped in distillation; restored because requirement-level tracing alone leaves scenario-level end-to-end delivery unchecked |
-| CE ce-doc-review | Persona activation-signal pattern for the deepening reviewers (Architecture/Feasibility always; Security/Risk and Scope/Coherence conditional, each with explicit activation and non-activation signals); backpressure framing; cross-round evidence-overlap suppression as optional refinement |
+| CE ce-doc-review | Persona activation-signal pattern for the deepening reviewers (Architecture/Feasibility always; Security/Risk and Scope/Coherence conditional, each with explicit activation and non-activation signals); backpressure framing. Cross-round evidence-overlap suppression is **deferred to v0.2, documented hook point only** (see Deferred list) |
 | SP writing-plans | Zero-context assumption; file-structure phase before tasks; task right-sizing ("smallest unit worth a fresh reviewer's gate"); literal task template (Files Create/Modify/Test + Interfaces Consumes/Produces + 2–5 min numbered TDD steps); no-placeholder banned-phrase list verbatim; type-consistency self-check; 2-option execution handoff (subagent-driven vs inline) |
 | EC plan-phase | Code vs **non-code dual task templates** (non-code: Write → self-review-against-spec → Commit), deliverable type recorded in plan frontmatter (not a side-channel file); task-count smell test (3–7 typical); self-review additions: **callers+invariants check** and prior-retro carryover; progress-file pointer write for headless/pipeline invocations |
 
@@ -129,11 +135,15 @@ Dropped: CE Phase-0 complexity router (upstream planning concern); Figma sync; b
 
 ### 5. tdd
 
+Purpose: red-green-refactor discipline for any code change; the enforcement body of P1.
+
 SP test-driven-development near-verbatim: Iron Law (P1), red-green-refactor with mandatory verify-red (right reason) and verify-green (no regressions), delete-don't-adapt rule, rationalization table, red flags, completion checklist, "when stuck" table. One addition: per-unit `execution:` note hook (test-first / characterization-first / skip-test-first) chosen by the plan, so orchestration decides applicability without weakening the discipline inside the chosen mode.
 
 Dropped: nothing substantive (skill has no harness dependencies).
 
 ### 6. debugging
+
+Purpose: root-cause investigation with a hard gate between diagnosis and fix; the enforcement body of P2.
 
 CE ce-debug as the spine: 5-phase flow (Triage → Investigate → Root Cause → Fix → Handoff); trivial-bug fast path through the same gate; **prediction discipline** (uncertain causal link → predict something in a different code path; wrong prediction + working fix = symptom fix); **assumption audit** (stuck = usually a wrong assumption, not a wrong hypothesis); grounding-observation requirement (reject "X seems off"); **causal-chain gate** before any fix (P2); known-solution check against docs/solutions/ at the top of Investigate (consumption half of the compounding loop, restored post-v0.1 audit); backward-tracing recipe; smart-escalation table (patterns → diagnoses); redesign signals (route to designing — "big bug" ≠ "design problem"); explicit hypothesis invalidation before re-forming; trigger-gated defense-in-depth and post-mortem.
 
@@ -145,6 +155,8 @@ Dropped: SP "human partner's signals" table (conversation-style specific); motiv
 
 ### 7. worktree-isolation
 
+Purpose: give feature work an isolated workspace via the least-surprising available mechanism.
+
 SP using-git-worktrees near-verbatim: Step-0 existing-isolation detection (GIT_DIR vs GIT_COMMON_DIR with **submodule guard**); priority order native worktree tool → git worktree → work in place (P9); directory selection priority; mandatory `git check-ignore` before creating project-local worktree dirs; sandbox permission fallback; baseline test verification with ask-before-proceeding on failure.
 
 Dropped: nothing (cleanest source file; already harness-agnostic).
@@ -155,7 +167,7 @@ Purpose: multi-perspective code review producing verified, deduplicated findings
 
 | Source | Distilled |
 |---|---|
-| CE ce-code-review | Scope discovery verbatim (local-aligned/pr-remote/branch-remote 3-check test); intent+context discovery (learnings-researcher + previous-comments folded in as context gathering, not lanes); **confidence anchors** (0/25/50/75/100 with behavioral self-checks; floats banned); severity P0–P3 independent of confidence; **merge/dedup pipeline verbatim** (fingerprint = file+line-bucket±3+title; cross-lane agreement promotes one anchor; mode-aware demotion to testing_gaps/residual_risks; confidence gate last with P0-at-50+ exception); Stage 5b validator wave (independent validator per finding, cap 15, severity-differentiated infra-failure handling); `mode:agent` JSON contract; false-positive suppression catalog (8 categories) + protected artifacts; bias-to-act fix application (interactive mode: apply reversible fixes, commit only if pre-review tree clean, **never push**, P7); model tiering (top lanes inherit session model); output discipline (pipe tables, forbidden shapes); persona texts for correctness (mentally execute), security (uncertain-critical filed at P0), adversarial (chaos-engineer, depth-calibrated) |
+| CE ce-code-review | Argument compatibility: `mode:headless` accepted as a deprecated alias for `mode:agent`, `mode:report-only`/`mode:autofix` silently ignored (CE back-compat). Scope discovery verbatim (local-aligned/pr-remote/branch-remote 3-check test); intent+context discovery (learnings-researcher + previous-comments folded in as context gathering, not lanes); **confidence anchors** (0/25/50/75/100 with behavioral self-checks; floats banned); severity P0–P3 independent of confidence; **merge/dedup pipeline verbatim** (fingerprint = file+line-bucket±3+title; cross-lane agreement promotes one anchor; mode-aware demotion to testing_gaps/residual_risks; confidence gate last with P0-at-50+ exception); Stage 5b validator wave (independent validator per finding, cap 15, severity-differentiated infra-failure handling); `mode:agent` JSON contract; false-positive suppression catalog (8 categories) + protected artifacts; bias-to-act fix application (interactive mode: apply reversible fixes, commit only if pre-review tree clean, **never push**, P7); model tiering (top lanes inherit session model); output discipline (pipe tables, forbidden shapes); persona texts for correctness (mentally execute), security (uncertain-critical filed at P0), adversarial (chaos-engineer, depth-calibrated) |
 | CE ce-simplify-code | Absorbed into the architecture lane: Reuse/Quality(9 categories)/Efficiency(7 categories) checklists + anti-over-simplification guardrails (concept-naming helpers, git blame first — P5 boundary) |
 | EC review-phase | Phase-gate caller mode (Entry/Exit/AUTO-advance); pipeline fix mode: ONE fixer with the complete findings list (bans per-finding fixers); re-review loop hard cap 3 with original-findings verification and escalate when P0/P1 survive the cap; "most capable model for the final gate" note |
 | SP requesting-code-review | Trigger taxonomy (mandatory/optional); context isolation rationale (reviewer never sees requester's session history) |
@@ -194,13 +206,17 @@ Purpose: after any PR, session, or debugging arc — measure outcomes against de
 | New (core) | **Measured-vs-declared comparison**: read the originating spec's Success Criteria section; for each criterion identify the proving command, **run it fresh** (P3 — never accept a prior claim), record measured vs declared, classify Met/Partially Met/Not Met with the explicit gap. One row per criterion; vague summarization banned. |
 | CE ce-compound (contract) | Phase-final headless invocation of `compound` — only when a finding rises to reusable-lesson quality (specific + surprising + actionable); skip silently otherwise; expect and surface `Documentation complete`/`skipped` terminal signal |
 | CE ce-sessions (concept) | Session-history search as a **pluggable** data source for session-scoped retros (no PR); tight dispatch payload discipline; degrade gracefully when absent |
-| EntireContext | Optional feature-detected hooks: `ec_decision_create` for architecture decisions surfaced in findings; `ec_lessons` check before writing duplicate lessons. Never a hard dependency. |
+| EntireContext (the same project the EC source skill ships in — donor codebase above, optional runtime integration here) | Optional feature-detected hooks: `ec_decision_create` for architecture decisions surfaced in findings; `ec_lessons` check before writing duplicate lessons. Never a hard dependency. |
 
 Modes: PR-merge / session-end / ad-hoc; `mode:headless` with terminal signal lines per `schemas/headless-contract.md`.
+
+**Interview protocol** (added post-v0.1 on user direction): the narrative phases (carry-forward reconciliation, findings/lessons) run as a facilitator/respondent interview — an independent facilitator with artifact-only context asks evidence-demanding probes (`skills/retrospective/references/interview-probes.md`) and rejects unevidenced answers; the working agent answers. Facilitator model: heterogeneous when the environment offers one (Claude Code → `codex exec`; Codex → Claude subagent) since shared model biases share blind spots; degrades to same-model fresh-context subagent → sequential passes → headless fixed self-checklist. Data collection and measurement phases are never interviewed (commands, not narratives). Headless contract unchanged.
 
 v0.1 defers (documented hook points, not implemented): EntireContext integration, session-history search integration.
 
 ### 11. compound
+
+Purpose: capture one solved problem or guidance item into docs/solutions/ and keep CONCEPTS.md vocabulary current.
 
 CE ce-compound distilled: two-track schema (bug: symptoms/root_cause/resolution_type required; knowledge: + applies_when), category → `docs/solutions/<category>/` mapping; YAML quoting rule + stdlib `validate-frontmatter.py` gate (exit 0 before success claim, P3); 5-dimension overlap scoring on write (High → update existing, Moderate → create + flag, Low → create); Full vs Lightweight modes; **headless contract verbatim** (terminal signals — retrospective depends on it); CONCEPTS.md vocabulary capture (accretion + seeding, glossary purity rules, canonical-term opinionation, coherence-neighborhood-only scope); selective refresh triggers (recommendation only in headless); discoverability check (does AGENTS.md/CLAUDE.md lead agents to docs/solutions/?).
 
@@ -208,22 +224,29 @@ Dropped: five specialized reviewer subagents (→ one generic optional hook); Ra
 
 ### 12. compound-refresh
 
+Purpose: periodic audit of the accumulated knowledge corpus — keep, update, consolidate, replace, or delete.
+
 Kept separate from compound (operating-rhythm mismatch: per-problem vs periodic audit; the selective-trigger coupling in compound is already the correct boundary). Distilled: five-outcome model (Keep/Update/Consolidate/Replace/Delete with the "rewriting the solution section = Replace" boundary); broad-scope triage (frontmatter inventory → impact clustering → spot checks); document-set analysis (overlap + supersession + canonical-doc + Retrieval-Value Test); **delete guardrails** (implementation gone AND problem domain gone AND citations absent-or-decorative; substantive citations → Replace); headless in v0.1: **recommend-only** (classification runs, nothing is written; everything lands in Recommended — auto-apply of unambiguous actions is the v0.2 upgrade per the deferral list); interactive mode applies, marking genuinely ambiguous cases `status: stale`; Applied vs Recommended report; corpus-wide CONCEPTS.md reconciliation + scrub sweep; commit hygiene (stage only own files).
 
 ## Repository layout
 
 ```
 compound-loop/
-├── .claude-plugin/plugin.json
+├── .claude-plugin/plugin.json + marketplace.json   # marketplace.json enables local install
 ├── .codex-plugin/plugin.json
 ├── PRINCIPLES.md
+├── ROADMAP.md
 ├── README.md
+├── .gitignore                      # ignores .release-loop/ local state
+├── scripts/validate.sh             # structural validation (see Testing)
 ├── skills/
 │   └── <name>/SKILL.md [+ references/*.md] [+ scripts/*]
 ├── schemas/
-│   ├── findings.schema.json        # reviewing mode:agent output
-│   ├── plan-schema.md              # frontmatter contract + unit template
-│   └── retro-template.md
+│   ├── lane-findings.schema.json   # per-lane reviewer output (CE schema, verbatim)
+│   ├── review-envelope.schema.json # merged mode:agent envelope (review-envelope/v1)
+│   ├── plan-schema.md              # frontmatter contract + unit template (plan/v1)
+│   ├── retro-template.md
+│   └── headless-contract.md        # terminal signal lines for headless callers
 ├── references/
 │   └── (shared cross-skill references, e.g. dispatch-degradation.md, question-tools.md)
 └── docs/
@@ -254,14 +277,14 @@ Shared references hold the text that would otherwise repeat in every skill (P5):
 
 The maintained list with build-triggers lives in `ROADMAP.md`; the items below record the original deferral decision.
 
-The independent spec review (Codex gpt-5.6-sol, verdict: revise) flagged v0.1 scope. These ship as documented hook points only:
+The independent spec review (Codex gpt-5.6-sol, verdict: revise) flagged v0.1 scope. Deferred **integrations** ship as documented hook points; deferred **validation assets** (conformance suite, schema validators) are simply not built yet — nothing to hook:
 
 - EntireContext hooks (`ec_decision_create`, `ec_lessons`) and session-history search in `retrospective`
 - Cross-round evidence-overlap suppression in `planning`'s deepening pass
 - Project-defined review lanes beyond a documented example in `reviewing`
 - `compound-refresh` headless **auto-apply** (v0.1 headless = recommend-only report; interactive mode applies)
 - Golden-fixture conformance suite exercising a full lifecycle, resume, and a degraded dispatch tier on both harnesses (v0.1 verifies structure + load + one headless smoke; full conformance is v0.2)
-- Plan/findings schema validators with valid/invalid/migration fixtures
+- Plan/findings schema validators with valid/invalid/legacy/migration fixtures
 
 ## Open decisions
 
