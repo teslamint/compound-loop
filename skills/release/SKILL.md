@@ -118,15 +118,31 @@ Collection is based on committed evidence, never the working conversation.
    git log --name-only --format= <range> -- docs/specs docs/retros
    ```
 
-   Remove blank lines, deduplicate paths, retain existing `docs/specs/*.md` and
-   `docs/retros/*.md` paths, and read their committed versions at `HEAD`.
-   For a first release, use the same command over `HEAD` instead of a tag range.
-2. Record every collected spec path in a **Source inventory**. Specs are the
-   traceability unit; retros are supporting evidence and remain separately
-   listed as **Retros consulted**.
-3. For every spec, read its Overview and user-facing intent. Draft feature
-   language from that evidence rather than copying commit subjects. Use retros
-   to qualify verified outcomes and to ground any older backfill section.
+   Remove blank lines and deduplicate paths, but do not filter the result by
+   current filesystem existence. For a first release, use the same command over
+   `HEAD` instead of a tag range.
+2. Record **every** collected `docs/specs/*.md` path in the **Source inventory**,
+   including a path deleted or renamed before `HEAD`. A committed in-range path
+   is inventory evidence even when the current worktree no longer contains it.
+   Retros are supporting evidence and remain separately listed as **Retros
+   consulted**; they are not source-inventory units.
+3. Recover spec content before drafting:
+   - When the path exists at `HEAD`, read the committed `HEAD` version.
+   - When it is absent at `HEAD`, find the last in-range add/modify commit with
+     `git log --diff-filter=AM -1 --format=%H <range> -- <path>` and read that
+     commit's blob with `git show <commit>:<path>`.
+   - If the range contains only the deletion, inspect the blob from the
+     deletion commit's first parent (or the range base) as clearly labeled
+     pre-range context. If no blob can be recovered, retain the path and record
+     that recovery failed; never drop the inventory row.
+
+   For every spec with recoverable content, read its Overview and user-facing
+   intent. Draft feature language from that evidence rather than copying commit
+   subjects. Any inventory path absent at `HEAD` must also have a concrete,
+   gate-visible Drop-list reason stating whether it was deleted, renamed, or
+   reverted in-range; recovered text does not waive that adjudication. Use
+   retros to qualify verified outcomes and to ground any older backfill
+   section.
 4. Collect non-merge commit hashes and subjects in the range. Filter mechanical
    noise: merge commits, `chore:`-only maintenance, review-only commits,
    formatting-only commits, and commits whose user-visible topic is already
@@ -173,6 +189,10 @@ Trace the source inventory explicitly:
 - Map every inventory spec to one or more current-section entries.
 - If a spec should not appear (for example, its feature was reverted), put its
   path and a concrete reason in a **Drop-list** shown at the USER gate.
+- Put every inventory spec absent at `HEAD` in the Drop-list with its explicit
+  deleted, renamed, or reverted status and the recovered-content source (or the
+  fact that no content was recoverable). Never treat absence at `HEAD` as a
+  reason to erase the inventory row.
 - Never silently omit an inventory spec. An empty drop-list is written as
   `None`.
 - Retain the mapping and drop-list in `.release/draft.md` for headless runs and
@@ -209,8 +229,8 @@ placeholders.
 In `mode:headless`, stop after Version. Create `.release/` on demand and write
 `.release/draft.md` with every draft component named in Phase 3. Its final
 section is `## Exact commands` and contains the fully rendered write, manifest
-bump, validation, staging, commit, tag, and verification commands an authorized
-interactive session would run.
+bump, validation, staging, commit, pre-tag verification, tag, and tag-only
+verification commands an authorized interactive session would run.
 
 Headless mode never asks a question, writes a tracked file, updates a manifest,
 commits, or tags. After confirming the draft exists, end with this byte-exact
@@ -248,9 +268,13 @@ The exact command packet must, in execution order:
 - stage the three named release files explicitly;
 - prove the staged path set is exactly those three files;
 - create one release commit with the resolved version in its subject;
+- before creating any tag, verify both manifest values, the newest CHANGELOG
+  heading, the release commit's exact three-path set, and complete disposition
+  of every source-inventory spec through an approved mapping or drop reason;
 - create one annotated tag on that commit, with the version and draft
   highlights in its annotation; and
-- run the four-way agreement and source-inventory traceability checks.
+- after tag creation, run only the tag-name and tag-dereference checks needed
+  to complete four-way agreement.
 
 Approval applies only to the packet displayed. Any changed version, CHANGELOG
 entry, drop reason, command, or tag message requires a fresh gate.
@@ -273,28 +297,39 @@ Execute only after first-hand approval in this session.
    `.codex-plugin/plugin.json` by name. Compare
    `git diff --cached --name-only` with that exact three-path set. Any missing
    or additional path is a failure; never use `git add .` or `git add -A`.
-6. Create one release commit using the approved subject. Verify its changed
-   path set is exactly the three release paths.
-7. Create the approved annotated `v<version>` tag on that new commit. The tag
-   annotation names the version and the approved highlights. Never create a
-   lightweight tag and never push it.
+6. Create one release commit using the approved subject.
+7. **Pre-tag verification** — while no proposed tag exists, verify all non-tag
+   postconditions: parse both manifests and require each to equal the approved
+   version; require the newest CHANGELOG heading to name the approved version;
+   require the release commit's changed path set to equal exactly the three
+   release paths; and require every source-inventory path to have an approved
+   current-section mapping or an approved, concrete drop reason (including the
+   deleted/renamed/reverted reason for every path absent at `HEAD`). If any
+   check fails, do not create a tag.
+8. Create the approved annotated `v<version>` tag on that verified release
+   commit. The tag annotation names the version and the approved highlights.
+   Never create a lightweight tag and never push it.
+9. **Tag-only verification** — after creation, check only that
+   `git describe --tags --abbrev=0 HEAD` names the approved tag and that the
+   annotated tag dereferences to the verified release commit. These checks add
+   the tag value to the already-recorded manifest/CHANGELOG evidence and
+   complete four-way agreement.
 
 If validation, staging, commit, or tag creation fails, do not attempt the later
-steps. In particular, no validation or verification failure may be followed by
-tag creation.
+steps. In particular, no validation or pre-tag verification failure may be
+followed by tag creation. A tag-only verification failure reports failure
+without rerunning or substituting the earlier non-tag checks.
 
 ## Phase 7: Report
 
-Before reporting success, prove all of the following from repository state:
-
-- the two parsed manifest versions equal the approved version;
-- the first `## [<version>] - <date>` heading in `CHANGELOG.md` names that
-  version;
-- `git describe --tags --abbrev=0 HEAD` names the approved tag;
-- the approved annotated tag dereferences to the release commit;
-- the release commit changes exactly the three release files; and
-- every source-inventory spec is represented by the approved current-section
-  mapping or the approved drop-list reason.
+Before reporting success, require the recorded pre-tag evidence from Execute
+step 7: both manifest values and the newest CHANGELOG heading equal the approved
+version, the release commit changes exactly the three release files, and every
+source-inventory spec has an approved mapping or concrete drop reason. Then
+require the tag-only evidence from Execute step 9: the newest reachable tag has
+the approved name and dereferences to that verified release commit. Do not move
+non-tag verification after tag creation or replace recorded pre-tag evidence
+with a post-tag rerun.
 
 Report the release commit, annotated tag, validation result, four-way agreement,
 and traceability result. Terminal state is always the last non-empty output
