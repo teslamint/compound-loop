@@ -44,6 +44,26 @@ assert_not_contains() {
   return 1
 }
 
+assert_line_contains_all() {
+  local haystack="$1" label="$2"
+  shift 2
+  local line needle matches
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    matches=1
+    for needle in "$@"; do
+      if [[ "$line" != *"$needle"* ]]; then
+        matches=0
+        break
+      fi
+    done
+    [[ $matches -eq 1 ]] && return 0
+  done <<< "$haystack"
+  printf '  assertion failed (%s): expected one diagnostic line to contain:' "$label"
+  printf ' %s' "$@"
+  printf '\n'
+  return 1
+}
+
 run_case() {
   local name="$1"
   shift
@@ -120,11 +140,9 @@ PY
   fi
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
-  assert_contains "$out" "[manifest-version]" "reported by check 7 specifically" || result=1
-  assert_contains "$out" ".claude-plugin/plugin.json" "names Claude manifest" || result=1
-  assert_contains "$out" ".codex-plugin/plugin.json" "names Codex manifest" || result=1
-  assert_contains "$out" "$original_version" "names original value" || result=1
-  assert_contains "$out" "9.9.9" "names mismatched value" || result=1
+  assert_line_contains_all "$out" "correlated mismatch diagnostic" \
+    "[manifest-version]" ".claude-plugin/plugin.json" "$original_version" \
+    ".codex-plugin/plugin.json" "9.9.9" || result=1
   rm -rf "$dir"
   return $result
 }
@@ -152,8 +170,8 @@ PY
   fi
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
-  assert_contains "$out" "[manifest-version]" "reported by check 7 specifically" || result=1
-  assert_contains "$out" ".codex-plugin/plugin.json" "names missing-version manifest" || result=1
+  assert_line_contains_all "$out" "correlated missing-version diagnostic" \
+    "[manifest-version]" ".codex-plugin/plugin.json" || result=1
   rm -rf "$dir"
   return $result
 }
@@ -181,8 +199,8 @@ PY
   fi
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
-  assert_contains "$out" "[manifest-version]" "reported by check 7 specifically" || result=1
-  assert_contains "$out" ".codex-plugin/plugin.json" "names invalid-version manifest" || result=1
+  assert_line_contains_all "$out" "correlated invalid-version diagnostic" \
+    "[manifest-version]" ".codex-plugin/plugin.json" || result=1
   rm -rf "$dir"
   return $result
 }
@@ -196,8 +214,8 @@ case_e() {
   rm -f "$dir/.codex-plugin/plugin.json"
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
-  assert_contains "$out" "[manifest-version]" "check 7 specifically handles a missing manifest" || result=1
-  assert_contains "$out" ".codex-plugin/plugin.json" "names missing manifest" || result=1
+  assert_line_contains_all "$out" "correlated missing-manifest diagnostic" \
+    "[manifest-version]" ".codex-plugin/plugin.json" || result=1
   assert_not_contains "$out" "Traceback" "no Python traceback" || result=1
   rm -rf "$dir"
   return $result
