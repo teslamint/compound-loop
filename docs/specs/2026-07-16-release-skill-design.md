@@ -35,6 +35,19 @@ A consuming repo without `docs/specs/` invokes `/release`. Collection finds no l
 
 An orchestrator dispatches `release` with `mode:headless`. The skill runs Preflight → Collect → Draft → Version fully, writes the draft to `.release/draft.md` (gitignored; created on demand), and stops before Execute — tagging the default branch requires first-hand consent (pilot-proven: relayed gate approval is not execution authorization, `skills/release-loop/SKILL.md:51`). Ends `Release skipped — headless: ceremony requires first-hand consent; draft prepared at .release/draft.md`, handing the exact commands up.
 
+## Assumptions and Preconditions
+
+Verified against the live repo at design time (grep/command, not recall); consuming repos that break one land on the named fallback or failure path.
+
+1. **A previous tag exists** for the normal path — this repo: `v0.1.0` (`git describe --tags --abbrev=0`). No tag and no specs → first-release path (no backfill, version proposed at the gate).
+2. **Both manifests exist with parseable `version` fields** (`.claude-plugin/plugin.json:3`, `.codex-plugin/plugin.json:3`). Absence or non-semver is an explicit check 7 failure, never a silent pass.
+3. **Lifecycle-artifact convention** — dated specs/retros under `docs/specs/`, `docs/retros/` with committed history (Approach B's inventory). Repos without it: S2 git-log fallback.
+4. **validate.sh structure as of `76cd2af`** — six checks; roster hardcoded at `scripts/validate.sh:34`; check 6's producers/consumers/regex/9-count invariant hardcoded at `:115,:128,:137,:139,:141-145` (five coordinated edits required, per Testing).
+5. **headless-contract v1 table shape** and its bump rule at `schemas/headless-contract.md:5` — the additive-row argument and the rule clarification both assume this exact wording.
+6. **A user present at the gate** — the ceremony cannot complete unattended: USER gate + first-hand-consent rule (`skills/release-loop/SKILL.md:51`). Headless is prepare-only by design (S5).
+7. **No git remote** — push/GitHub release are out of scope; the first remote is the trigger for that deferred iteration.
+8. **Runtime state at ceremony**: clean working tree, on the default branch (Preflight-enforced).
+
 ## Scope
 
 ### In
