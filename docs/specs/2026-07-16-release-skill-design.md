@@ -1,6 +1,6 @@
 ---
 title: release skill (13th) — versioned release ceremony
-status: draft
+status: approved
 date: 2026-07-16
 schema: spec/v1
 ---
