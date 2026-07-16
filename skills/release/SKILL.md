@@ -59,11 +59,19 @@ stable and no release-note work occurs for an invalid repository.
    with:
 
    ```bash
-   git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||' || echo main
+   default_branch="$(
+     git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null |
+       sed 's|^origin/||'
+   )"
+   if [ -z "$default_branch" ]; then
+     default_branch=main
+   fi
    ```
 
-   Require the current branch to equal the detected default branch. A release
-   commit is never created on a feature branch.
+   The explicit empty-result check is required because `sed` exits successfully
+   on empty input when `origin/HEAD` is absent. Require the current branch to
+   equal `default_branch`. A release commit is never created on a feature
+   branch.
 4. **Manifest validity** — require both `.claude-plugin/plugin.json` and
    `.codex-plugin/plugin.json` to exist, parse as JSON, contain a string
    `version`, and have that value match SemVer 2.0.0, including valid optional
