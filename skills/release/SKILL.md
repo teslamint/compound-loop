@@ -138,11 +138,12 @@ Collection is based on committed evidence, never the working conversation.
 
    For every spec with recoverable content, read its Overview and user-facing
    intent. Draft feature language from that evidence rather than copying commit
-   subjects. Any inventory path absent at `HEAD` must also have a concrete,
-   gate-visible Drop-list reason stating whether it was deleted, renamed, or
-   reverted in-range; recovered text does not waive that adjudication. Use
-   retros to qualify verified outcomes and to ground any older backfill
-   section.
+   subjects. Any inventory path absent at `HEAD` must also have a structured,
+   gate-visible Drop-list record whose `disposition` is exactly one normalized
+   lowercase value: `deleted`, `renamed`, or `reverted`. Its separate `reason`
+   remains concrete human-readable prose explaining what happened; recovered
+   text does not waive that adjudication. Use retros to qualify verified
+   outcomes and to ground any older backfill section.
 4. Collect non-merge commit hashes and subjects in the range. Filter mechanical
    noise: merge commits, `chore:`-only maintenance, review-only commits,
    formatting-only commits, and commits whose user-visible topic is already
@@ -189,10 +190,12 @@ Trace the source inventory explicitly:
 - Map every inventory spec to one or more current-section entries.
 - If a spec should not appear (for example, its feature was reverted), put its
   path and a concrete reason in a **Drop-list** shown at the USER gate.
-- Put every inventory spec absent at `HEAD` in the Drop-list with its explicit
-  deleted, renamed, or reverted status and the recovered-content source (or the
-  fact that no content was recoverable). Never treat absence at `HEAD` as a
-  reason to erase the inventory row.
+- Render each Drop-list item as structured fields: `path`, `disposition`,
+  `reason`, and `recovered_from`. Put every inventory spec absent at `HEAD` in
+  that list with `disposition` set to exactly lowercase `deleted`, `renamed`,
+  or `reverted`; preserve a gate-visible concrete `reason`; and name the
+  recovered-content source (or state that no content was recoverable). Never
+  treat absence at `HEAD` as a reason to erase the inventory row.
 - Never silently omit an inventory spec. An empty drop-list is written as
   `None`.
 - Retain the mapping and drop-list in `.release/draft.md` for headless runs and
@@ -270,7 +273,12 @@ The exact command packet must, in execution order:
 - create one release commit with the resolved version in its subject;
 - before creating any tag, verify both manifest values, the newest CHANGELOG
   heading, the release commit's exact three-path set, and complete disposition
-  of every source-inventory spec through an approved mapping or drop reason;
+  of every source-inventory spec through an approved mapping or structured
+  Drop-list record. For an absent-at-HEAD item, normalize the structured
+  `disposition` with `.lower()` before comparing it with the allowed set
+  `{deleted, renamed, reverted}`. If the command additionally validates the
+  human-readable reason, compare `reason.lower()`; never use a case-sensitive
+  substring test against the prose reason;
 - create one annotated tag on that commit, with the version and draft
   highlights in its annotation; and
 - after tag creation, run only the tag-name and tag-dereference checks needed
@@ -303,9 +311,12 @@ Execute only after first-hand approval in this session.
    version; require the newest CHANGELOG heading to name the approved version;
    require the release commit's changed path set to equal exactly the three
    release paths; and require every source-inventory path to have an approved
-   current-section mapping or an approved, concrete drop reason (including the
-   deleted/renamed/reverted reason for every path absent at `HEAD`). If any
-   check fails, do not create a tag.
+   current-section mapping or an approved, structured Drop-list record. For
+   every path absent at `HEAD`, normalize `disposition` with `.lower()` and
+   require membership in `{deleted, renamed, reverted}`; require the separate
+   concrete reason to be non-empty. If reason text is inspected beyond
+   non-emptiness, inspect `reason.lower()`, never a case-sensitive prose
+   substring. If any check fails, do not create a tag.
 8. Create the approved annotated `v<version>` tag on that verified release
    commit. The tag annotation names the version and the approved highlights.
    Never create a lightweight tag and never push it.
@@ -325,9 +336,10 @@ without rerunning or substituting the earlier non-tag checks.
 Before reporting success, require the recorded pre-tag evidence from Execute
 step 7: both manifest values and the newest CHANGELOG heading equal the approved
 version, the release commit changes exactly the three release files, and every
-source-inventory spec has an approved mapping or concrete drop reason. Then
-require the tag-only evidence from Execute step 9: the newest reachable tag has
-the approved name and dereferences to that verified release commit. Do not move
+source-inventory spec has an approved mapping or structured Drop-list record
+whose disposition/reason checks used the normalized rules above. Then require
+the tag-only evidence from Execute step 9: the newest reachable tag has the
+approved name and dereferences to that verified release commit. Do not move
 non-tag verification after tag creation or replace recorded pre-tag evidence
 with a post-tag rerun.
 
