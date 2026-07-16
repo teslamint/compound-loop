@@ -18,6 +18,17 @@ Deferred from v0.1 by explicit decision (spec "Deferred to v0.2" section + post-
 | Ambient compound triggers | "that worked / it's fixed" phrase detection auto-offering `compound` (v0.1: explicit calls + skill descriptions) | Evidence that solved problems routinely go uncaptured outside release-loop |
 | Gemini support verification | `ask_user` question-tool path is documented but untested | First Gemini-harness user |
 
+## Carry-forward from retros
+
+Open items registered by retro docs (`docs/retros/`), pushed here per `retrospective` Phase 4 (durable tracker, never retro-doc-only). Remove a row when its retro reconciliation marks it Done.
+
+| Item | Origin | Priority | Trigger / next step |
+|---|---|---|---|
+| Second pilot on a larger feature (5+ units, or 2+ conditional review lanes) to exercise the multi-agent dispatch tiers (Tier 1/2, parallel review lanes, per-unit reviewers) that the first pilot's single-agent floor never touched | 2026-07-16 signal-drift-check retro | P2 | Next feature big enough to qualify |
+| Diff-size metric reconciliation: one named metric per cross-phase citation (total diff vs. per-file non-test lines), so lane-trigger decisions never mix figures silently | 2026-07-16 signal-drift-check retro | P3 | Next release-loop run that cites diff size across phases |
+| Clean-environment Codex install check: plugin-native skill discovery (`.codex-plugin/plugin.json`) has never been isolated from the dev machine's `~/.agents/skills/` symlinks | 2026-07-16 v0.1 release retro | P3 | First external or clean-machine Codex install |
+| Traceability criterion for inventory-derived releases: declare "every inventory item present (cite section) or on an explicit drop-list with a reason" as a pre-release check | 2026-07-16 v0.1 release retro | P3 | Next release authored from a source inventory (e.g. a v0.2 skill port) |
+
 ## Non-goals (re-affirmed)
 
 - Porting the remaining product-specific compound-engineering skills (dhh-rails-style, gemini-imagegen, riffrec, proof, promote, product-pulse, test-xcode, slack-research, polish, dogfood-beta, strategy).
