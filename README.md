@@ -8,7 +8,7 @@ compound-loop merges three lineages into one curated skill set:
 - **compound-engineering** — review pipeline rigor and knowledge compounding (persona lanes, confidence gating, docs/solutions)
 - **release-loop** — a six-phase orchestrated lifecycle (Design → Plan → Implement → Review → Ship → Retro) with file-based state
 
-Read [PRINCIPLES.md](PRINCIPLES.md) first — it is the charter every skill enforces.
+Read [PRINCIPLES.md](PRINCIPLES.md) first — it is the charter every skill enforces. Accumulated learnings from past work live in [docs/solutions/](docs/solutions/), and [CONCEPTS.md](CONCEPTS.md) defines this repo's shared vocabulary — both are worth a look before working in an area they cover.
 
 ## Skills
 
