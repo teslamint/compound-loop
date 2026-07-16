@@ -12,3 +12,7 @@
 /.cursorignore
 /.mcp.json
 /.opencode/
+
+# local state (machine-local, never commit)
+.entirecontext/
+.omc/
