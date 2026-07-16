@@ -1,4 +1,5 @@
 .release-loop/
+.release/
 .DS_Store
 .worktrees/
 
