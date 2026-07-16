@@ -1,3 +1,14 @@
 .release-loop/
 .DS_Store
 .worktrees/
+
+# dot-agents personal config links (machine-local, never commit)
+/CLAUDE.md
+/AGENTS.md
+/GEMINI.md
+/.claude/
+/.codex/
+/.cursor/
+/.cursorignore
+/.mcp.json
+/.opencode/
