@@ -201,8 +201,8 @@ manifest_paths = (
     ".codex-plugin/plugin.json",
 )
 
-core = r"(?:0|[1-9]\d*)"
-prerelease_id = r"(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+core = r"(?:0|[1-9][0-9]*)"
+prerelease_id = r"(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
 semver = re.compile(
     rf"{core}\.{core}\.{core}"
     rf"(?:-{prerelease_id}(?:\.{prerelease_id})*)?"
