@@ -109,10 +109,11 @@ stable and no release-note work occurs for an invalid repository.
    partial release as normal input.
 
    For a recognized incomplete release, stop the normal seven-phase path and
-   present a fresh first-hand USER recovery gate. The packet identifies the
-   existing commit and offers three distinct outcomes: **Revalidate and tag
-   this exact commit** (recommended), **Revert this incomplete release**, and
-   **Cancel recovery**. Prior release approval does not authorize recovery.
+   branch on invocation mode. An interactive invocation presents a fresh
+   first-hand USER recovery gate. The packet identifies the existing commit
+   and offers three distinct outcomes: **Revalidate and tag this exact commit**
+   (recommended), **Revert this incomplete release**, and **Cancel recovery**.
+   Prior release approval does not authorize recovery.
    The tag-recovery packet must re-run `bash scripts/validate.sh`, reverify the
    subject, exact three-path set, both manifests, newest CHANGELOG version,
    source-inventory disposition, absence of the proposed tag, and current
@@ -123,12 +124,27 @@ stable and no release-note work occurs for an invalid repository.
    CHANGELOG section and show the reconstructed mapping, Drop-list, highlights,
    and exact recovery packet at this gate.
 
-   The rollback packet must be separately displayed and approved. It creates
-   one `git revert --no-edit HEAD` commit, verifies that the revert changed
-   exactly the same three release paths, verifies that the incomplete version
-   is no longer the manifest/CHANGELOG release state, and confirms that its tag
-   is absent. It then stops; a future release requires a new invocation and a
-   new normal gate. Never reset, rewrite, or discard the incomplete commit.
+   In `mode:headless`, never present that gate or ask any question. Create
+   `.release/` on demand and write `.release/draft.md` as a recovery handoff
+   containing the recognized subject/version, commit ID, exact path set,
+   manifest values, newest CHANGELOG version, reconstructed inventory mapping
+   and Drop-list, resolved highlights, and both available recovery choices.
+   Render the tag choice and revert choice as two separate, complete fenced
+   `bash` programs, each beginning with `set -euo pipefail` and containing all
+   resolved checks and commands for only that choice. Neither packet may be an
+   incomplete suffix or refer to commands outside its own block. Headless
+   recovery does not modify tracked files, commit, revert, or tag. After
+   confirming the draft exists, end with the same byte-exact headless skip
+   signal defined under the Headless boundary. Do not collect or propose a
+   normal next version.
+
+   In interactive recovery, the rollback packet must be separately displayed
+   and approved. It creates one `git revert --no-edit HEAD` commit, verifies
+   that the revert changed exactly the same three release paths, verifies that
+   the incomplete version is no longer the manifest/CHANGELOG release state,
+   and confirms that its tag is absent. It then stops; a future release requires
+   a new invocation and a new normal gate. Never reset, rewrite, or discard the
+   incomplete commit.
 
    Each recovery choice is rendered as one Bash program whose first command is
    `set -euo pipefail`. Execute only the approved program, as one fail-fast
@@ -161,8 +177,9 @@ stable and no release-note work occurs for an invalid repository.
    If no prior release evidence exists, start the file with the current release
    only.
 
-Preflight reads state only. Apart from the ignored draft written later in
-headless mode, no phase before Execute mutates the repository.
+Preflight reads state only. Apart from an ignored draft written for a headless
+normal-release or recovery handoff, no phase before Execute mutates the
+repository.
 
 ## Phase 2: Collect
 
@@ -286,9 +303,12 @@ First validate that the current manifest version is the release base.
 
 Render the final proposed version into the CHANGELOG heading, release commit
 subject, tag name, tag annotation, manifest-edit commands, and verification
-commands. Commands presented at the gate or persisted to the draft must contain
-the literal resolved version and full resolved CHANGELOG content, not symbolic
-placeholders. Every rendered exact-command packet is one complete Bash program:
+commands. The release commit subject is always exactly
+`Release v<resolved-version>`; do not accept, render, approve, or execute an
+alternative subject. Commands presented at the gate or persisted to the draft
+must contain the literal resolved version and full resolved CHANGELOG content,
+not symbolic placeholders. Every rendered exact-command packet is one complete
+Bash program:
 its first command is `set -euo pipefail`, all writes and checks follow in one
 fenced `bash` block, and no command from the packet is presented as a separately
 executable fragment. A copied packet must therefore stop at its first failing
@@ -296,7 +316,9 @@ write, validation, staging, commit, or verification command.
 
 ### Headless boundary
 
-In `mode:headless`, stop after Version. Create `.release/` on demand and write
+On the normal release path, `mode:headless` stops after Version; a recognized
+incomplete release instead uses the recovery handoff defined in Preflight step
+7. For a normal release, create `.release/` on demand and write
 `.release/draft.md` with every draft component named in Phase 3. Its final
 section is `## Exact commands` and contains exactly one fenced `bash` program
 beginning with `set -euo pipefail`. That single program contains the fully
@@ -323,7 +345,8 @@ Present one review packet before asking anything:
 4. proposed version with its one-line justification;
 5. complete CHANGELOG content and tag highlights; and
 6. one fail-fast exact-command Bash program, with literal paths, versions,
-   messages, and file content.
+   messages, and file content, including the exact commit subject
+   `Release v<resolved-version>`.
 
 Use the harness's blocking question tool per
 `references/question-tools.md`. Ask one single-select question with these
@@ -345,15 +368,18 @@ command fails:
 - run `bash scripts/validate.sh`;
 - stage the three named release files explicitly;
 - prove the staged path set is exactly those three files;
-- create one release commit with the resolved version in its subject;
+- create one release commit whose entire subject is exactly
+  `Release v<resolved-version>`; no prefix, suffix, scope, alternate wording,
+  or additional subject text is allowed;
 - before creating any tag, verify both manifest values, the newest CHANGELOG
-  heading, the release commit's exact three-path set, and complete disposition
-  of every source-inventory spec through an approved mapping or structured
-  Drop-list record. For an absent-at-HEAD item, normalize the structured
-  `disposition` with `.lower()` before comparing it with the allowed set
-  `{deleted, renamed, reverted}`. If the command additionally validates the
-  human-readable reason, compare `reason.lower()`; never use a case-sensitive
-  substring test against the prose reason;
+  heading, the release commit's exact subject, the release commit's exact
+  three-path set, and complete disposition of every source-inventory spec
+  through an approved mapping or structured Drop-list record. For an
+  absent-at-HEAD item, normalize the structured `disposition` with `.lower()`
+  before comparing it with the allowed set `{deleted, renamed, reverted}`. If
+  the command additionally validates the human-readable reason, compare
+  `reason.lower()`; never use a case-sensitive substring test against the prose
+  reason;
 - create one annotated tag on that commit, with the version and draft
   highlights in its annotation; and
 - after tag creation, run only the tag-name and tag-dereference checks needed
@@ -391,18 +417,22 @@ terminates the packet before every later commit or tag command.
    `.codex-plugin/plugin.json` by name. Compare
    `git diff --cached --name-only` with that exact three-path set. Any missing
    or additional path is a failure; never use `git add .` or `git add -A`.
-6. Create one release commit using the approved subject.
+6. Create one release commit with subject exactly
+   `Release v<approved-version>`. The approved packet may not substitute a
+   conventional-commit prefix, description suffix, or any other subject.
 7. **Pre-tag verification** — while no proposed tag exists, verify all non-tag
    postconditions: parse both manifests and require each to equal the approved
    version; require the newest CHANGELOG heading to name the approved version;
-   require the release commit's changed path set to equal exactly the three
-   release paths; and require every source-inventory path to have an approved
-   current-section mapping or an approved, structured Drop-list record. For
-   every path absent at `HEAD`, normalize `disposition` with `.lower()` and
-   require membership in `{deleted, renamed, reverted}`; require the separate
-   concrete reason to be non-empty. If reason text is inspected beyond
-   non-emptiness, inspect `reason.lower()`, never a case-sensitive prose
-   substring. If any check fails, do not create a tag.
+   require `git log -1 --format=%s` to equal exactly
+   `Release v<approved-version>`; require the release commit's changed path set
+   to equal exactly the three release paths; and require every source-inventory
+   path to have an approved current-section mapping or an approved, structured
+   Drop-list record. For every path absent at `HEAD`, normalize `disposition`
+   with `.lower()` and require membership in
+   `{deleted, renamed, reverted}`; require the separate concrete reason to be
+   non-empty. If reason text is inspected beyond non-emptiness, inspect
+   `reason.lower()`, never a case-sensitive prose substring. If any check
+   fails, do not create a tag.
 8. Create the approved annotated `v<version>` tag on that verified release
    commit. The tag annotation names the version and the approved highlights.
    Never create a lightweight tag and never push it.
@@ -425,13 +455,14 @@ substituting the earlier non-tag checks.
 
 Before reporting success, require the recorded pre-tag evidence from Execute
 step 7: both manifest values and the newest CHANGELOG heading equal the approved
-version, the release commit changes exactly the three release files, and every
-source-inventory spec has an approved mapping or structured Drop-list record
-whose disposition/reason checks used the normalized rules above. Then require
-the tag-only evidence from Execute step 9: the newest reachable tag has the
-approved name and dereferences to that verified release commit. Do not move
-non-tag verification after tag creation or replace recorded pre-tag evidence
-with a post-tag rerun.
+version, the release commit subject equals exactly
+`Release v<approved-version>`, the commit changes exactly the three release
+files, and every source-inventory spec has an approved mapping or structured
+Drop-list record whose disposition/reason checks used the normalized rules
+above. Then require the tag-only evidence from Execute step 9: the newest
+reachable tag has the approved name and dereferences to that verified release
+commit. Do not move non-tag verification after tag creation or replace recorded
+pre-tag evidence with a post-tag rerun.
 
 Report the release commit, annotated tag, validation result, four-way agreement,
 and traceability result. Terminal state is always the last non-empty output
