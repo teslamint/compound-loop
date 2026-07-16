@@ -15,6 +15,7 @@ Read [PRINCIPLES.md](PRINCIPLES.md) first — it is the charter every skill enfo
 | Skill | Role |
 |---|---|
 | `release-loop` | Orchestrates the six phases end to end; each phase invokes the standalone skill below |
+| `release` | Owns the local versioned-release ceremony: artifact-derived CHANGELOG, synchronized manifests, USER-gated annotated tag |
 | `designing` | Requirements exploration with scope tiering, rigor-gap probes, and mandatory measurable success criteria |
 | `planning` | Implementation plans with stable unit IDs, per-unit test scenarios, and a risk-scored deepening pass |
 | `implementing` | Plan execution with file-based handoffs, parallel-safety checks, and graceful degradation |
