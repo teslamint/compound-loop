@@ -3,9 +3,10 @@
 # copies the current worktree into a disposable directory, removes its Git
 # metadata, mutates only the copy, and runs scripts/validate.sh there.
 #
-# This harness is intentionally red until validate.sh gains check 7. It is
-# manual-only and must not be wired into validate.sh or CI before that check
-# exists.
+# This manual fixture harness proves check 7 accepts synchronized manifests and
+# rejects invalid, mismatched, or missing version fields with correlated paths.
+# Keep it separate from validate.sh so its disposable recursive copies do not
+# run as part of the normal validation path.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

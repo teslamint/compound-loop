@@ -34,7 +34,8 @@ work and reports failure.
   invocation with `mode:headless`.
 - **Exit**: an annotated `v<version>` tag on a release commit that changes
   exactly `CHANGELOG.md`, `.claude-plugin/plugin.json`, and
-  `.codex-plugin/plugin.json`; a prepare-only `.release/draft.md`; or an
+  `.codex-plugin/plugin.json`; an explicitly approved revert of a recognized
+  incomplete release commit; a prepare-only `.release/draft.md`; or an
   explicit skip/failure with no later phase run.
 - **Gate**: USER, always. Commit and tag creation require first-hand approval
   received by the same session that executes them. Relayed approval from an
@@ -91,15 +92,70 @@ stable and no release-note work occurs for an invalid repository.
    ```text
    Release skipped — HEAD already released as v0.2.0
    ```
-7. **Previous tag and range** — discover the latest reachable annotated or
+7. **Incomplete release recovery** — before discovering a normal release
+   range, inspect an untagged `HEAD` for a release commit left behind by a
+   failed pre-tag check or tag command. A commit is a recognized incomplete
+   release only when all of these independently derived facts agree:
+   - its exact subject is `Release v<version>`, where `<version>` is SemVer;
+   - its changed path set is exactly `CHANGELOG.md`,
+     `.claude-plugin/plugin.json`, and `.codex-plugin/plugin.json`;
+   - both parsed manifest versions are byte-identical to `<version>`; and
+   - the first version section in `CHANGELOG.md` is exactly `<version>`.
+
+   If any release-shaped evidence exists at `HEAD` (for example, a
+   `Release v...` subject or the exact release path set) but those facts do not
+   all agree, fail as an ambiguous partial release. Never collect sources,
+   propose a later version, or silently treat either a recognized or ambiguous
+   partial release as normal input.
+
+   For a recognized incomplete release, stop the normal seven-phase path and
+   present a fresh first-hand USER recovery gate. The packet identifies the
+   existing commit and offers three distinct outcomes: **Revalidate and tag
+   this exact commit** (recommended), **Revert this incomplete release**, and
+   **Cancel recovery**. Prior release approval does not authorize recovery.
+   The tag-recovery packet must re-run `bash scripts/validate.sh`, reverify the
+   subject, exact three-path set, both manifests, newest CHANGELOG version,
+   source-inventory disposition, absence of the proposed tag, and current
+   `HEAD`, then create one annotated tag on that same commit and run tag-only
+   verification. Reconstruct the inventory over the preceding release range
+   ending at `HEAD^`; do not trust an ignored draft as the only traceability
+   record. Derive the resolved annotation highlights from the existing newest
+   CHANGELOG section and show the reconstructed mapping, Drop-list, highlights,
+   and exact recovery packet at this gate.
+
+   The rollback packet must be separately displayed and approved. It creates
+   one `git revert --no-edit HEAD` commit, verifies that the revert changed
+   exactly the same three release paths, verifies that the incomplete version
+   is no longer the manifest/CHANGELOG release state, and confirms that its tag
+   is absent. It then stops; a future release requires a new invocation and a
+   new normal gate. Never reset, rewrite, or discard the incomplete commit.
+
+   Each recovery choice is rendered as one Bash program whose first command is
+   `set -euo pipefail`. Execute only the approved program, as one fail-fast
+   shell invocation. If any command fails, Bash must not reach a later command:
+   in particular, a failed revalidation or pre-tag check cannot create a tag,
+   and a failed rollback cannot be reported as resolved. End a successful tag
+   recovery, rollback, cancellation, and command-failure signals respectively
+   by instantiating these exact forms:
+
+   ```text
+   Release complete — v<version>
+   Release skipped — incomplete release v<version> reverted; invoke release again
+   Release skipped — incomplete release recovery cancelled
+   Release failed — incomplete release recovery failed at <command>; HEAD remains untagged
+   ```
+
+   The terminal signal remains the last non-empty output. Do not resume normal
+   version proposal in the same invocation after any recovery outcome.
+8. **Previous tag and range** — discover the latest reachable annotated or
    lightweight tag with `git describe --tags --abbrev=0`. With a tag, the
    release range is `<last-tag>..HEAD`. Without one, the range is all commits
    reachable from `HEAD`, and this is a first-release path.
-8. **Non-empty range** — require at least one commit in the range. If a previous
+9. **Non-empty range** — require at least one commit in the range. If a previous
    tag exists and the range is empty, report the already-released/no-change
    state rather than manufacturing release notes. On the first-release path,
    require at least one reachable commit.
-9. **CHANGELOG/backfill state** — record whether `CHANGELOG.md` exists. If it is
+10. **CHANGELOG/backfill state** — record whether `CHANGELOG.md` exists. If it is
    absent and earlier release evidence exists (a prior tag or release-era
    lifecycle artifacts), schedule concise older sections below the new section.
    If no prior release evidence exists, start the file with the current release
@@ -181,9 +237,16 @@ Draft a Keep a Changelog-shaped current section:
 
 Use only the subsections that have entries. The proposed version may still
 change at the gate, so render the heading again after the version decision.
-When `CHANGELOG.md` already exists, preserve its existing content below the new
-current section. When backfilling, place every older section below the current
-section, newest first.
+When `CHANGELOG.md` already exists, split it immediately before its first
+`## [<version>]` section. Preserve the stable title and preamble prefix
+byte-for-byte at the beginning of the file, insert the new current section
+after that prefix, and preserve all prior version sections below the new one.
+For example, `# Changelog`, its explanatory preamble, then `## [0.1.0]` becomes
+that same title and preamble, then `## [0.2.0]`, then `## [0.1.0]`; never put a
+new version above the title or append it below an older version. If no version
+section exists yet, keep the whole existing title/preamble as the prefix and
+append the new current section after it. When backfilling, place every older
+section below the current section, newest first.
 
 Trace the source inventory explicitly:
 
@@ -225,15 +288,22 @@ Render the final proposed version into the CHANGELOG heading, release commit
 subject, tag name, tag annotation, manifest-edit commands, and verification
 commands. Commands presented at the gate or persisted to the draft must contain
 the literal resolved version and full resolved CHANGELOG content, not symbolic
-placeholders.
+placeholders. Every rendered exact-command packet is one complete Bash program:
+its first command is `set -euo pipefail`, all writes and checks follow in one
+fenced `bash` block, and no command from the packet is presented as a separately
+executable fragment. A copied packet must therefore stop at its first failing
+write, validation, staging, commit, or verification command.
 
 ### Headless boundary
 
 In `mode:headless`, stop after Version. Create `.release/` on demand and write
 `.release/draft.md` with every draft component named in Phase 3. Its final
-section is `## Exact commands` and contains the fully rendered write, manifest
-bump, validation, staging, commit, pre-tag verification, tag, and tag-only
-verification commands an authorized interactive session would run.
+section is `## Exact commands` and contains exactly one fenced `bash` program
+beginning with `set -euo pipefail`. That single program contains the fully
+rendered write, manifest bump, validation, staging, commit, pre-tag
+verification, tag, and tag-only verification commands an authorized
+interactive session would run. Do not render independent shell fragments
+before or after that program.
 
 Headless mode never asks a question, writes a tracked file, updates a manifest,
 commits, or tags. After confirming the draft exists, end with this byte-exact
@@ -252,7 +322,8 @@ Present one review packet before asking anything:
 3. traceability mapping and the complete drop-list;
 4. proposed version with its one-line justification;
 5. complete CHANGELOG content and tag highlights; and
-6. exact commands, with literal paths, versions, messages, and file content.
+6. one fail-fast exact-command Bash program, with literal paths, versions,
+   messages, and file content.
 
 Use the harness's blocking question tool per
 `references/question-tools.md`. Ask one single-select question with these
@@ -262,7 +333,11 @@ Version and presents a new complete packet. Cancellation exits without tracked
 changes. If the blocking tool is unavailable or errors, show the same numbered
 options in chat and wait; never treat silence or relayed approval as consent.
 
-The exact command packet must, in execution order:
+The exact command packet must be a single fenced `bash` program whose first
+command is `set -euo pipefail`. All commands below occur in that one program, in
+execution order. Do not split the packet into individually runnable snippets,
+and do not offer later commands as recovery instructions after an earlier
+command fails:
 
 - write the complete `CHANGELOG.md` content;
 - replace only the existing version string in each manifest, preserving all
@@ -284,12 +359,23 @@ The exact command packet must, in execution order:
 - after tag creation, run only the tag-name and tag-dereference checks needed
   to complete four-way agreement.
 
+Use explicit nonzero assertions for every invariant so `set -e` can stop the
+program. Where a command's natural exit status would hide a mismatch (for
+example, a comparison inside output-producing code), make the mismatch exit
+nonzero. The complete resolved CHANGELOG heredoc and resolved tag annotation
+remain inside this same program; fail-fast structure must not replace or
+abbreviate approved content.
+
 Approval applies only to the packet displayed. Any changed version, CHANGELOG
 entry, drop reason, command, or tag message requires a fresh gate.
 
 ## Phase 6: Execute
 
-Execute only after first-hand approval in this session.
+Execute only after first-hand approval in this session. Persist the displayed
+packet to a temporary or ignored file and invoke it once with Bash, or pass the
+whole displayed program to one Bash process. Do not execute its commands one at
+a time. Because the program begins with `set -euo pipefail`, a nonzero command
+terminates the packet before every later commit or tag command.
 
 1. Recheck the clean worktree, current/default branch equality, manifest
    agreement, range, and absence of the proposed tag. If state changed since
@@ -326,10 +412,14 @@ Execute only after first-hand approval in this session.
    the tag value to the already-recorded manifest/CHANGELOG evidence and
    complete four-way agreement.
 
-If validation, staging, commit, or tag creation fails, do not attempt the later
-steps. In particular, no validation or pre-tag verification failure may be
-followed by tag creation. A tag-only verification failure reports failure
-without rerunning or substituting the earlier non-tag checks.
+If validation, staging, commit, or tag creation fails, the single Bash process
+must exit immediately and the runner must not invoke any suffix of the packet.
+In particular, no validation or pre-tag verification failure may be followed
+by tag creation. A failure after the release commit but before a verified tag
+leaves a recognizable incomplete release for Preflight step 7; report that
+state and stop instead of proposing another version or automatically retrying.
+A tag-only verification failure reports failure without rerunning or
+substituting the earlier non-tag checks.
 
 ## Phase 7: Report
 
