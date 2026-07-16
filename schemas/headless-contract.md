@@ -2,7 +2,7 @@
 
 Skills that other skills call non-interactively (`mode:headless` / `mode:agent`) end their final report with an **exact, case-sensitive terminal signal line**. Callers match the full line prefix; free text after `—` is informational. Defined here once — producers and consumers never improvise variants. `enforces: P9`.
 
-Contract version: `v1` (bump on any change to the lines below; consumers reject unknown versions rather than guessing).
+Contract version: `v1` (bump on any change to existing rows or their semantics; adding a new producer row is additive and does not require a bump).
 
 ## Terminal signal lines
 
@@ -11,6 +11,7 @@ Contract version: `v1` (bump on any change to the lines below; consumers reject 
 | `compound` | `Documentation complete — <path>` | `Documentation skipped — <reason>` | `Documentation failed — <reason>` |
 | `compound-refresh` | `Refresh complete — <n> applied, <n> recommended` | `Refresh skipped — <reason>` | `Refresh failed — <reason>` |
 | `retrospective` | `Retrospective complete — <path>` | `Retrospective skipped — <reason>` | `Retrospective failed — <reason>` |
+| `release` | `Release complete — v<version>` | `Release skipped — <reason>` | `Release failed — <reason>` |
 | `reviewing` (`mode:agent`) | emits the JSON envelope (`schemas/review-envelope.schema.json`) as its final block instead of a signal line | — | envelope with `status: "failed"` + `reason` |
 
 ## Rules

@@ -31,7 +31,7 @@ for s in schemas/plan-schema.md schemas/retro-template.md schemas/headless-contr
 done
 
 # 3. Skills: expected roster, frontmatter with name + description
-EXPECTED_SKILLS="release-loop designing planning implementing tdd debugging worktree-isolation reviewing shipping retrospective compound compound-refresh"
+EXPECTED_SKILLS="release-loop designing planning implementing tdd debugging worktree-isolation reviewing shipping retrospective compound compound-refresh release"
 for skill in $EXPECTED_SKILLS; do
   f="$ROOT/skills/$skill/SKILL.md"
   if [ ! -f "$f" ]; then
@@ -112,7 +112,7 @@ except OSError:
 
 canonical = {}  # producer -> {state: canonical text}
 if contract_text is not None:
-    for producer in ("compound", "compound-refresh", "retrospective"):
+    for producer in ("compound", "compound-refresh", "retrospective", "release"):
         pattern = (
             r"^\|\s*`" + re.escape(producer) + r"`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*$"
         )
@@ -125,23 +125,24 @@ if contract_text is not None:
             }
     flat = [(p, s, t) for p, states in canonical.items() for s, t in states.items()]
     distinct = {t for _, _, t in flat}
-    if len(flat) != 9 or len(distinct) != 9:
+    if len(flat) != 12 or len(distinct) != 12:
         fail(
-            f"schemas/headless-contract.md did not yield exactly 9 canonical, "
+            f"schemas/headless-contract.md did not yield exactly 12 canonical, "
             f"pairwise-distinct signal lines (found {len(flat)}, {len(distinct)} distinct)"
         )
         canonical = {}
 
 seen = set()
 candidate_re = re.compile(r"`([^`]+)`")
-state_re = re.compile(r"^(Documentation|Refresh|Retrospective)\s+(complete|skipped|failed)\b", re.I)
+state_re = re.compile(r"^(Documentation|Refresh|Retrospective|Release)\s+(complete|skipped|failed)\b", re.I)
 state_key = {"complete": "success", "skipped": "skipped", "failed": "failed"}
-producer_key = {"documentation": "compound", "refresh": "compound-refresh", "retrospective": "retrospective"}
+producer_key = {"documentation": "compound", "refresh": "compound-refresh", "retrospective": "retrospective", "release": "release"}
 
 consumer_files = [
     "skills/compound/SKILL.md",
     "skills/compound-refresh/SKILL.md",
     "skills/retrospective/SKILL.md",
+    "skills/release/SKILL.md",
 ]
 
 if canonical:
@@ -183,7 +184,91 @@ if canonical:
 if failures:
     print("\n".join(failures))
     sys.exit(1)
-print("ok:   terminal signal lines match schemas/headless-contract.md")
+print("ok:   terminal signal lines match schemas/headless-contract.md: 12 canonical pairwise-distinct signals")
+PY
+
+# 7. Plugin manifest versions are valid SemVer 2.0.0 strings and agree
+python3 - "$ROOT" <<'PY' || FAIL=1
+import json
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+tag = "[manifest-version]"
+manifest_paths = (
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+)
+
+core = r"(?:0|[1-9]\d*)"
+prerelease_id = r"(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+semver = re.compile(
+    rf"{core}\.{core}\.{core}"
+    rf"(?:-{prerelease_id}(?:\.{prerelease_id})*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
+
+failures = []
+versions = {}
+
+for rel in manifest_paths:
+    path = root / rel
+    try:
+        with path.open(encoding="utf-8") as stream:
+            manifest = json.load(stream)
+    except FileNotFoundError:
+        failures.append(f"FAIL: {tag} {rel}: file missing")
+        continue
+    except json.JSONDecodeError as exc:
+        failures.append(
+            f"FAIL: {tag} {rel}: invalid JSON at line {exc.lineno}, column {exc.colno}"
+        )
+        continue
+    except UnicodeError as exc:
+        failures.append(f"FAIL: {tag} {rel}: invalid JSON encoding ({exc})")
+        continue
+    except OSError as exc:
+        failures.append(f"FAIL: {tag} {rel}: unreadable ({exc.strerror or exc})")
+        continue
+
+    if not isinstance(manifest, dict):
+        failures.append(
+            f"FAIL: {tag} {rel}: version=<unavailable>; manifest root must be an object"
+        )
+        continue
+    if "version" not in manifest:
+        failures.append(f"FAIL: {tag} {rel}: version=<missing>")
+        continue
+
+    version = manifest["version"]
+    if not isinstance(version, str):
+        failures.append(
+            f"FAIL: {tag} {rel}: version={version!r}; expected a SemVer 2.0.0 string"
+        )
+        continue
+    if semver.fullmatch(version) is None:
+        failures.append(
+            f"FAIL: {tag} {rel}: version={version!r}; not a valid SemVer 2.0.0 string"
+        )
+        continue
+    versions[rel] = version
+
+if failures:
+    print("\n".join(failures))
+    sys.exit(1)
+
+claude_path, codex_path = manifest_paths
+claude_version = versions[claude_path]
+codex_version = versions[codex_path]
+if claude_version != codex_version:
+    print(
+        f"FAIL: {tag} manifest version mismatch: "
+        f"{claude_path}={claude_version!r}; {codex_path}={codex_version!r}"
+    )
+    sys.exit(1)
+
+print(f"ok:   plugin manifest versions agree: {claude_version}")
 PY
 
 echo

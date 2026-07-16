@@ -200,6 +200,44 @@ case_g() {
   return $result
 }
 
+# --- Case H: one-byte drift in the unique inline release success placeholder ---
+# Compute the copied-file line instead of pinning it: the release skill may gain
+# prose above the signal contract without invalidating this fixture. Keep the
+# leading "Release complete" keyword intact so check 6 still recognizes the
+# mutated span as a candidate and can report the byte mismatch.
+case_h() {
+  local dir target_line out code result=0
+  dir="$(setup_copy)" || return 1
+  target_line="$(python3 - "$dir/skills/release/SKILL.md" <<'PY'
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+span = "`Release complete — v<version>`"
+assert text.count(span) == 1, "fixture assumption broken: expected exactly one quoted release success span"
+start = text.index(span)
+line = text.count("\n", 0, start) + 1
+text = text[:start] + text[start:].replace(
+    "Release complete — v<version>",
+    "Release complete — v<versio>",
+    1,
+)
+open(path, "w", encoding="utf-8").write(text)
+print(line)
+PY
+)" || {
+    echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"
+    rm -rf "$dir"
+    return 1
+  }
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_contains "$out" "[signal-drift]" "reported by the new check specifically" || result=1
+  assert_contains "$out" "skills/release/SKILL.md:$target_line" "computed file:line" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -207,6 +245,7 @@ run_case D case_d
 run_case E case_e
 run_case F case_f
 run_case G case_g
+run_case H case_h
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
