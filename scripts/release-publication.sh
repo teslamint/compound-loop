@@ -53,6 +53,24 @@ def strip_credentials(url):
     return re.sub(r"^[^@]+@", "", url)
 
 
+def github_repository(url):
+    if "://" in url:
+        parsed = urlsplit(url)
+        if parsed.hostname != "github.com" or parsed.port is not None:
+            return None
+        path = parsed.path.strip("/")
+    else:
+        match = re.fullmatch(r"(?:[^@/:]+@)?github\.com:([^?#]+)", url)
+        if not match:
+            return None
+        path = match.group(1).strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", path):
+        return None
+    return path
+
+
 def parse_args(argv):
     if not argv or argv[0] != "prepare":
         fail("usage: prepare --version <semver> [--repair] [--headless]", 2)
@@ -154,18 +172,31 @@ if repair and run(["git", "merge-base", "--is-ancestor", tag_target, head_commit
     fail("repair HEAD must contain the annotated tag target")
 release_commit = tag_target
 
+
+def release_blob(relative, maximum=2 * 1024 * 1024):
+    object_name = f"{release_commit}:{relative}"
+    if git("cat-file", "-t", object_name, check=False) != "blob":
+        fail(f"release commit is missing required blob: {relative}")
+    size_text = git("cat-file", "-s", object_name, check=False)
+    if not size_text.isdigit() or int(size_text) > maximum:
+        fail(f"release commit blob exceeds inspection bound: {relative}")
+    result = run(["git", "show", object_name], check=False, text=False)
+    if result.returncode or len(result.stdout) != int(size_text):
+        fail(f"cannot read release commit blob: {relative}")
+    return result.stdout
+
 manifest_versions = []
 for relative in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
     try:
-        manifest_versions.append(json.loads((cwd / relative).read_text(encoding="utf-8"))["version"])
-    except (OSError, KeyError, json.JSONDecodeError):
+        manifest_versions.append(json.loads(release_blob(relative).decode("utf-8"))["version"])
+    except (UnicodeDecodeError, KeyError, json.JSONDecodeError):
         fail(f"cannot read manifest version: {relative}")
 if manifest_versions != [version, version]:
     fail("plugin manifests do not match the requested version")
 
 try:
-    changelog = (cwd / "CHANGELOG.md").read_text(encoding="utf-8")
-except OSError:
+    changelog = release_blob("CHANGELOG.md").decode("utf-8")
+except UnicodeDecodeError:
     fail("cannot read CHANGELOG.md")
 heading = re.compile(r"^## \[([^]]+)\](?:\s+-\s+.*)?$", re.MULTILINE)
 matches = list(heading.finditer(changelog))
@@ -195,10 +226,13 @@ if fixture_root:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo_slug):
         fail("invalid fixture repository slug")
 else:
-    match = re.search(r"github\.com[/:]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?$", fetch_url)
-    if not match:
-        fail("origin is not a GitHub repository")
-    repo_slug = f"{match.group(1)}/{match.group(2)}"
+    fetch_repo = github_repository(fetch_url)
+    push_repo = github_repository(push_url)
+    if not fetch_repo or not push_repo:
+        fail("origin fetch and push URLs must both target github.com")
+    if fetch_repo != push_repo:
+        fail("origin fetch and push URLs must target the same GitHub repository")
+    repo_slug = fetch_repo
 
 gh = shutil.which("gh")
 if not gh:

@@ -583,13 +583,24 @@ case_prerelease_packet() {
 }
 
 case_remote_later_repair() {
-  printf later >"$FIXTURE_REPO/later"; git -C "$FIXTURE_REPO" add .; git -C "$FIXTURE_REPO" commit -m later >/dev/null
+  printf '{"version":"10.0.0"}\n' >"$FIXTURE_REPO/.claude-plugin/plugin.json"
+  printf '{"version":"10.0.0"}\n' >"$FIXTURE_REPO/.codex-plugin/plugin.json"
+  python3 - "$FIXTURE_REPO/CHANGELOG.md" <<'PY'
+import pathlib, sys
+p=pathlib.Path(sys.argv[1]); p.write_text("# Changelog\n\n## [10.0.0] - 2026-07-19\n\n- Later worktree notes.\n\n" + p.read_text().split("# Changelog\n\n", 1)[1])
+PY
+  git -C "$FIXTURE_REPO" add .; git -C "$FIXTURE_REPO" commit -m later >/dev/null
   git -C "$FIXTURE_REPO" push origin HEAD:refs/heads/main >/dev/null 2>&1
   local out code
   set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
   [[ $code -ne 0 ]]; assert_contains "$out" 'HEAD must equal' later-normal-fails
   out="$(invoke_prepare --repair --headless)"
   assert_contains "$out" 'PUBLICATION_CLASS=branch-ready-tag-missing' later-repair
+  cmp -s "$PUBLICATION_NOTES" <(printf '%s' '- Fixture note with spaces.
+- Fixture note with shell text: $(not-run); [still-data].
+') || { echo 'ASSERTION=repair did not read notes from tagged release commit'; return 1; }
+  grep -F -q 'Later worktree notes' "$FIXTURE_REPO/CHANGELOG.md"
+  ! grep -F -q 'Later worktree notes' "$PUBLICATION_NOTES"
   ! grep -F -q 'git push origin '"$(git -C "$FIXTURE_REPO" rev-parse 'v9.8.7^{}')"':refs/heads/main' "$PUBLICATION_PACKET"
 }
 
@@ -696,7 +707,22 @@ case_non_github_production_failure() {
     HOME="$FIXTURE_HOME" TMPDIR="$FIXTURE_TMPDIR" PATH="$FIXTURE_BIN:$PYTHON_DIR:/usr/bin:/bin" \
     bash "$ROOT/scripts/release-publication.sh" prepare --version 9.8.7 --headless 2>&1)"; code=$?
   set -e
-  [[ $code -ne 0 ]]; assert_contains "$out" 'origin is not a GitHub repository' non-github-production
+  [[ $code -ne 0 ]]; assert_contains "$out" 'fetch and push URLs must both target github.com' non-github-production
+}
+
+case_mismatched_pushurl_failure() {
+  git -C "$FIXTURE_REPO" remote set-url origin https://github.com/fixture-owner/fixture-repo.git
+  git -C "$FIXTURE_REPO" remote set-url --push origin "file://$FIXTURE_REMOTE"
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  local out code
+  set +e
+  out="$(cd "$FIXTURE_REPO" && env -u RELEASE_PUBLICATION_FIXTURE_ROOT -u GH_TOKEN -u GITHUB_TOKEN \
+    HOME="$FIXTURE_HOME" TMPDIR="$FIXTURE_TMPDIR" PATH="$FIXTURE_BIN:$PYTHON_DIR:/usr/bin:/bin" \
+    bash "$ROOT/scripts/release-publication.sh" prepare --version 9.8.7 --headless 2>&1)"; code=$?
+  set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'fetch and push URLs must both target github.com' mismatched-pushurl
+  [[ ! -e "$PUBLICATION_PACKET" && ! -e "$PUBLICATION_NOTES" ]]
+  [[ ! -s "$GH_STUB_LOG" ]] || { echo 'ASSERTION=mismatched pushurl contacted gh'; return 1; }
 }
 
 case_divergent_branch_failure() {
@@ -801,6 +827,7 @@ run_fixture_case() {
     echo "ASSERTION=cleanup left fixture root: $fixture_path"
     code=99
   fi
+  echo "FIXTURE_ROOT=$fixture_path (removed)"
 
   if [[ "$expected" == pass && $code -eq 0 ]]; then
     echo "RESULT=PASS"
@@ -845,6 +872,7 @@ run_prepare_group() {
   run_fixture_case conflicting_page_identity immutable_page_tag_identity case_conflicting_page_identity_failure pass
   run_fixture_case unreadable_remote remote_inspection_precondition case_unreadable_remote_failure pass
   run_fixture_case non_github_production production_target_rejection case_non_github_production_failure pass
+  run_fixture_case mismatched_pushurl github_fetch_with_non_github_push_rejected case_mismatched_pushurl_failure pass
   run_fixture_case divergent_branch ancestry_conflict case_divergent_branch_failure pass
   run_fixture_case fixture_escape inventory_boundary_rejection case_fixture_escape_failure pass
   run_fixture_case packet_forced_failure packet_before_atomic_rename case_packet_forced_failure pass
