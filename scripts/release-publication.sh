@@ -111,6 +111,10 @@ def parse_args(argv):
         r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?", version)
     if not semver:
         fail("version is not valid SemVer", 2)
+    if semver.group(4):
+        for identifier in semver.group(4).split("."):
+            if identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0"):
+                fail("version is not valid SemVer", 2)
     return version, repair, headless, bool(semver.group(4))
 
 
@@ -243,9 +247,43 @@ else:
 gh = shutil.which("gh")
 if not gh:
     fail("GitHub CLI is unavailable")
+gh_version_result = run([gh, "--version"], check=False)
+if gh_version_result.returncode or len(gh_version_result.stdout) > 4096:
+    fail("GitHub CLI version is unreadable")
+gh_version_match = re.fullmatch(r"gh version ([0-9]+(?:\.[0-9]+){1,3})(?: .*)?",
+                                gh_version_result.stdout.splitlines()[0] if gh_version_result.stdout.splitlines() else "")
+if not gh_version_match:
+    fail("GitHub CLI version is unreadable")
+gh_version = gh_version_match.group(1)
 auth = run([gh, "auth", "status", "--hostname", "github.com"], check=False)
 if auth.returncode:
     fail("GitHub CLI authentication is inactive")
+auth_text = auth.stdout + "\n" + auth.stderr
+if len(auth_text) > 65536:
+    fail("GitHub CLI authentication evidence exceeds inspection bound")
+scope_names = []
+for line in auth_text.splitlines():
+    if "token scopes:" in line.lower():
+        scope_names.extend(re.findall(r"['\"]([A-Za-z0-9:_-]+)['\"]", line))
+scope_names = sorted(set(scope_names))
+if not scope_names:
+    fail("GitHub CLI reported auth scopes are unavailable")
+
+required_help = {
+    "create": ("--repo", "--verify-tag", "--title", "--notes-file", "--prerelease"),
+    "edit": ("--repo", "--verify-tag", "--title", "--notes-file", "--draft", "--prerelease"),
+}
+capability_flags = {}
+for action, required_flags in required_help.items():
+    help_result = run([gh, "release", action, "--help"], check=False)
+    help_text = help_result.stdout + "\n" + help_result.stderr
+    if help_result.returncode or len(help_text) > 65536:
+        fail(f"GitHub release {action} capability is unavailable")
+    missing_flags = [flag for flag in required_flags
+                     if not re.search(rf"(?<![A-Za-z0-9-]){re.escape(flag)}(?![A-Za-z0-9-])", help_text)]
+    if missing_flags:
+        fail(f"GitHub release {action} capability is missing required flag: {missing_flags[0]}")
+    capability_flags[action] = required_flags
 repo_read = run([gh, "api", f"repos/{repo_slug}", "--jq", ".full_name"], check=False)
 if repo_read.returncode or repo_read.stdout.strip() != repo_slug:
     fail("GitHub repository state is unreadable")
@@ -282,15 +320,28 @@ if remote_tag_object or remote_tag_target:
 else:
     tag_matches = False
 
-page_result = run([gh, "release", "view", tag, "--repo", repo_slug,
-                   "--json", "tagName,name,isDraft,isPrerelease,body,targetCommitish"], check=False)
+page_probe = run([gh, "api", "--include", f"repos/{repo_slug}/releases/tags/{tag}"], check=False)
+if len(page_probe.stdout) > 65536 or len(page_probe.stderr) > 65536:
+    fail("release page status response exceeds inspection bound")
+probe_lines = page_probe.stdout.splitlines()
+status_match = re.fullmatch(r"HTTP/(?:1\.1|2(?:\.0)?) ([0-9]{3})(?: .*)?", probe_lines[0] if probe_lines else "")
+if not status_match:
+    fail("release page status is unreadable")
+page_status = int(status_match.group(1))
 page = None
-if page_result.returncode == 0:
+if page_status == 404:
+    if page_probe.returncode not in (0, 1):
+        fail("release page state is unreadable")
+elif page_status == 200 and page_probe.returncode == 0:
+    page_result = run([gh, "release", "view", tag, "--repo", repo_slug,
+                       "--json", "tagName,name,isDraft,isPrerelease,body,targetCommitish"], check=False)
+    if page_result.returncode:
+        fail("release page state is unreadable")
     try:
         page = json.loads(page_result.stdout)
     except json.JSONDecodeError:
         fail("release page state is unreadable")
-elif page_result.returncode not in (1,):
+else:
     fail("release page state is unreadable")
 
 repo_name = repo_slug.split("/", 1)[1]
@@ -400,12 +451,26 @@ remote_ref() {{
 }}
 
 page_json() {{
-  local output code
+  local probe output code status
+  set +e
+  probe="$("$gh_bin" api --include "repos/$repo/releases/tags/$tag" 2>&1)"
+  code=$?
+  set -e
+  [[ ${{#probe}} -le 65536 ]] || publication_fail page-read "release page status response exceeded inspection bound"
+  status="$(python3 - "$probe" <<'PY'
+import re, sys
+lines=sys.argv[1].splitlines()
+match=re.fullmatch(r"HTTP/(?:1\.1|2(?:\.0)?) ([0-9]{{3}})(?: .*)?", lines[0] if lines else "")
+print(match.group(1) if match else "")
+PY
+)"
+  [[ -n "$status" ]] || publication_fail page-read "release page status became unreadable"
+  if [[ "$status" == 404 && ( $code -eq 0 || $code -eq 1 ) ]]; then printf 'absent'; return 0; fi
+  [[ "$status" == 200 && $code -eq 0 ]] || publication_fail page-read "release page state became unreadable"
   set +e
   output="$("$gh_bin" release view "$tag" --repo "$repo" --json tagName,name,isDraft,isPrerelease,body,targetCommitish 2>/dev/null)"
   code=$?
   set -e
-  if [[ $code -eq 1 ]]; then printf 'absent'; return 0; fi
   [[ $code -eq 0 ]] || publication_fail page-read "release page state became unreadable"
   python3 - "$output" <<'PY'
 import json, sys
@@ -568,6 +633,11 @@ program += ['printf \'PUBLICATION_EXECUTION=complete\\n\'']
 packet = "\n".join([
     f"# Publication packet for {tag}", "",
     f"- Repository: `{repo_slug}`",
+    f"- Capability gh version: `{gh_version}`",
+    f"- Capability auth: `active`; reported scopes: `{', '.join(scope_names)}` (reported names only; not proof of write authorization)",
+    f"- Capability repository read: `confirmed`",
+    f"- Capability release create flags: `{' '.join(capability_flags['create'])}`",
+    f"- Capability release edit flags: `{' '.join(capability_flags['edit'])}`",
     f"- Fetch remote: `{strip_credentials(fetch_url)}`",
     f"- Push remote: `{strip_credentials(push_url)}`",
     f"- Default ref: `refs/heads/{default_branch}`",

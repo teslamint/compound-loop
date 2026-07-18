@@ -13,8 +13,9 @@ recovery snippet.
 
 1. Parse the already-dispatched action as one explicit SemVer plus optional
    `repair` and `mode:headless`. Reject duplicates, missing values, and unknown
-   tokens before inspection. Normal publication of `0.2.0` stops and directs
-   the user to explicit repair.
+   tokens before inspection. Enforce SemVer 2.0.0 completely, including the ban
+   on leading zeroes in every numeric prerelease identifier. Normal publication
+   of `0.2.0` stops and directs the user to explicit repair.
 2. From the repository root, invoke exactly one read-only preparation command:
 
    ```text
@@ -63,6 +64,12 @@ recovery snippet.
    protected normal version, unsafe state, or malformed output ends before a
    question or mutation. An incomplete preflight must not leave a newly
    completed executable packet.
+   Page absence is confirmed only by a bounded read-only release-by-tag API
+   status probe whose parsed HTTP status is exactly 404. Exit status 1 alone is
+   never absence: authentication, API, and network failures fail preflight even
+   when the CLI also exits 1. Only a confirmed-present status may be followed
+   by normalized release-page JSON inspection. Apply the same probe before
+   every rendered-program page fingerprint and verification.
 5. For `PUBLICATION_STATUS=noop`, re-check that the reported class is an
    allowed no-op classification, show the reason, do not ask a mutation
    question, and proceed directly to Report.
@@ -76,6 +83,11 @@ recovery snippet.
    state, exact notes byte count and hash, ordered transitions, expected
    transition fingerprints, recovery expectations, and the authorization
    boundary.
+   Capability evidence is bounded and sanitized: retain only the parsed `gh`
+   version, active-auth outcome with reported scope names, confirmed repository
+   read, and presence of the exact required release-create/edit flags from
+   their help output. Never retain an account, token, or raw auth output, and
+   never claim that reported scopes prove create/edit authorization.
 2. Compute SHA-256 over the packet's exact bytes and require it to equal the
    single `PUBLICATION_PACKET_SHA256` value returned by preparation. Compute the
    notes hash and compare it with the packet. A packet hash or notes mismatch is

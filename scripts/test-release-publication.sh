@@ -160,13 +160,31 @@ state = load()
 if args == ["--version"]:
     print("gh version 2.96.0 (fixture)")
 elif args == ["release", "create", "--help"]:
-    print("--repo --verify-tag --title --notes-file --prerelease")
+    flags = ["--repo", "--verify-tag", "--title", "--notes-file", "--prerelease"]
+    if state.get("missing_create_flag") in flags:
+        flags.remove(state["missing_create_flag"])
+    print(" ".join(flags))
 elif args == ["release", "edit", "--help"]:
-    print("--repo --verify-tag --title --notes-file --draft --prerelease")
+    flags = ["--repo", "--verify-tag", "--title", "--notes-file", "--draft", "--prerelease"]
+    if state.get("missing_edit_flag") in flags:
+        flags.remove(state["missing_edit_flag"])
+    print(" ".join(flags))
 elif args == ["auth", "status", "--hostname", "github.com"]:
     if not state["auth"]:
         raise SystemExit(1)
     print("github.com: fixture authentication active")
+    print("  - Token scopes: 'read:org', 'repo'")
+elif len(args) == 3 and args[:2] == ["api", "--include"] and args[2].startswith(f"repos/{expected_repo}/releases/tags/"):
+    requested_tag = args[2].split("/releases/tags/", 1)[1]
+    if state.get("page_read_error"):
+        print("HTTP/2.0 503 Service Unavailable\n\n{\"message\":\"fixture unavailable\"}")
+        raise SystemExit(1)
+    page = state["page"]
+    if page is None or (page.get("tagName") != requested_tag and not state.get("page_lookup_any")):
+        print("HTTP/2.0 404 Not Found\n\n{\"message\":\"Not Found\"}")
+        raise SystemExit(1)
+    print("HTTP/2.0 200 OK\n")
+    print(json.dumps(page, sort_keys=True))
 elif len(args) >= 2 and args[:2] == ["api", f"repos/{expected_repo}"]:
     if args[2:] not in ([], ["--jq", ".full_name"], ["--jq", ".nameWithOwner"]):
         fail("unrecognized api arguments")
@@ -178,7 +196,7 @@ elif len(args) >= 3 and args[:2] == ["release", "view"]:
     require_repo()
     tag = args[2]
     if state.get("page_read_error"):
-        raise SystemExit(2)
+        raise SystemExit(1)
     page = state["page"]
     if page is None or (page["tagName"] != tag and not state.get("page_lookup_any")):
         raise SystemExit(1)
@@ -379,7 +397,7 @@ case_fixture_foundation() {
 }
 
 case_gh_stub_contract() {
-  local stub_env state rejected code
+  local stub_env state rejected code probe
   stub_env=(
     env -u GH_TOKEN -u GITHUB_TOKEN
     HOME="$FIXTURE_HOME"
@@ -401,6 +419,11 @@ case_gh_stub_contract() {
     echo "ASSERTION=stub unexpectedly reported an existing release page"
     return 1
   fi
+  set +e
+  probe="$("${stub_env[@]}" "$FIXTURE_BIN/gh" api --include \
+    repos/fixture-owner/fixture-repo/releases/tags/v9.8.7 2>&1)"; code=$?
+  set -e
+  [[ $code -eq 1 ]]; assert_contains "$probe" 'HTTP/2.0 404 Not Found' exact-absent-status
 
   git -C "$FIXTURE_REPO" push origin refs/tags/v9.8.7:refs/tags/v9.8.7 >/dev/null 2>&1
   "${stub_env[@]}" "$FIXTURE_BIN/gh" release create v9.8.7 \
@@ -464,10 +487,8 @@ invoke_prepare() {
 }
 
 assert_no_outward_mutation() {
-  local state
-  state="$(cat "$GH_STUB_STATE")"
-  assert_contains "$state" '"create":0' no-page-create
-  assert_contains "$state" '"edit":0' no-page-edit
+  assert_eq "$(state_value mutations.create)" 0 no-page-create
+  assert_eq "$(state_value mutations.edit)" 0 no-page-edit
 }
 
 extract_program() {
@@ -541,8 +562,15 @@ PY
 
 simulate_publication_ceremony() {
   local response="$1" source="$2" after_gate_tamper="${3:-none}"
-  local prepare_out approved_sha approved_notes_sha actual_sha actual_notes_sha verify_out
-  prepare_out="$(invoke_prepare)" || return
+  local prepare_out prepare_code approved_sha approved_notes_sha actual_sha actual_notes_sha verify_out
+  set +e
+  prepare_out="$(invoke_prepare 2>&1)"; prepare_code=$?
+  set -e
+  if [[ $prepare_code -ne 0 ]]; then
+    printf '%s\n' "$prepare_out"
+    printf '%s\n' 'Publication failed — publication preflight failed before consent'
+    return "$prepare_code"
+  fi
   validate_ready_output "$prepare_out"
   approved_sha="$(printf '%s\n' "$prepare_out" | sed -n 's/^PUBLICATION_PACKET_SHA256=//p')"
   actual_sha="$(python3 - "$PUBLICATION_PACKET" <<'PY'
@@ -677,6 +705,11 @@ print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
 PY
 )"
   grep -F -q "Notes SHA-256: \`$expected_notes_sha\`" "$PUBLICATION_PACKET"
+  grep -F -q 'Capability gh version: `2.96.0`' "$PUBLICATION_PACKET"
+  grep -F -q 'Capability auth: `active`; reported scopes: `read:org, repo` (reported names only; not proof of write authorization)' "$PUBLICATION_PACKET"
+  grep -F -q 'Capability repository read: `confirmed`' "$PUBLICATION_PACKET"
+  grep -F -q 'Capability release create flags: `--repo --verify-tag --title --notes-file --prerelease`' "$PUBLICATION_PACKET"
+  grep -F -q 'Capability release edit flags: `--repo --verify-tag --title --notes-file --draft --prerelease`' "$PUBLICATION_PACKET"
   grep -F -q 'Ordered transitions: `branch -> tag -> page-create`' "$PUBLICATION_PACKET"
   grep -F -q "$(git -C "$FIXTURE_REPO" rev-parse HEAD)" "$PUBLICATION_PACKET"
   assert_eq "$(grep -c '^```bash$' "$PUBLICATION_PACKET")" 1 one-bash-fence
@@ -826,6 +859,10 @@ case_prepare_argument_errors() {
   [[ $code -eq 2 ]]; assert_contains "$out" 'not valid SemVer' invalid-semver
   set +e; out="$(cd "$FIXTURE_REPO" && bash "$engine" prepare --version 9.8.7 --wat 2>&1)"; code=$?; set -e
   [[ $code -eq 2 ]]; assert_contains "$out" 'unknown argument' unknown-argument
+  for invalid in 1.0.0-01 1.0.0-alpha.01 1.0.0-0.alpha.00; do
+    set +e; out="$(cd "$FIXTURE_REPO" && bash "$engine" prepare --version "$invalid" 2>&1)"; code=$?; set -e
+    [[ $code -eq 2 ]]; assert_contains "$out" 'not valid SemVer' "leading-zero-prerelease-$invalid"
+  done
 }
 
 case_dirty_tree_failure() {
@@ -897,6 +934,28 @@ p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); s["page_read_error"]=T
 PY
   local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
   [[ $code -ne 0 ]]; assert_contains "$out" 'release page state is unreadable' unreadable-page
+  [[ ! -e "$PUBLICATION_PACKET" ]]
+  assert_no_outward_mutation
+}
+
+case_missing_create_flag_failure() {
+  python3 - "$GH_STUB_STATE" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); s["missing_create_flag"]="--verify-tag"; p.write_text(json.dumps(s)+"\n")
+PY
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'create capability is missing required flag: --verify-tag' missing-create-flag
+  [[ ! -e "$PUBLICATION_PACKET" ]]; assert_no_outward_mutation
+}
+
+case_missing_edit_flag_failure() {
+  python3 - "$GH_STUB_STATE" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); s["missing_edit_flag"]="--draft"; p.write_text(json.dumps(s)+"\n")
+PY
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'edit capability is missing required flag: --draft' missing-edit-flag
+  [[ ! -e "$PUBLICATION_PACKET" ]]; assert_no_outward_mutation
 }
 
 case_conflicting_page_identity_failure() {
@@ -1382,6 +1441,8 @@ run_prepare_group() {
   run_fixture_case missing_gh executable_capability_precondition case_missing_gh_failure pass
   run_fixture_case unreadable_repository repository_api_capability_precondition case_unreadable_repository_failure pass
   run_fixture_case unreadable_page release_api_capability_precondition case_unreadable_page_failure pass
+  run_fixture_case missing_create_flag release_create_help_capability_precondition case_missing_create_flag_failure pass
+  run_fixture_case missing_edit_flag release_edit_help_capability_precondition case_missing_edit_flag_failure pass
   run_fixture_case conflicting_page_identity immutable_page_tag_identity case_conflicting_page_identity_failure pass
   run_fixture_case unreadable_remote remote_inspection_precondition case_unreadable_remote_failure pass
   run_fixture_case non_github_production production_target_rejection case_non_github_production_failure pass
@@ -1573,6 +1634,30 @@ PY
   echo 'Covers S6'
 }
 
+case_s6_unreadable_page_ceremony() {
+  local before after out code
+  python3 - "$GH_STUB_STATE" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); s["page_read_error"]=True; p.write_text(json.dumps(s)+"\n")
+PY
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  before="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  set +e
+  out="$(simulate_publication_ceremony Approve direct 2>&1)"; code=$?
+  set -e
+  [[ $code -ne 0 ]]
+  assert_contains "$out" 'release page state is unreadable' unreadable-page-preflight
+  assert_eq "$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -1)" \
+    'Publication failed — publication preflight failed before consent' s6-terminal-last
+  [[ ! -e "$PUBLICATION_PACKET" && ! -e "$PUBLICATION_NOTES" ]]
+  [[ "$out" != *'GATE_PACKET_SHA256='* ]]
+  assert_eq "$(cat "$EXECUTE_COUNT_FILE")" 0 s6-no-execution
+  after="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  assert_eq "$after" "$before" s6-no-outward-state
+  assert_no_outward_mutation
+  echo 'Covers S6'
+}
+
 case_gate_cancel_and_revision() {
   local first_out first_hash second_out second_hash before after code
   before="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
@@ -1674,6 +1759,7 @@ all_user_scenarios() {
   run_fixture_case s4_fully_matching_noop third_invocation_no_mutation case_fully_matching_scenario pass
   run_fixture_case s5_narrow_repair canonical_page_fields_only case_narrow_repair_scenario pass
   run_fixture_case s6_fail_closed_inventory unsafe_inputs_require_failure_or_fresh_gate case_fail_closed_scenario_inventory pass
+  run_fixture_case s6_unreadable_page_ceremony exit_one_non_404_fails_before_packet_gate_execute case_s6_unreadable_page_ceremony pass
   run_fixture_case gate_revision fresh_hash_and_fresh_gate_required case_gate_cancel_and_revision pass
   run_fixture_case gate_cancel direct_cancel_never_mutates case_gate_cancel pass
   run_fixture_case gate_rejects_non_direct relay_silence_missing_error_and_prior_approval case_gate_rejects_non_direct_approval pass
