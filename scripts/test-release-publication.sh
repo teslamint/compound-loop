@@ -18,6 +18,8 @@ FIXTURE_TMPDIR=""
 FIXTURE_BIN=""
 GH_STUB_STATE=""
 GH_STUB_LOG=""
+GIT_MUTATION_LOG=""
+GIT_REJECT_REF=""
 PUBLICATION_PACKET=""
 PUBLICATION_NOTES=""
 PYTHON_DIR="$(dirname "$(command -v python3)")"
@@ -184,6 +186,8 @@ elif len(args) >= 3 and args[:2] == ["release", "create"]:
     options = require_options(3, ("--repo", "--title", "--notes-file"), ("--verify-tag", "--prerelease"))
     require_repo()
     tag = args[2]
+    if state.get("reject_create"):
+        fail("injected create rejection")
     if "--verify-tag" not in args or state["page"] is not None:
         fail("create requires an existing tag and absent page")
     subprocess.run(
@@ -206,6 +210,8 @@ elif len(args) >= 3 and args[:2] == ["release", "edit"]:
     require_options(3, ("--repo", "--title", "--notes-file", "--draft", "--prerelease"), ("--verify-tag",))
     require_repo()
     tag = args[2]
+    if state.get("reject_edit"):
+        fail("injected edit rejection")
     page = state["page"]
     if page is None or page["tagName"] != tag or "--verify-tag" not in args:
         fail("edit requires the existing canonical page")
@@ -235,6 +241,8 @@ setup_fixture() {
   FIXTURE_BIN="$CASE_ROOT/bin ;[fixture]"
   GH_STUB_STATE="$CASE_ROOT/state ;[fixture]/gh-state.json"
   GH_STUB_LOG="$CASE_ROOT/state ;[fixture]/gh-calls.jsonl"
+  GIT_MUTATION_LOG="$CASE_ROOT/state ;[fixture]/git-mutations.log"
+  GIT_REJECT_REF="$CASE_ROOT/state ;[fixture]/reject-ref"
   PUBLICATION_PACKET="$FIXTURE_REPO/.release/publication-v9.8.7.md"
   PUBLICATION_NOTES="$FIXTURE_REPO/.release/publication-v9.8.7-notes.md"
 
@@ -285,6 +293,20 @@ PY
 {"auth":true,"mutations":{"create":0,"edit":0},"page":null,"repository":"fixture-owner/fixture-repo"}
 JSON
   : >"$GH_STUB_LOG"
+  : >"$GIT_MUTATION_LOG"
+  : >"$GIT_REJECT_REF"
+  cat >"$FIXTURE_REMOTE/hooks/pre-receive" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+while read -r old new ref; do
+  if [[ -s "$GIT_REJECT_REF" ]] && [[ "\$ref" == "\$(cat "$GIT_REJECT_REF")" ]]; then
+    echo "fixture hook rejected \$ref" >&2
+    exit 1
+  fi
+  printf '%s %s %s\n' "\$old" "\$new" "\$ref" >>"$GIT_MUTATION_LOG"
+done
+EOF
+  chmod +x "$FIXTURE_REMOTE/hooks/pre-receive"
   write_gh_stub
 
   cat >"$CASE_ROOT/target-inventory.txt" <<EOF
@@ -297,6 +319,8 @@ home=$FIXTURE_HOME
 tmpdir=$FIXTURE_TMPDIR
 stub_state=$GH_STUB_STATE
 stub_log=$GH_STUB_LOG
+git_mutation_log=$GIT_MUTATION_LOG
+git_reject_ref=$GIT_REJECT_REF
 packet=$PUBLICATION_PACKET
 notes=$PUBLICATION_NOTES
 EOF
@@ -441,6 +465,67 @@ assert_no_outward_mutation() {
   assert_contains "$state" '"edit":0' no-page-edit
 }
 
+extract_program() {
+  local destination="$CASE_ROOT/publication-program.sh"
+  awk '/^```bash$/{inside=1; next} /^```$/{if (inside) exit} inside{print}' "$PUBLICATION_PACKET" >"$destination"
+  assert_eq "$(grep -c '^set -euo pipefail$' "$destination")" 1 strict-program
+  chmod +x "$destination"
+  printf '%s' "$destination"
+}
+
+execute_packet() {
+  local program
+  program="$(extract_program)"
+  (
+    cd "$FIXTURE_REPO" &&
+    env -u GH_TOKEN -u GITHUB_TOKEN \
+      HOME="$FIXTURE_HOME" TMPDIR="$FIXTURE_TMPDIR" \
+      PATH="$FIXTURE_BIN:$PYTHON_DIR:/usr/bin:/bin" \
+      GH_STUB_STATE="$GH_STUB_STATE" GH_STUB_LOG="$GH_STUB_LOG" \
+      GH_STUB_BARE_REMOTE="$FIXTURE_REMOTE" GH_STUB_REPO="fixture-owner/fixture-repo" \
+      RELEASE_PUBLICATION_FIXTURE_ROOT="$CASE_ROOT" \
+      "$@" bash "$program"
+  )
+}
+
+remote_oid() {
+  git --git-dir="$FIXTURE_REMOTE" rev-parse --verify "$1" 2>/dev/null || printf absent
+}
+
+state_value() {
+  python3 - "$GH_STUB_STATE" "$1" <<'PY'
+import json, sys
+value=json.load(open(sys.argv[1]))
+for key in sys.argv[2].split('.'):
+    value=value[key]
+print(json.dumps(value, sort_keys=True) if isinstance(value, (dict,list)) or value is None else str(value).lower() if isinstance(value,bool) else value)
+PY
+}
+
+prepare_program() {
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  invoke_prepare "$@" >/dev/null
+}
+
+assert_canonical_page() {
+  assert_eq "$(state_value page.tagName)" v9.8.7 page-tag
+  assert_eq "$(state_value page.name)" 'fixture-repo v9.8.7' page-title
+  assert_eq "$(state_value page.isDraft)" false page-draft
+  assert_eq "$(state_value page.isPrerelease)" false page-prerelease
+  cmp -s "$PUBLICATION_NOTES" <(python3 - "$GH_STUB_STATE" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["page"]["body"], end="")
+PY
+) || { echo 'ASSERTION=page body differs from exact notes'; return 1; }
+}
+
+assert_no_forbidden_packet_command() {
+  if grep -E '^(git push .*([[:space:]]--force([[:space:]]|$)|[[:space:]]-f([[:space:]]|$))|gh release delete|.*--target([=[:space:]]|$)|.*--latest([=[:space:]]|$))' "$PUBLICATION_PACKET"; then
+    echo 'ASSERTION=packet contains forbidden force/delete/retarget/latest command'
+    return 1
+  fi
+}
+
 case_prepare_fast_forwardable() {
   local out expected_notes_sha packet_sha
   assert_fixture_boundary
@@ -467,6 +552,7 @@ PY
   grep -F -q 'Ordered transitions: `branch -> tag -> page-create`' "$PUBLICATION_PACKET"
   grep -F -q "$(git -C "$FIXTURE_REPO" rev-parse HEAD)" "$PUBLICATION_PACKET"
   assert_eq "$(grep -c '^```bash$' "$PUBLICATION_PACKET")" 1 one-bash-fence
+  assert_no_forbidden_packet_command
   assert_no_outward_mutation
 }
 
@@ -528,6 +614,7 @@ case_repairable_page() {
   rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
   assert_contains "$(invoke_prepare --repair --headless)" 'PUBLICATION_CLASS=repairable-page' repairable-page
   grep -F -q 'Ordered transitions: `page-edit`' "$PUBLICATION_PACKET"
+  assert_no_forbidden_packet_command
   ! grep -Eq -- 'gh release edit.*(--tag|--target|--latest|--delete)' "$PUBLICATION_PACKET"
 }
 
@@ -819,6 +906,196 @@ case_packet_cancellation_abort() {
   assert_no_outward_mutation
 }
 
+set_stub_flag() {
+  python3 - "$GH_STUB_STATE" "$1" "$2" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); s[sys.argv[2]]=sys.argv[3] == "true"; p.write_text(json.dumps(s, sort_keys=True)+"\n")
+PY
+}
+
+case_t1_success() {
+  local release; release="$(git -C "$FIXTURE_REPO" rev-parse HEAD)"
+  prepare_program --headless; execute_packet >/dev/null
+  assert_eq "$(remote_oid refs/heads/main)" "$release" branch-fast-forward
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" "$(git -C "$FIXTURE_REPO" rev-parse refs/tags/v9.8.7)" tag-object
+  assert_canonical_page
+}
+
+case_t1_forced_failure() {
+  local before out code; before="$(remote_oid refs/heads/main)"; printf refs/heads/main >"$GIT_REJECT_REF"
+  prepare_program --headless
+  set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'MECHANISM=branch-push' branch-rejection-marker
+  assert_eq "$(remote_oid refs/heads/main)" "$before" rejected-branch-unchanged
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" absent rejected-no-tag
+  assert_eq "$(state_value page)" null rejected-no-page
+}
+
+case_t1_rerun() {
+  prepare_program --headless; execute_packet >/dev/null
+  local writes; writes="$(grep -c 'refs/heads/main' "$GIT_MUTATION_LOG")"
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  assert_eq "$(invoke_prepare --headless)" "$(printf '%s\n' PUBLICATION_STATUS=noop PUBLICATION_CLASS=fully-matching)" matching-rerun
+  assert_eq "$(grep -c 'refs/heads/main' "$GIT_MUTATION_LOG")" "$writes" no-repush
+}
+
+case_t1_rollback() {
+  prepare_program --headless
+  local out code release; release="$(git -C "$FIXTURE_REPO" rev-parse HEAD)"
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=tag-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" injected-tag-before durable-partial-marker
+  assert_eq "$(remote_oid refs/heads/main)" "$release" durable-branch
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" absent no-tag
+  prepare_program --headless; grep -F -q 'Ordered transitions: `tag -> page-create`' "$PUBLICATION_PACKET"
+}
+
+case_t1_headless() { case_headless_prepare_only; }
+
+case_t1_cancel() {
+  prepare_program --headless
+  local before out code release; before="$(remote_oid refs/heads/main)"; release="$(git -C "$FIXTURE_REPO" rev-parse HEAD)"
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=branch-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_eq "$(remote_oid refs/heads/main)" "$before" abort-before-branch
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=branch-post-verify 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_eq "$(remote_oid refs/heads/main)" "$release" interrupt-after-branch
+  prepare_program --headless; grep -F -q 'Ordered transitions: `tag -> page-create`' "$PUBLICATION_PACKET"
+}
+
+branch_ready() { git -C "$FIXTURE_REPO" push origin HEAD:refs/heads/main >/dev/null 2>&1; : >"$GIT_MUTATION_LOG"; }
+refs_ready() { git -C "$FIXTURE_REPO" push origin HEAD:refs/heads/main refs/tags/v9.8.7:refs/tags/v9.8.7 >/dev/null 2>&1; : >"$GIT_MUTATION_LOG"; }
+
+case_t2_success() { branch_ready; prepare_program --headless; execute_packet >/dev/null; assert_eq "$(remote_oid refs/tags/v9.8.7)" "$(git -C "$FIXTURE_REPO" rev-parse refs/tags/v9.8.7)" exact-tag; assert_canonical_page; }
+case_t2_forced_failure() {
+  branch_ready; printf refs/tags/v9.8.7 >"$GIT_REJECT_REF"; prepare_program --headless
+  local out code; set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'MECHANISM=tag-push' tag-rejection-marker
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" absent rejected-tag-absent; assert_eq "$(state_value page)" null no-page
+}
+case_t2_rerun() { refs_ready; prepare_program --headless; grep -F -q 'Ordered transitions: `page-create`' "$PUBLICATION_PACKET"; execute_packet >/dev/null; ! grep -q refs/tags "$GIT_MUTATION_LOG"; }
+case_t2_rollback() {
+  branch_ready; prepare_program --headless
+  local out code; set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=page-create-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" injected-page-create-before page-after-tag-marker
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" "$(git -C "$FIXTURE_REPO" rev-parse refs/tags/v9.8.7)" durable-tag
+  assert_eq "$(state_value page)" null page-absent; prepare_program --headless; grep -F -q 'Ordered transitions: `page-create`' "$PUBLICATION_PACKET"
+}
+case_t2_headless() { branch_ready; case_headless_prepare_only; }
+case_t2_cancel() {
+  branch_ready; prepare_program --headless
+  local out code; set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=tag-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_eq "$(remote_oid refs/tags/v9.8.7)" absent abort-before-tag
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=tag-post-verify 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; [[ "$(remote_oid refs/tags/v9.8.7)" != absent ]]; prepare_program --headless; grep -F -q 'Ordered transitions: `page-create`' "$PUBLICATION_PACKET"
+}
+
+case_t3_success() { refs_ready; prepare_program --headless; execute_packet >/dev/null; assert_canonical_page; assert_eq "$(state_value mutations.create)" 1 one-create; }
+case_t3_forced_failure() {
+  refs_ready; set_stub_flag reject_create true; prepare_program --headless
+  local out code; set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'MECHANISM=page-create' create-rejection-marker; assert_eq "$(state_value page)" null no-implicit-page
+}
+case_t3_rerun() { refs_ready; prepare_program --headless; execute_packet >/dev/null; local count="$(state_value mutations.create)"; rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"; assert_contains "$(invoke_prepare --headless)" fully-matching page-rerun-noop; assert_eq "$(state_value mutations.create)" "$count" no-recreate; }
+case_t3_rollback() {
+  refs_ready; prepare_program --headless
+  local out code; set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=page-create-post-verify 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" injected-page-create-post-verify created-before-interrupt; assert_canonical_page; assert_contains "$(invoke_prepare --headless)" fully-matching fresh-noop
+}
+case_t3_headless() { refs_ready; case_headless_prepare_only; }
+case_t3_cancel() {
+  refs_ready; prepare_program --headless
+  local out code; set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=page-create-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_eq "$(state_value page)" null abort-before-create
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=page-create-post-verify 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_canonical_page; assert_contains "$(invoke_prepare --headless)" fully-matching cancel-after-create-noop
+}
+
+repair_ready() { refs_ready; set_page "$PUBLICATION_NOTES" 'wrong title' true false; }
+case_t4_success() { repair_ready; prepare_program --repair --headless; execute_packet >/dev/null; assert_canonical_page; assert_eq "$(state_value mutations.edit)" 1 one-edit; ! grep -Eq 'refs/(heads|tags)' "$GIT_MUTATION_LOG"; }
+case_t4_forced_failure() {
+  repair_ready; set_stub_flag reject_edit true; prepare_program --repair --headless
+  local out code before; before="$(state_value page)"; set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'MECHANISM=page-edit' edit-rejection-marker; assert_eq "$(state_value page)" "$before" edit-rejected-unchanged
+}
+case_t4_rerun() { repair_ready; prepare_program --repair --headless; execute_packet >/dev/null; local count="$(state_value mutations.edit)"; assert_contains "$(invoke_prepare --repair --headless)" fully-matching edit-rerun-noop; assert_eq "$(state_value mutations.edit)" "$count" no-reedit; }
+case_t4_rollback() {
+  repair_ready; prepare_program --repair --headless
+  local out code; set +e; out="$(execute_packet env RELEASE_PUBLICATION_MUTATE_AT=page-edit-post-verify 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" mutated-page-edit-post-verify post-edit-mutation; assert_eq "$(state_value page.name)" fixture-mutated-page durable-observed-page; assert_contains "$(invoke_prepare --repair --headless)" repairable-page fresh-repair-classification
+}
+case_t4_headless() { repair_ready; rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"; local before="$(state_value page)"; invoke_prepare --repair --headless >/dev/null; assert_eq "$(state_value page)" "$before" repair-headless-no-mutation; }
+case_t4_cancel() {
+  repair_ready; prepare_program --repair --headless
+  local out code before; before="$(state_value page)"; set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=page-edit-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_eq "$(state_value page)" "$before" abort-before-edit
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=page-edit-post-verify 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_canonical_page; assert_contains "$(invoke_prepare --headless)" fully-matching cancel-after-edit-noop
+}
+
+case_stale_branch_before() {
+  prepare_program --headless; local out code
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_MUTATE_AT=branch-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" branch-push-branch stale-branch-before-push
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" absent no-later-tag
+}
+case_stale_tag_before() {
+  branch_ready; prepare_program --headless; local out code
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_MUTATE_AT=tag-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" tag-push-tag stale-tag-before-push
+  assert_eq "$(state_value page)" null no-later-page
+}
+case_stale_create_before() {
+  refs_ready; prepare_program --headless; local out code
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_MUTATE_AT=page-create-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" page-create-page stale-page-before-create
+  assert_eq "$(state_value mutations.create)" 0 no-create-after-stale
+}
+case_stale_edit_before() {
+  repair_ready; prepare_program --repair --headless; local out code
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_MUTATE_AT=page-edit-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" page-edit-page stale-page-before-edit
+  assert_eq "$(state_value mutations.edit)" 0 no-edit-after-stale
+}
+case_post_verify_branch() {
+  prepare_program --headless; local out code
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_MUTATE_AT=branch-post-verify 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" branch-post-verify post-branch-detected
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" absent no-tag-after-post-failure
+}
+case_post_verify_tag() {
+  branch_ready; prepare_program --headless; local out code
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_MUTATE_AT=tag-post-verify 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" tag-post-verify post-tag-detected
+  assert_eq "$(state_value page)" null no-page-after-post-failure
+}
+case_post_verify_create() {
+  refs_ready; prepare_program --headless; local out code
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_MUTATE_AT=page-create-post-verify 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" page-post-verify post-create-detected
+  assert_eq "$(state_value page.name)" fixture-mutated-page mutated-create-visible
+}
+case_notes_stale() {
+  prepare_program --headless; printf stale >>"$PUBLICATION_NOTES"; local out code
+  set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" branch-push-notes notes-fingerprint
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" absent no-transition-after-notes-change
+}
+case_invalid_injection_boundary() {
+  prepare_program --headless; local out code
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_FAIL_AT=not-a-boundary 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'unknown fixture failure boundary' invalid-boundary
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" absent no-transition-after-invalid-injection
+}
+case_missing_fixture_injection_boundary() {
+  prepare_program --headless
+  local program="$CASE_ROOT/no-fixture-program.sh" original out code
+  original="$(extract_program)"; sed 's/^fixture_root=.*/fixture_root=/' "$original" >"$program"; chmod +x "$program"
+  set +e
+  out="$(cd "$FIXTURE_REPO" && env HOME="$FIXTURE_HOME" TMPDIR="$FIXTURE_TMPDIR" PATH="$FIXTURE_BIN:$PYTHON_DIR:/usr/bin:/bin" GH_STUB_STATE="$GH_STUB_STATE" GH_STUB_LOG="$GH_STUB_LOG" GH_STUB_BARE_REMOTE="$FIXTURE_REMOTE" GH_STUB_REPO=fixture-owner/fixture-repo RELEASE_PUBLICATION_FAIL_AT=branch-before bash "$program" 2>&1)"; code=$?
+  set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'requires a fixture root' missing-fixture-root
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" absent no-transition-without-boundary
+}
+
 run_fixture_case() {
   local name="$1" mechanism="$2" callback="$3" expected="$4"
   local marker="$HARNESS_TMP_BASE/$name.root" fixture_path code
@@ -904,13 +1181,50 @@ run_empty_group() {
   echo "RESULT=PASS"
 }
 
+run_mutations_group() {
+  run_fixture_case t1_branch_success exact_non_force_branch_and_suffix case_t1_success pass
+  run_fixture_case t1_branch_forced_failure bare_hook_branch_rejection case_t1_forced_failure pass
+  run_fixture_case t1_branch_rerun fully_matching_no_repush case_t1_rerun pass
+  run_fixture_case t1_branch_rollback_compensation durable_branch_resume_suffix case_t1_rollback pass
+  run_fixture_case t1_branch_headless prepare_only_no_transition case_t1_headless pass
+  run_fixture_case t1_branch_cancellation_abort before_and_after_verified_branch case_t1_cancel pass
+  run_fixture_case t2_tag_success exact_annotated_object_and_peeled_oid case_t2_success pass
+  run_fixture_case t2_tag_forced_failure bare_hook_tag_rejection case_t2_forced_failure pass
+  run_fixture_case t2_tag_rerun exact_tag_skips_repush case_t2_rerun pass
+  run_fixture_case t2_tag_rollback_compensation durable_tag_resume_page case_t2_rollback pass
+  run_fixture_case t2_tag_headless prepare_only_no_transition case_t2_headless pass
+  run_fixture_case t2_tag_cancellation_abort before_and_after_verified_tag case_t2_cancel pass
+  run_fixture_case t3_page_create_success verify_tag_canonical_page case_t3_success pass
+  run_fixture_case t3_page_create_forced_failure stub_create_rejection_no_implicit_tag case_t3_forced_failure pass
+  run_fixture_case t3_page_create_rerun matching_page_no_recreate case_t3_rerun pass
+  run_fixture_case t3_page_create_rollback_compensation durable_page_fresh_noop case_t3_rollback pass
+  run_fixture_case t3_page_create_headless prepare_only_no_transition case_t3_headless pass
+  run_fixture_case t3_page_create_cancellation_abort before_and_after_create case_t3_cancel pass
+  run_fixture_case t4_page_edit_success narrow_canonical_fields_only case_t4_success pass
+  run_fixture_case t4_page_edit_forced_failure stub_edit_rejection_identity_unchanged case_t4_forced_failure pass
+  run_fixture_case t4_page_edit_rerun canonical_page_no_reedit case_t4_rerun pass
+  run_fixture_case t4_page_edit_rollback_compensation post_edit_mutation_fresh_repair case_t4_rollback pass
+  run_fixture_case t4_page_edit_headless repair_prepare_only case_t4_headless pass
+  run_fixture_case t4_page_edit_cancellation_abort before_and_after_edit case_t4_cancel pass
+  run_fixture_case stale_branch_before_transition complete_fingerprint_before_branch case_stale_branch_before pass
+  run_fixture_case stale_tag_before_transition complete_fingerprint_before_tag case_stale_tag_before pass
+  run_fixture_case stale_page_before_create complete_fingerprint_before_create case_stale_create_before pass
+  run_fixture_case stale_page_before_edit complete_fingerprint_before_edit case_stale_edit_before pass
+  run_fixture_case branch_post_verification_failure detected_before_later_transition case_post_verify_branch pass
+  run_fixture_case tag_post_verification_failure detected_before_later_transition case_post_verify_tag pass
+  run_fixture_case page_create_post_verification_failure detected_canonical_page_drift case_post_verify_create pass
+  run_fixture_case stale_notes_before_transition exact_notes_sha_before_transition case_notes_stale pass
+  run_fixture_case unknown_injection_boundary fail_closed_fixture_seam case_invalid_injection_boundary pass
+  run_fixture_case injection_without_fixture_root fail_closed_fixture_seam case_missing_fixture_injection_boundary pass
+}
+
 case "$GROUP" in
   prepare) run_prepare_group ;;
-  mutations) run_empty_group mutations ;;
+  mutations) run_mutations_group ;;
   integration) run_empty_group integration ;;
   all)
     run_prepare_group
-    run_empty_group mutations
+    run_mutations_group
     run_empty_group integration
     ;;
 esac

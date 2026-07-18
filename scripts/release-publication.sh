@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python3 - "$@" <<'PY'
+python3 - "$@" <<'RELEASE_PUBLICATION_ENGINE_PY'
 import hashlib
 import json
 import os
@@ -350,32 +350,204 @@ packet_path = release_dir / f"publication-{tag}.md"
 notes_rel = f".release/{notes_path.name}"
 packet_rel = f".release/{packet_path.name}"
 
-program = [
-    "set -euo pipefail",
-    f"cd {shlex.quote(str(cwd))}",
-    f"notes={shlex.quote(notes_rel)}",
-    f"expected_notes_sha={shlex.quote(notes_sha)}",
-    'actual_notes_sha="$(python3 - "$notes" <<\'PY\'\nimport hashlib, pathlib, sys\nprint(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())\nPY\n)"',
-    '[[ "$actual_notes_sha" == "$expected_notes_sha" ]] || { echo "Publication failed — notes fingerprint changed" >&2; exit 1; }',
-    f"# expected remote {default_branch}: {remote_branch}",
-    f"# expected local release commit: {release_commit}",
-    f"# expected annotated tag object/target: {tag_object} {tag_target}",
-]
+q = shlex.quote
+program_text = f'''set -euo pipefail
+cd {q(str(cwd))}
+notes={q(notes_rel)}
+expected_notes_sha={q(notes_sha)}
+repo={q(repo_slug)}
+tag={q(tag)}
+default_ref={q(f"refs/heads/{default_branch}")}
+release_commit={q(release_commit)}
+tag_object={q(tag_object)}
+tag_target={q(tag_target)}
+canonical_title={q(canonical_title)}
+canonical_prerelease={q("true" if prerelease else "false")}
+expected_branch={q(remote_branch)}
+expected_tag_object={q(remote_tag_object or "absent")}
+expected_tag_target={q(remote_tag_target or "absent")}
+expected_page_fingerprint={q(page_fingerprint)}
+fixture_root={q(str(fixture_root) if fixture_root else "")}
+fixture_remote={q(push_url[7:] if fixture_root else "")}
+fixture_state={q(os.environ.get("GH_STUB_STATE", "") if fixture_root else "")}
+gh_bin={q(gh)}
+
+publication_fail() {{
+  printf 'MECHANISM=%s\n' "$1" >&2
+  printf 'Publication failed — %s\n' "$2" >&2
+  exit 1
+}}
+
+notes_sha() {{
+  python3 - "$notes" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+}}
+
+remote_ref() {{
+  git ls-remote origin "$1" 2>/dev/null | awk -v wanted="$1" '$2 == wanted {{ print $1 }}'
+}}
+
+page_json() {{
+  local output code
+  set +e
+  output="$("$gh_bin" release view "$tag" --repo "$repo" --json tagName,name,isDraft,isPrerelease,body,targetCommitish 2>/dev/null)"
+  code=$?
+  set -e
+  if [[ $code -eq 1 ]]; then printf 'absent'; return 0; fi
+  [[ $code -eq 0 ]] || publication_fail page-read "release page state became unreadable"
+  python3 - "$output" <<'PY'
+import json, sys
+print(json.dumps(json.loads(sys.argv[1]), sort_keys=True, separators=(",", ":")))
+PY
+}}
+
+page_fingerprint() {{
+  local value="$1"
+  if [[ "$value" == absent ]]; then printf absent; return; fi
+  python3 - "$value" <<'PY'
+import hashlib, sys
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest())
+PY
+}}
+
+assert_fingerprint() {{
+  local boundary="$1" branch tag_obj tag_peeled current_page current_page_fp
+  [[ "$(notes_sha)" == "$expected_notes_sha" ]] || publication_fail "$boundary-notes" "notes fingerprint changed before $boundary"
+  branch="$(remote_ref "$default_ref")"
+  tag_obj="$(remote_ref "refs/tags/$tag")"
+  tag_peeled="$(remote_ref "refs/tags/$tag^{{}}")"
+  [[ -n "$tag_obj" ]] || tag_obj=absent
+  [[ -n "$tag_peeled" ]] || tag_peeled=absent
+  current_page="$(page_json)"
+  current_page_fp="$(page_fingerprint "$current_page")"
+  [[ "$branch" == "$expected_branch" ]] || publication_fail "$boundary-branch" "remote branch fingerprint changed before $boundary"
+  [[ "$tag_obj" == "$expected_tag_object" && "$tag_peeled" == "$expected_tag_target" ]] || publication_fail "$boundary-tag" "remote tag fingerprint changed before $boundary"
+  [[ "$current_page_fp" == "$expected_page_fingerprint" ]] || publication_fail "$boundary-page" "release page fingerprint changed before $boundary"
+}}
+
+verify_page() {{
+  local value="$1"
+  [[ "$value" != absent ]] || publication_fail page-post-verify "release page is absent after transition"
+  python3 - "$value" "$tag" "$canonical_title" "$notes" "$canonical_prerelease" <<'PY' || publication_fail page-post-verify "canonical release page verification failed"
+import json, pathlib, sys
+page=json.loads(sys.argv[1])
+expected=(page.get("tagName") == sys.argv[2] and page.get("name") == sys.argv[3]
+          and page.get("body") == pathlib.Path(sys.argv[4]).read_text()
+          and page.get("isDraft") is False
+          and page.get("isPrerelease") is (sys.argv[5] == "true"))
+raise SystemExit(0 if expected else 1)
+PY
+}}
+
+verify_remote_tag() {{
+  [[ "$(remote_ref "refs/tags/$tag")" == "$tag_object" && "$(remote_ref "refs/tags/$tag^{{}}")" == "$tag_target" ]] || publication_fail page-post-verify "remote annotated tag identity changed during page transition"
+}}
+
+validate_injection() {{
+  local fail_at="${{RELEASE_PUBLICATION_FAIL_AT:-}}" mutate_at="${{RELEASE_PUBLICATION_MUTATE_AT:-}}" path
+  [[ -z "$fail_at$mutate_at" ]] && return
+  [[ -n "$fixture_root" ]] || publication_fail fixture-boundary "failure or mutation injection requires a fixture root"
+  case "$fail_at" in
+    ''|branch-before|branch-push|branch-post-verify|tag-before|tag-push|tag-post-verify|page-create-before|page-create|page-create-post-verify|page-edit-before|page-edit|page-edit-post-verify) ;;
+    *) publication_fail fixture-boundary "unknown fixture failure boundary" ;;
+  esac
+  case "$mutate_at" in
+    ''|branch-before|branch-post-verify|tag-before|tag-post-verify|page-create-before|page-create-post-verify|page-edit-before|page-edit-post-verify) ;;
+    *) publication_fail fixture-boundary "unknown fixture mutation boundary" ;;
+  esac
+  for path in "$PWD" "$notes" "$gh_bin" "$fixture_remote" "$fixture_state"; do
+    python3 - "$fixture_root" "$path" <<'PY' || publication_fail fixture-boundary "injection target escapes fixture root"
+import pathlib, sys
+try: pathlib.Path(sys.argv[2]).resolve().relative_to(pathlib.Path(sys.argv[1]).resolve())
+except ValueError: raise SystemExit(1)
+PY
+  done
+}}
+
+inject_at() {{
+  local boundary="$1" fail_at="${{RELEASE_PUBLICATION_FAIL_AT:-}}" mutate_at="${{RELEASE_PUBLICATION_MUTATE_AT:-}}"
+  [[ "$fail_at" != "$boundary" ]] || publication_fail "injected-$boundary" "injected fixture failure at $boundary"
+  [[ "$mutate_at" != "$boundary" ]] || {{
+    case "$boundary" in
+      branch-before ) git --git-dir="$fixture_remote" fetch "$PWD" "$release_commit" >/dev/null 2>&1; git --git-dir="$fixture_remote" update-ref "$default_ref" "$release_commit" ;;
+      branch-* ) git --git-dir="$fixture_remote" update-ref "$default_ref" "$(git rev-parse HEAD^)" ;;
+      tag-* ) git --git-dir="$fixture_remote" update-ref "refs/tags/$tag" "$release_commit" ;;
+      page-* ) python3 - "$fixture_state" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text())
+if s.get("page") is None:
+    s["page"]={{"tagName":"v-stale","name":"stale","body":"stale\\n","isDraft":True,"isPrerelease":False}}
+    s["page_lookup_any"]=True
+else: s["page"]["name"]="fixture-mutated-page"
+p.write_text(json.dumps(s, sort_keys=True)+"\\n")
+PY
+        ;;
+      * ) publication_fail fixture-boundary "unknown mutation boundary" ;;
+    esac
+    printf 'MECHANISM=mutated-%s\n' "$boundary" >&2
+  }}
+}}
+
+validate_injection
+'''
+program = program_text.splitlines()
+
 if "branch" in transitions:
-    program += [f"git push origin {release_commit}:refs/heads/{default_branch}"]
+    program += [
+        'inject_at branch-before',
+        'assert_fingerprint branch-push',
+        'inject_at branch-push',
+        f'git push origin {release_commit}:refs/heads/{default_branch} || publication_fail branch-push "non-force branch push rejected"',
+        'expected_branch="$release_commit"',
+        'inject_at branch-post-verify',
+        '[[ "$(remote_ref "$default_ref")" == "$release_commit" ]] || publication_fail branch-post-verify "remote branch verification failed"',
+    ]
 if "tag" in transitions:
-    program += [f"git push origin refs/tags/{tag}:refs/tags/{tag}"]
+    program += [
+        'inject_at tag-before',
+        'assert_fingerprint tag-push',
+        'inject_at tag-push',
+        f'git push origin refs/tags/{tag}:refs/tags/{tag} || publication_fail tag-push "non-force annotated tag push rejected"',
+        'expected_tag_object="$tag_object"',
+        'expected_tag_target="$tag_target"',
+        'inject_at tag-post-verify',
+        '[[ "$(remote_ref "refs/tags/$tag")" == "$tag_object" && "$(remote_ref "refs/tags/$tag^{}")" == "$tag_target" ]] || publication_fail tag-post-verify "annotated tag verification failed"',
+    ]
 if "page-create" in transitions:
-    command = ["gh", "release", "create", tag, "--repo", repo_slug, "--verify-tag",
+    command = [gh, "release", "create", tag, "--repo", repo_slug, "--verify-tag",
                "--title", canonical_title, "--notes-file", notes_rel]
     if prerelease:
         command.append("--prerelease")
-    program += [shlex.join(command)]
+    program += [
+        'inject_at page-create-before',
+        'assert_fingerprint page-create',
+        'inject_at page-create',
+        shlex.join(command) + ' || publication_fail page-create "release page creation rejected"',
+        'inject_at page-create-post-verify',
+        'created_page="$(page_json)"',
+        'verify_page "$created_page"',
+        'verify_remote_tag',
+        'expected_page_fingerprint="$(page_fingerprint "$created_page")"',
+    ]
 if "page-edit" in transitions:
-    program += [shlex.join(["gh", "release", "edit", tag, "--repo", repo_slug,
-                            "--verify-tag", "--title", canonical_title,
-                            "--notes-file", notes_rel, "--draft=false",
-                            f"--prerelease={'true' if prerelease else 'false'}"])]
+    command = [gh, "release", "edit", tag, "--repo", repo_slug,
+               "--verify-tag", "--title", canonical_title,
+               "--notes-file", notes_rel, "--draft=false",
+               f"--prerelease={'true' if prerelease else 'false'}"]
+    program += [
+        'inject_at page-edit-before',
+        'assert_fingerprint page-edit',
+        'inject_at page-edit',
+        shlex.join(command) + ' || publication_fail page-edit "release page repair rejected"',
+        'inject_at page-edit-post-verify',
+        'edited_page="$(page_json)"',
+        'verify_page "$edited_page"',
+        'verify_remote_tag',
+        'expected_page_fingerprint="$(page_fingerprint "$edited_page")"',
+    ]
+program += ['printf \'PUBLICATION_EXECUTION=complete\\n\'']
 
 packet = "\n".join([
     f"# Publication packet for {tag}", "",
@@ -444,4 +616,4 @@ print("PUBLICATION_STATUS=ready")
 print(f"PUBLICATION_CLASS={classification}")
 print(f"PUBLICATION_PACKET={packet_rel}")
 print(f"PUBLICATION_PACKET_SHA256={packet_sha}")
-PY
+RELEASE_PUBLICATION_ENGINE_PY
