@@ -16,6 +16,11 @@ non-empty output: `Release complete — v<version>`,
 instantiations below are deliberately shown as prose or fenced output; these
 three placeholders are the signal contract quoted for drift validation.
 
+The separate outward-publication action uses its own additive terminal family:
+`Publication complete — v<version>`, `Publication skipped — <reason>`, or
+`Publication failed — <reason>`. These are the only inline Publication signal
+placeholders; concrete publication outcomes must remain prose or fenced output.
+
 ## Arguments
 
 Accept zero, one, or both of these arguments, in either order:

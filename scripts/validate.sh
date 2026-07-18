@@ -112,7 +112,7 @@ except OSError:
 
 canonical = {}  # producer -> {state: canonical text}
 if contract_text is not None:
-    for producer in ("compound", "compound-refresh", "retrospective", "release"):
+    for producer in ("compound", "compound-refresh", "retrospective", "release", "release publish"):
         pattern = (
             r"^\|\s*`" + re.escape(producer) + r"`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*$"
         )
@@ -125,18 +125,18 @@ if contract_text is not None:
             }
     flat = [(p, s, t) for p, states in canonical.items() for s, t in states.items()]
     distinct = {t for _, _, t in flat}
-    if len(flat) != 12 or len(distinct) != 12:
+    if len(flat) != 15 or len(distinct) != 15:
         fail(
-            f"schemas/headless-contract.md did not yield exactly 12 canonical, "
+            f"schemas/headless-contract.md did not yield exactly 15 canonical, "
             f"pairwise-distinct signal lines (found {len(flat)}, {len(distinct)} distinct)"
         )
         canonical = {}
 
 seen = set()
 candidate_re = re.compile(r"`([^`]+)`")
-state_re = re.compile(r"^(Documentation|Refresh|Retrospective|Release)\s+(complete|skipped|failed)\b", re.I)
+state_re = re.compile(r"^(Documentation|Refresh|Retrospective|Release|Publication)\s+(complete|skipped|failed)\b", re.I)
 state_key = {"complete": "success", "skipped": "skipped", "failed": "failed"}
-producer_key = {"documentation": "compound", "refresh": "compound-refresh", "retrospective": "retrospective", "release": "release"}
+producer_key = {"documentation": "compound", "refresh": "compound-refresh", "retrospective": "retrospective", "release": "release", "publication": "release publish"}
 
 consumer_files = [
     "skills/compound/SKILL.md",
@@ -184,7 +184,7 @@ if canonical:
 if failures:
     print("\n".join(failures))
     sys.exit(1)
-print("ok:   terminal signal lines match schemas/headless-contract.md: 12 canonical pairwise-distinct signals")
+print("ok:   terminal signal lines match schemas/headless-contract.md: 15 canonical pairwise-distinct signals")
 PY
 
 # 7. Plugin manifest versions are valid SemVer 2.0.0 strings and agree

@@ -12,6 +12,7 @@ Contract version: `v1` (bump on any change to existing rows or their semantics; 
 | `compound-refresh` | `Refresh complete — <n> applied, <n> recommended` | `Refresh skipped — <reason>` | `Refresh failed — <reason>` |
 | `retrospective` | `Retrospective complete — <path>` | `Retrospective skipped — <reason>` | `Retrospective failed — <reason>` |
 | `release` | `Release complete — v<version>` | `Release skipped — <reason>` | `Release failed — <reason>` |
+| `release publish` | `Publication complete — v<version>` | `Publication skipped — <reason>` | `Publication failed — <reason>` |
 | `reviewing` (`mode:agent`) | emits the JSON envelope (`schemas/review-envelope.schema.json`) as its final block instead of a signal line | — | envelope with `status: "failed"` + `reason` |
 
 ## Rules

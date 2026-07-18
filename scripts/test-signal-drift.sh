@@ -238,6 +238,47 @@ PY
   return $result
 }
 
+# --- Case I: one-byte drift in the unique inline publication success placeholder ---
+# Compute the copied-file line instead of pinning it. Keep the leading
+# "Publication complete" keyword intact so check 6 recognizes the candidate,
+# maps it to the distinct `release publish` producer, and reports byte drift.
+case_i() {
+  local dir target_line out code result=0
+  dir="$(setup_copy)" || return 1
+  target_line="$(python3 - "$dir/skills/release/SKILL.md" <<'PY'
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+span = "`Publication complete — v<version>`"
+assert text.count(span) == 1, "fixture assumption broken: expected exactly one quoted publication success span"
+start = text.index(span)
+line = text.count("\n", 0, start) + 1
+text = text[:start] + text[start:].replace(
+    "Publication complete — v<version>",
+    "Publication complete — v<versio>",
+    1,
+)
+open(path, "w", encoding="utf-8").write(text)
+print(line)
+PY
+)" || {
+    echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"
+    rm -rf "$dir"
+    return 1
+  }
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_contains "$out" "[signal-drift]" "reported by check 6 specifically" || result=1
+  assert_contains "$out" "skills/release/SKILL.md:$target_line" "computed file:line" || result=1
+  assert_contains "$out" "producer 'release publish'" "distinct publication producer" || result=1
+  assert_contains "$out" "state 'success'" "publication success state" || result=1
+  assert_contains "$out" "Publication complete — v<versio>" "found byte mismatch" || result=1
+  assert_contains "$out" "Publication complete — v<version>" "expected byte sequence" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -246,6 +287,7 @@ run_case E case_e
 run_case F case_f
 run_case G case_g
 run_case H case_h
+run_case I case_i
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then

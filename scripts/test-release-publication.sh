@@ -1267,11 +1267,40 @@ run_prepare_group() {
   run_fixture_case packet_cancellation_abort before_write_abort_and_after_write_handoff case_packet_cancellation_abort pass
 }
 
-run_empty_group() {
-  local name="$1"
-  echo "GROUP=$name"
-  echo "MECHANISM=U1_leaf_prerequisite_no_cases"
-  echo "RESULT=PASS"
+case_publication_terminal_contract() {
+  python3 - "$ROOT" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+contract = (root / "schemas/headless-contract.md").read_text(encoding="utf-8")
+skill = (root / "skills/release/SKILL.md").read_text(encoding="utf-8")
+
+assert "Contract version: `v1`" in contract
+release_row = "| `release` | `Release complete — v<version>` | `Release skipped — <reason>` | `Release failed — <reason>` |"
+publish_row = "| `release publish` | `Publication complete — v<version>` | `Publication skipped — <reason>` | `Publication failed — <reason>` |"
+assert contract.count(release_row) == 1, "existing release row changed or duplicated"
+assert contract.count(publish_row) == 1, "additive release publish row missing or duplicated"
+
+placeholders = (
+    "`Publication complete — v<version>`",
+    "`Publication skipped — <reason>`",
+    "`Publication failed — <reason>`",
+)
+for placeholder in placeholders:
+    assert skill.count(placeholder) == 1, f"expected one inline placeholder: {placeholder}"
+
+inline = re.findall(r"`([^`]+)`", skill)
+publication_inline = [span for span in inline if span.startswith("Publication ")]
+assert publication_inline == [placeholder[1:-1] for placeholder in placeholders], (
+    f"unexpected inline Publication signal(s): {publication_inline!r}"
+)
+PY
+}
+
+run_integration_group() {
+  run_fixture_case publication_terminal_contract contract_v1_additive_publish_signals case_publication_terminal_contract pass
 }
 
 run_mutations_group() {
@@ -1323,11 +1352,11 @@ run_mutations_group() {
 case "$GROUP" in
   prepare) run_prepare_group ;;
   mutations) run_mutations_group ;;
-  integration) run_empty_group integration ;;
+  integration) run_integration_group ;;
   all)
     run_prepare_group
     run_mutations_group
-    run_empty_group integration
+    run_integration_group
     ;;
 esac
 
