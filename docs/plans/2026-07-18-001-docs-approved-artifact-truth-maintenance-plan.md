@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Add approved-artifact truth-maintenance guidance
 type: docs
-status: draft
+status: approved
 date: 2026-07-18
 execution: non-code
 origin: docs/specs/2026-07-18-approved-artifact-truth-maintenance-design.md
