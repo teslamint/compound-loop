@@ -1,6 +1,6 @@
 ---
 title: Gated Outward Publication for Release
-status: draft
+status: approved
 date: 2026-07-18
 schema: spec/v1
 ---
