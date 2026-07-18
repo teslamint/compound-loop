@@ -31,15 +31,46 @@ Plans are written for a zero-context implementer, which makes the planner the on
 
 **External research — conditional.** Escalate to documentation or web sources only when one holds: the user explicitly asked; the plan makes claims about an unfamiliar library, framework, or API version; or the work touches a high-risk surface with sparse local precedent (fewer than 3 direct examples). Record findings in Architecture notes with sources — unbacked external claims are exactly what the deepening trigger "thin external grounding" catches later.
 
-## 4. File structure
+## 4. Assumption recheck
+
+When the plan has an `origin` spec, inspect that approved artifact for retained
+live assumptions before mapping files or units. Rerun every retained command
+and record the fresh result in the plan's **Assumption Recheck** section using
+one outcome per claim:
+
+- **match** — the fresh evidence still supports the approved claim.
+- **contradiction** — the fresh evidence disagrees with the approved claim or
+  reveals a newly observable contradiction.
+- **unavailable** — the command or evidence source cannot be rerun or inspected
+  safely at planning time.
+
+For a **contradiction**, preserve the approved spec unchanged and stop plan
+finalization and commit until a separate committed addendum exists under
+`docs/deviations/`. The addendum's required contents are owned by
+`docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md`;
+link that authority rather than restating its seven-part contract here.
+
+For **unavailable** evidence, do not invent a contradiction or a clean match.
+Record the unavailable result in Assumption Recheck and carry it into Open
+unknowns as a planning-time unknown unless the user narrows the claim enough to
+remove the missing evidence.
+
+When the plan has **no origin spec**, the Assumption Recheck section must say:
+`No origin spec; no approved live assumptions to recheck.`
+
+When the origin spec exists but retains **zero live assumptions**, the section
+must say:
+`Origin spec retains no live assumptions; no assumption recheck required.`
+
+## 5. File structure
 
 Map files to create or modify before defining units: one responsibility per file, colocate what changes together, split by responsibility rather than technical layer, and follow the existing codebase's scale — don't unilaterally restructure an established large-file convention.
 
-## 5. Deliverable-type gate
+## 6. Deliverable-type gate
 
 Classify the spec's deliverable once: `code` (source, schema, CLI, API changes) or `non-code` (docs, skill files, config-only). Record it in the plan frontmatter's `execution` field per `schemas/plan-schema.md` — never in a side-channel file. This selects the unit template in step 8.
 
-## 6. Scenario flow analysis
+## 7. Scenario flow analysis
 
 Before cutting units, walk every User Scenario (S-ID) in the spec end to end: what has to exist, in what order, for this scenario to complete? The walkthrough produces two artifacts — the durable record downstream fresh-verification runs against (`enforces: P8`):
 
@@ -48,7 +79,7 @@ Before cutting units, walk every User Scenario (S-ID) in the spec end to end: wh
 
 Specs without a User Scenarios section (or plans with no spec) record that fact in the coverage map section explicitly. Decomposition in step 7 takes this walkthrough as input: unit boundaries that would strand a scenario mid-flow are wrong boundaries.
 
-## 7. Decomposition
+## 8. Decomposition
 
 A unit is the smallest change worth a fresh reviewer's gate — small enough that a reviewer could reject one unit while approving its neighbor, but not a 2–5 minute micro-step. Fold setup and scaffolding into the unit that needs them.
 
@@ -56,25 +87,30 @@ U-IDs follow the stability rule in `schemas/plan-schema.md` (never renumbered on
 
 Smell test: 3–7 units is typical. More than 10 suggests under-decomposition — split the plan or revisit the spec. Fewer than 3 suggests step 1 may have been wrong to write a plan doc at all.
 
-## 8. Unit authoring
+## 9. Unit authoring
 
 Use the code or non-code unit template from `schemas/plan-schema.md` as-is — do not redefine it here. For code units, fill test scenarios by category (happy / edge / error / integration); every category that applies to the unit gets a scenario, right-sized to its risk. Integration scenarios come from step 6's walkthrough first — tag the ones that walk a user scenario with `Covers S<n>`. Link a scenario to a spec acceptance criterion with `Covers AE<n>` only when it directly enforces that criterion — sparse by design, since most scenarios are finer-grained than an AE. A `Covers AE<n>` or `Covers S<n>` naming a nonexistent target is a validation error, not a soft note.
 
-## 9. Planning-time vs. implementation-time unknowns
+## 10. Planning-time vs. implementation-time unknowns
 
 Split every open unknown by when it can resolve. Planning-time unknowns block approval — resolve them, or ask, before finalizing the plan. Implementation-time unknowns (exact method or helper names, final SQL, runtime-dependent behavior only discoverable once code is touched) are not gaps — record them under the implementation-time half of Open unknowns so they read as deferred-by-design, never as something missed.
 
-## 10. Anti-expansion
+## 11. Anti-expansion
 
 Distinct from step 9: this is *known but tangential* work noticed while planning — an adjacent refactor, a "while we're here" cleanup, a scope-adjacent nice-to-have. Route it to Deferred to Follow-Up Work, never into an active unit (`enforces: P4, P6`). The user's explicit ask overrides this default — if they asked for the refactor, it's in scope, not deferred. Worked example: a version bump or CHANGELOG entry belongs to `shipping`, never to a planning unit.
 
-## 11. No-placeholder rule
+## 12. No-placeholder rule
 
 Banned in any unit: "TBD", "TODO", "similar to Task N" / "see U3", "as appropriate", "etc.", "add appropriate error handling", steps that describe what to do without showing how, and references to types or functions not defined in any unit. Units may be read out of order by their implementer — repeat content rather than pointing sideways.
 
-## 12. Self-review
+## 13. Self-review
 
 Before finalizing, the author (not a subagent) checks:
+- **Assumption recheck flows** — walk one match, one contradiction, one
+  unavailable result, the no-origin case, and the zero-retained-assumption
+  case against the final wording. Confirm contradictions block finalization and
+  commit until a separate committed addendum exists, and unavailable evidence
+  stays a planning-time unknown unless the user narrows the claim.
 - **Spec coverage** — every spec requirement traces to a unit; list gaps.
 - **Scenario coverage** — re-walk the Scenario coverage map against the final unit set: every S-ID still completes end to end (deepening and unit edits are the likeliest breakage vector), and every map row names real scenario evidence (integration test, or observable verification for non-code plans). `enforces: P8`
 - **Placeholder scan** — search for step 11's red flags; fix inline.
@@ -84,19 +120,22 @@ Before finalizing, the author (not a subagent) checks:
 
 Fix issues inline; no separate review pass is needed.
 
-## 13. Deepening pass
+## 14. Deepening pass
 
 After self-review, run the confidence check in `references/deepening.md`: six trigger categories score the plan (vague rationale, missing risk treatment, weak sequencing, thin external grounding, unclear verification, thin scenario coverage) — skip deepening entirely when nothing scores. When triggered, dispatch reviewer personas — Architecture and Feasibility always-on, Security/Risk and Scope/Coherence conditional on activation signals — per the dispatch ladder in `references/dispatch-degradation.md` (native parallel → sequential passes; correctness never depends on parallelism being available). Change discipline: tightening prose is in scope; writing implementation code is not; U-IDs are never renumbered; superseded text is resolved in place, never stacked as a separate layer.
 
-## 14. Outstanding-question triage
+## 15. Outstanding-question triage
 
 Classify every open question as planning-owned (resolvable from repo context, docs, or a user choice made now) or a product blocker (would change scope, behavior, or success criteria). Never plan over a live product blocker — surface it and either send the user back to `designing` to resolve it, or convert it to an explicit assumption before continuing.
 
-## 15. Commit the plan
+## 16. Commit the plan
 
 Write to `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md` per the naming rule in `schemas/plan-schema.md`, then `git add` and commit following the repo's commit protocol. From this point the plan is a decision artifact — `implementing` never edits its body.
 
-## 16. Handoff
+Do not finalize or commit a plan whose Assumption Recheck contains a
+contradiction unless the separate addendum commit already exists.
+
+## 17. Handoff
 
 Offer a 2-option menu: **Subagent-driven** (fresh subagent per unit, review between units — recommended) or **Inline** (execute in this session with checkpoints between units). Fire the chosen path; don't just announce it.
 
