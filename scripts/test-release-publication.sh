@@ -22,6 +22,7 @@ GIT_MUTATION_LOG=""
 GIT_REJECT_REF=""
 PUBLICATION_PACKET=""
 PUBLICATION_NOTES=""
+EXECUTE_COUNT_FILE=""
 PYTHON_DIR="$(dirname "$(command -v python3)")"
 
 HARNESS_TMP_BASE="$(mktemp -d "${TMPDIR:-/tmp}/release-publication-harness.XXXXXX")"
@@ -245,6 +246,7 @@ setup_fixture() {
   GIT_REJECT_REF="$CASE_ROOT/state ;[fixture]/reject-ref"
   PUBLICATION_PACKET="$FIXTURE_REPO/.release/publication-v9.8.7.md"
   PUBLICATION_NOTES="$FIXTURE_REPO/.release/publication-v9.8.7-notes.md"
+  EXECUTE_COUNT_FILE="$CASE_ROOT/state ;[fixture]/execute-count"
 
   mkdir -p "$FIXTURE_REPO" "$FIXTURE_HOME" "$FIXTURE_TMPDIR" \
     "$FIXTURE_BIN" "$(dirname "$GH_STUB_STATE")" "$FIXTURE_REPO/.release"
@@ -295,6 +297,7 @@ JSON
   : >"$GH_STUB_LOG"
   : >"$GIT_MUTATION_LOG"
   : >"$GIT_REJECT_REF"
+  printf '0\n' >"$EXECUTE_COUNT_FILE"
   cat >"$FIXTURE_REMOTE/hooks/pre-receive" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -323,6 +326,7 @@ git_mutation_log=$GIT_MUTATION_LOG
 git_reject_ref=$GIT_REJECT_REF
 packet=$PUBLICATION_PACKET
 notes=$PUBLICATION_NOTES
+execute_count=$EXECUTE_COUNT_FILE
 EOF
 }
 
@@ -340,6 +344,7 @@ assert_fixture_boundary() {
   assert_inside "$GH_STUB_LOG" stub-log
   assert_inside "$PUBLICATION_PACKET" packet
   assert_inside "$PUBLICATION_NOTES" notes
+  assert_inside "$EXECUTE_COUNT_FILE" execute-count
   assert_contains "$remote_url" "file://$CASE_ROOT/" fixture-remote
 
   real_origin="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
@@ -474,7 +479,9 @@ extract_program() {
 }
 
 execute_packet() {
-  local program
+  local program count
+  count="$(cat "$EXECUTE_COUNT_FILE")"
+  printf '%s\n' "$((count + 1))" >"$EXECUTE_COUNT_FILE"
   program="$(extract_program)"
   (
     cd "$FIXTURE_REPO" &&
@@ -533,7 +540,8 @@ PY
 }
 
 simulate_publication_ceremony() {
-  local response="$1" source="$2" prepare_out approved_sha actual_sha verify_out
+  local response="$1" source="$2" after_gate_tamper="${3:-none}"
+  local prepare_out approved_sha approved_notes_sha actual_sha actual_notes_sha verify_out
   prepare_out="$(invoke_prepare)" || return
   validate_ready_output "$prepare_out"
   approved_sha="$(printf '%s\n' "$prepare_out" | sed -n 's/^PUBLICATION_PACKET_SHA256=//p')"
@@ -543,8 +551,23 @@ print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
 PY
 )"
   assert_eq "$actual_sha" "$approved_sha" displayed-packet-hash
+  approved_notes_sha="$(python3 - "$PUBLICATION_PACKET" <<'PY'
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+values = re.findall(r"^- Notes SHA-256: `([0-9a-f]{64})`$", text, flags=re.MULTILINE)
+assert len(values) == 1, f"expected one packet-declared notes SHA, got {len(values)}"
+print(values[0])
+PY
+)"
+  actual_notes_sha="$(python3 - "$PUBLICATION_NOTES" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+  assert_eq "$actual_notes_sha" "$approved_notes_sha" packet-declared-notes-hash
   validate_packet_for_gate
   printf 'GATE_PACKET_SHA256=%s\n' "$approved_sha"
+  printf 'GATE_NOTES_SHA256=%s\n' "$approved_notes_sha"
   cat "$PUBLICATION_PACKET"
 
   if [[ "$source" != direct ]]; then
@@ -553,6 +576,27 @@ PY
   fi
   case "$response" in
     Approve)
+      case "$after_gate_tamper" in
+        none) ;;
+        packet) printf '\nafter-gate packet tamper\n' >>"$PUBLICATION_PACKET" ;;
+        notes) printf 'after-gate notes tamper\n' >>"$PUBLICATION_NOTES" ;;
+        *) return 99 ;;
+      esac
+      actual_sha="$(python3 - "$PUBLICATION_PACKET" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+      actual_notes_sha="$(python3 - "$PUBLICATION_NOTES" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+      if [[ "$actual_sha" != "$approved_sha" || "$actual_notes_sha" != "$approved_notes_sha" ]]; then
+        printf '%s\n' 'Publication failed — approved packet or notes changed after the gate'
+        return 5
+      fi
+      validate_packet_for_gate
       execute_packet
       verify_out="$(invoke_prepare)"
       validate_fully_matching_output "$verify_out"
@@ -1448,6 +1492,8 @@ case_first_hand_approved_publication() {
   assert_eq "$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -1)" \
     'Publication complete — v9.8.7' terminal-last-line
   assert_contains "$out" 'GATE_PACKET_SHA256=' displayed-gate-hash
+  assert_contains "$out" 'GATE_NOTES_SHA256=' displayed-notes-hash
+  assert_eq "$(cat "$EXECUTE_COUNT_FILE")" 1 exactly-one-program-invocation
   assert_eq "$(state_value mutations.create)" 1 exactly-one-page-create
   assert_eq "$(wc -l <"$GIT_MUTATION_LOG" | tr -d ' ')" 2 branch-and-tag-once
   assert_canonical_page
@@ -1574,6 +1620,36 @@ case_gate_rejects_non_direct_approval() {
   assert_eq "$after" "$before" rejected-gates-no-mutation
 }
 
+case_after_gate_packet_tamper() {
+  local before after out code
+  before="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  set +e
+  out="$(simulate_publication_ceremony Approve direct packet 2>&1)"; code=$?
+  set -e
+  [[ $code -eq 5 ]]
+  assert_eq "$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -1)" \
+    'Publication failed — approved packet or notes changed after the gate' packet-tamper-terminal
+  assert_eq "$(cat "$EXECUTE_COUNT_FILE")" 0 packet-tamper-no-execute
+  after="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  assert_eq "$after" "$before" packet-tamper-no-outward-state
+  assert_no_outward_mutation
+}
+
+case_after_gate_notes_tamper() {
+  local before after out code
+  before="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  set +e
+  out="$(simulate_publication_ceremony Approve direct notes 2>&1)"; code=$?
+  set -e
+  [[ $code -eq 5 ]]
+  assert_eq "$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -1)" \
+    'Publication failed — approved packet or notes changed after the gate' notes-tamper-terminal
+  assert_eq "$(cat "$EXECUTE_COUNT_FILE")" 0 notes-tamper-no-execute
+  after="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  assert_eq "$after" "$before" notes-tamper-no-outward-state
+  assert_no_outward_mutation
+}
+
 case_local_release_behavior_regression() {
   python3 - "$ROOT" <<'PY'
 import hashlib
@@ -1601,6 +1677,8 @@ all_user_scenarios() {
   run_fixture_case gate_revision fresh_hash_and_fresh_gate_required case_gate_cancel_and_revision pass
   run_fixture_case gate_cancel direct_cancel_never_mutates case_gate_cancel pass
   run_fixture_case gate_rejects_non_direct relay_silence_missing_error_and_prior_approval case_gate_rejects_non_direct_approval pass
+  run_fixture_case after_gate_packet_tamper approved_packet_hash_rechecked_before_execute case_after_gate_packet_tamper pass
+  run_fixture_case after_gate_notes_tamper packet_declared_notes_hash_rechecked_before_execute case_after_gate_notes_tamper pass
   run_fixture_case local_release_regression base_local_section_bytes_unchanged case_local_release_behavior_regression pass
 }
 
