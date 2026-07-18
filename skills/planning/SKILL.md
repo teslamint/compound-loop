@@ -68,7 +68,7 @@ Map files to create or modify before defining units: one responsibility per file
 
 ## 6. Deliverable-type gate
 
-Classify the spec's deliverable once: `code` (source, schema, CLI, API changes) or `non-code` (docs, skill files, config-only). Record it in the plan frontmatter's `execution` field per `schemas/plan-schema.md` — never in a side-channel file. This selects the unit template in step 8.
+Classify the spec's deliverable once: `code` (source, schema, CLI, API changes) or `non-code` (docs, skill files, config-only). Record it in the plan frontmatter's `execution` field per `schemas/plan-schema.md` — never in a side-channel file. This selects the unit template in step 9.
 
 ## 7. Scenario flow analysis
 
@@ -77,19 +77,19 @@ Before cutting units, walk every User Scenario (S-ID) in the spec end to end: wh
 - The plan's **Scenario coverage map** (hard-floor section per `schemas/plan-schema.md`): S-ID → ordered unit chain → the integration test scenario(s) that walk it.
 - The **integration test scenarios** themselves — derive them from user scenarios first, before inventing technical integration cases. A user scenario no test walks is untested motivation; a scenario no unit chain completes is a plan gap that blocks approval (add the missing unit, or send the scenario back to `designing` for explicit descoping — never silently drop it).
 
-Specs without a User Scenarios section (or plans with no spec) record that fact in the coverage map section explicitly. Decomposition in step 7 takes this walkthrough as input: unit boundaries that would strand a scenario mid-flow are wrong boundaries.
+Specs without a User Scenarios section (or plans with no spec) record that fact in the coverage map section explicitly. Decomposition in step 8 takes this walkthrough as input: unit boundaries that would strand a scenario mid-flow are wrong boundaries.
 
 ## 8. Decomposition
 
 A unit is the smallest change worth a fresh reviewer's gate — small enough that a reviewer could reject one unit while approving its neighbor, but not a 2–5 minute micro-step. Fold setup and scaffolding into the unit that needs them.
 
-U-IDs follow the stability rule in `schemas/plan-schema.md` (never renumbered on reorder, split, or delete) — this matters most during the deepening pass in step 13, the likeliest accidental-renumber vector.
+U-IDs follow the stability rule in `schemas/plan-schema.md` (never renumbered on reorder, split, or delete) — this matters most during the deepening pass in step 14, the likeliest accidental-renumber vector.
 
 Smell test: 3–7 units is typical. More than 10 suggests under-decomposition — split the plan or revisit the spec. Fewer than 3 suggests step 1 may have been wrong to write a plan doc at all.
 
 ## 9. Unit authoring
 
-Use the code or non-code unit template from `schemas/plan-schema.md` as-is — do not redefine it here. For code units, fill test scenarios by category (happy / edge / error / integration); every category that applies to the unit gets a scenario, right-sized to its risk. Integration scenarios come from step 6's walkthrough first — tag the ones that walk a user scenario with `Covers S<n>`. Link a scenario to a spec acceptance criterion with `Covers AE<n>` only when it directly enforces that criterion — sparse by design, since most scenarios are finer-grained than an AE. A `Covers AE<n>` or `Covers S<n>` naming a nonexistent target is a validation error, not a soft note.
+Use the code or non-code unit template from `schemas/plan-schema.md` as-is — do not redefine it here. For code units, fill test scenarios by category (happy / edge / error / integration); every category that applies to the unit gets a scenario, right-sized to its risk. Integration scenarios come from step 7's walkthrough first — tag the ones that walk a user scenario with `Covers S<n>`. Link a scenario to a spec acceptance criterion with `Covers AE<n>` only when it directly enforces that criterion — sparse by design, since most scenarios are finer-grained than an AE. A `Covers AE<n>` or `Covers S<n>` naming a nonexistent target is a validation error, not a soft note.
 
 ## 10. Planning-time vs. implementation-time unknowns
 
@@ -97,7 +97,7 @@ Split every open unknown by when it can resolve. Planning-time unknowns block ap
 
 ## 11. Anti-expansion
 
-Distinct from step 9: this is *known but tangential* work noticed while planning — an adjacent refactor, a "while we're here" cleanup, a scope-adjacent nice-to-have. Route it to Deferred to Follow-Up Work, never into an active unit (`enforces: P4, P6`). The user's explicit ask overrides this default — if they asked for the refactor, it's in scope, not deferred. Worked example: a version bump or CHANGELOG entry belongs to `shipping`, never to a planning unit.
+Distinct from step 10: this is *known but tangential* work noticed while planning — an adjacent refactor, a "while we're here" cleanup, a scope-adjacent nice-to-have. Route it to Deferred to Follow-Up Work, never into an active unit (`enforces: P4, P6`). The user's explicit ask overrides this default — if they asked for the refactor, it's in scope, not deferred. Worked example: a version bump or CHANGELOG entry belongs to `shipping`, never to a planning unit.
 
 ## 12. No-placeholder rule
 
@@ -113,7 +113,7 @@ Before finalizing, the author (not a subagent) checks:
   stays a planning-time unknown unless the user narrows the claim.
 - **Spec coverage** — every spec requirement traces to a unit; list gaps.
 - **Scenario coverage** — re-walk the Scenario coverage map against the final unit set: every S-ID still completes end to end (deepening and unit edits are the likeliest breakage vector), and every map row names real scenario evidence (integration test, or observable verification for non-code plans). `enforces: P8`
-- **Placeholder scan** — search for step 11's red flags; fix inline.
+- **Placeholder scan** — search for step 12's red flags; fix inline.
 - **Type consistency** — do signatures, names, and types agree across units (a function `clearLayers()` in U2 and `clearFullLayers()` in U5 is a bug)?
 - **Callers + invariants** — for code units, who calls the functions being changed, and what invariants must still hold afterward?
 - **Retro carryover** — does a prior retrospective's carry-forward item belong in this plan? Check the durable tracker before finalizing.
