@@ -1,6 +1,6 @@
 # Deepening Pass
 
-The confidence check `planning` step 13 invokes after self-review. Distinct from a general document review (clarity, simplification, scope control): this pass strengthens rationale, sequencing, risk treatment, and system-wide thinking when a plan is structurally sound but still thin somewhere. `enforces: P4` (complexity must earn its keep — the pass itself must not manufacture ceremony where nothing scored).
+The confidence check `planning` step 15 invokes after self-review. Distinct from a general document review (clarity, simplification, scope control): this pass strengthens rationale, sequencing, risk treatment, and system-wide thinking when a plan is structurally sound but still thin somewhere. `enforces: P4` (complexity must earn its keep — the pass itself must not manufacture ceremony where nothing scored).
 
 ## 1. Score the plan against six trigger categories
 
@@ -17,7 +17,7 @@ Walk the plan once; a category "scores" when its checklist below finds a real in
 
 ## 2. Gate: skip when nothing scores
 
-If no category scores, stop here — report "confidence check passed, no sections need strengthening" and proceed to step 14. Running personas over a plan with nothing to find is ceremony without a requirement behind it (`enforces: P4`). Do not force a score to justify running the pass.
+If no category scores, stop here — report "confidence check passed, no sections need strengthening" and proceed to step 16. Running personas over a plan with nothing to find is ceremony without a requirement behind it (`enforces: P4`). Do not force a score to justify running the pass.
 
 ## 3. Persona roster
 
