@@ -827,6 +827,26 @@ case_github_hostname_spoof_failure() {
   [[ ! -s "$GH_STUB_LOG" ]] || { echo 'ASSERTION=hostname spoof contacted gh'; return 1; }
 }
 
+case_github_url_suffix_secret_failure() {
+  local suffix out code
+  for suffix in '?token=fixture-secret' '#fixture-secret'; do
+    git -C "$FIXTURE_REPO" remote set-url origin "https://github.com/fixture-owner/fixture-repo.git$suffix"
+    git -C "$FIXTURE_REPO" remote set-url --push origin "https://github.com/fixture-owner/fixture-repo.git$suffix"
+    rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+    : >"$GH_STUB_LOG"
+    set +e
+    out="$(cd "$FIXTURE_REPO" && env -u RELEASE_PUBLICATION_FIXTURE_ROOT -u GH_TOKEN -u GITHUB_TOKEN \
+      HOME="$FIXTURE_HOME" TMPDIR="$FIXTURE_TMPDIR" PATH="$FIXTURE_BIN:$PYTHON_DIR:/usr/bin:/bin" \
+      bash "$ROOT/scripts/release-publication.sh" prepare --version 9.8.7 --headless 2>&1)"; code=$?
+    set -e
+    [[ $code -ne 0 ]] || { echo 'ASSERTION=query/fragment GitHub URL was accepted'; return 1; }
+    assert_contains "$out" 'fetch and push URLs must both target github.com' unsafe-url-component
+    [[ "$out" != *fixture-secret* ]] || { echo 'ASSERTION=URL secret appeared in diagnostic output'; return 1; }
+    [[ ! -e "$PUBLICATION_PACKET" && ! -e "$PUBLICATION_NOTES" ]] || { echo 'ASSERTION=unsafe URL produced publication artifacts'; return 1; }
+    [[ ! -s "$GH_STUB_LOG" ]] || { echo 'ASSERTION=unsafe URL contacted gh'; return 1; }
+  done
+}
+
 case_divergent_branch_failure() {
   local other="$CASE_ROOT/other"; git clone "file://$FIXTURE_REMOTE" "$other" >/dev/null 2>&1
   git -C "$other" config user.name fixture; git -C "$other" config user.email fixture@example.invalid
@@ -1238,6 +1258,7 @@ run_prepare_group() {
   run_fixture_case non_github_production production_target_rejection case_non_github_production_failure pass
   run_fixture_case mismatched_pushurl github_fetch_with_non_github_push_rejected case_mismatched_pushurl_failure pass
   run_fixture_case github_hostname_spoof file_scheme_with_github_hostname_rejected case_github_hostname_spoof_failure pass
+  run_fixture_case github_url_suffix_secret query_and_fragment_rejected_without_persistence case_github_url_suffix_secret_failure pass
   run_fixture_case divergent_branch ancestry_conflict case_divergent_branch_failure pass
   run_fixture_case fixture_escape inventory_boundary_rejection case_fixture_escape_failure pass
   run_fixture_case packet_forced_failure packet_before_atomic_rename case_packet_forced_failure pass

@@ -42,14 +42,12 @@ def inside(root, value):
 
 
 def strip_credentials(url):
-    if url.startswith("file://"):
-        return url
     if "://" in url:
         parsed = urlsplit(url)
         host = parsed.hostname or ""
         if parsed.port:
             host += f":{parsed.port}"
-        return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+        return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
     return re.sub(r"^[^@]+@", "", url)
 
 
@@ -57,6 +55,8 @@ def github_repository(url):
     if "://" in url:
         parsed = urlsplit(url)
         if parsed.scheme not in ("https", "ssh"):
+            return None
+        if parsed.query or parsed.fragment:
             return None
         if parsed.hostname != "github.com" or parsed.port is not None or parsed.password is not None:
             return None
