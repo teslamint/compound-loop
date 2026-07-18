@@ -50,6 +50,7 @@ Untracked files: review tracked changes only, list exclusions. No base resolvabl
 
 Write a 2-3 line intent summary (PR title/body, commits, `plan:`, conversation) and pass it to every lane -- it shapes depth, not lane selection. Fold the following in as context, never as lanes:
 
+- **Requirements Completeness artifact set**: when review is checking requirements completeness, treat the approved spec, the approved plan, and every deviation addendum referenced by those approved artifacts as one contract set. Use `docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md` for the observable-behavior definition, addendum contents, the incomplete-release recovery example that requires an addendum, and the internal-refactor exemption when interfaces, state transitions, persistence, consent boundaries, and terminal behavior are unchanged.
 - **Plan discovery**: `plan:` arg > a single unambiguous PR-body match > branch-keyword auto-discovery; tag `plan_source: explicit | inferred`. Feeds Requirements Completeness in Step 8.
 - **Learnings**: check `docs/solutions/` for prior issues touching this diff's modules; surface hits as "Known Pattern."
 - **Previous comments**: PR-only, and only when prior review threads exist -- fold into context so lanes verify comments were actually addressed, rather than spawning a redundant lane for it.
@@ -80,6 +81,8 @@ Full pipeline in `references/merge-pipeline.md` (fingerprint dedup, cross-lane p
 
 - **Default**: markdown, pipe-delimited finding tables grouped by severity (no `Field:` blocks, no box-drawing separators, ASCII `->` not middot) plus an Actionable Findings summary.
 - **`mode:agent`**: one raw JSON object -- no code fence -- matching `schemas/review-envelope.schema.json` exactly. `clean` = no P0-P2 actionable findings; `actionable` = fixable findings present; `blocked` = open P0/P1 the caller must resolve before advancing.
+
+Requirements Completeness rule: if the diff confirms observable behavior absent from or contradictory to the approved artifact set, and no separate committed deviation addendum records that behavior, the finding stays actionable and the verdict cannot be `clean`. Preserve the existing plan-conflict handling outside this skill's suppression logic: a plan-mandated conflict still goes back to the caller/human rather than being silently authorized by the addendum rule.
 
 ## Suppression Policy
 
