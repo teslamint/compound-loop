@@ -133,7 +133,15 @@ requires a newly derived packet and fresh approval.
   `schemas/headless-contract.md` using the canonical placeholder families
   `Publication complete — v<version>`, `Publication skipped — <reason>`, and
   `Publication failed — <reason>`. Keep contract version `v1` and the existing
-  `release` row/semantics byte-for-byte unchanged.
+  `release` row/semantics byte-for-byte unchanged. In the same change, extend
+  `scripts/validate.sh` check 6 so `release publish` joins the producer tuple,
+  `Publication` joins the consumer keyword regex, `producer_key` maps it to
+  `release publish`, both canonical/distinct count assertions and their
+  diagnostic/ok message literals change from 12 to 15, and all three new
+  placeholders participate in byte-drift and coverage checks. Put the three
+  canonical Publication placeholder forms in inline backticks in
+  `skills/release/SKILL.md`; keep concrete runtime instantiations out of inline
+  backticks under the existing authoring rule.
 - **R11 — Stateful planning evidence**: the implementation plan must contain a
   real Mutation/failure-state matrix for every publication transition and map
   every applicable cell to disposable fixture evidence before unit review.
@@ -305,7 +313,11 @@ implicit-tag-creation refusal; canonical title/target/draft/prerelease repair;
 conflicting remote tag; explicit `v0.2.0` protection and repair; successful
 headless packet creation; headless preflight failure with no executable packet;
 gate cancellation; a state change before each individual transition; wrong
-injected mechanism; and post-state/next-invocation verification.
+injected mechanism; post-state/next-invocation verification; and
+`scripts/test-signal-drift.sh` Case I, which makes a one-byte change inside the
+unique inline Publication success placeholder while preserving its leading
+keyword and proves check 6 reports the correct file, line, producer, state, and
+byte mismatch.
 
 No test or review step may contact or mutate the real `origin`, GitHub release
 API, credential store, payment/deployment system, or any non-fixture target.
@@ -378,8 +390,12 @@ API, credential store, payment/deployment system, or any non-fixture target.
    unchanged.
    - **Measured by**: `bash scripts/test-release-publication.sh` asserts contract
      `v1`, the exact preexisting `release` producer row, and one additive
-     `release publish` row; `bash scripts/test-signal-drift.sh` and
-     `bash scripts/validate.sh` both exit 0.
+     `release publish` row; `bash scripts/test-signal-drift.sh` Case I mutates
+     one byte inside the inline Publication success placeholder and proves
+     check 6 identifies producer `release publish`, state `success`, and the
+     mismatch; the full signal-drift suite exits 0; and
+     `bash scripts/validate.sh` reports exactly 15 canonical pairwise-distinct
+     signals before exiting 0.
 9. The approved implementation plan contains the first real stateful-ceremony
    matrix and retained evidence ownership for publication.
    - **Measured by**: a reviewer maps every durable publication transition to
