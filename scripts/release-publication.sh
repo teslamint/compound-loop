@@ -56,11 +56,17 @@ def strip_credentials(url):
 def github_repository(url):
     if "://" in url:
         parsed = urlsplit(url)
-        if parsed.hostname != "github.com" or parsed.port is not None:
+        if parsed.scheme not in ("https", "ssh"):
+            return None
+        if parsed.hostname != "github.com" or parsed.port is not None or parsed.password is not None:
+            return None
+        if parsed.scheme == "https" and parsed.username is not None:
+            return None
+        if parsed.scheme == "ssh" and parsed.username != "git":
             return None
         path = parsed.path.strip("/")
     else:
-        match = re.fullmatch(r"(?:[^@/:]+@)?github\.com:([^?#]+)", url)
+        match = re.fullmatch(r"git@github\.com:([^?#]+)", url)
         if not match:
             return None
         path = match.group(1).strip("/")

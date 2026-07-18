@@ -725,6 +725,21 @@ case_mismatched_pushurl_failure() {
   [[ ! -s "$GH_STUB_LOG" ]] || { echo 'ASSERTION=mismatched pushurl contacted gh'; return 1; }
 }
 
+case_github_hostname_spoof_failure() {
+  git -C "$FIXTURE_REPO" remote set-url origin file://github.com/fixture-owner/fixture-repo.git
+  git -C "$FIXTURE_REPO" remote set-url --push origin file://github.com/fixture-owner/fixture-repo.git
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  local out code
+  set +e
+  out="$(cd "$FIXTURE_REPO" && env -u RELEASE_PUBLICATION_FIXTURE_ROOT -u GH_TOKEN -u GITHUB_TOKEN \
+    HOME="$FIXTURE_HOME" TMPDIR="$FIXTURE_TMPDIR" PATH="$FIXTURE_BIN:$PYTHON_DIR:/usr/bin:/bin" \
+    bash "$ROOT/scripts/release-publication.sh" prepare --version 9.8.7 --headless 2>&1)"; code=$?
+  set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'fetch and push URLs must both target github.com' hostname-spoof
+  [[ ! -e "$PUBLICATION_PACKET" && ! -e "$PUBLICATION_NOTES" ]]
+  [[ ! -s "$GH_STUB_LOG" ]] || { echo 'ASSERTION=hostname spoof contacted gh'; return 1; }
+}
+
 case_divergent_branch_failure() {
   local other="$CASE_ROOT/other"; git clone "file://$FIXTURE_REMOTE" "$other" >/dev/null 2>&1
   git -C "$other" config user.name fixture; git -C "$other" config user.email fixture@example.invalid
@@ -873,6 +888,7 @@ run_prepare_group() {
   run_fixture_case unreadable_remote remote_inspection_precondition case_unreadable_remote_failure pass
   run_fixture_case non_github_production production_target_rejection case_non_github_production_failure pass
   run_fixture_case mismatched_pushurl github_fetch_with_non_github_push_rejected case_mismatched_pushurl_failure pass
+  run_fixture_case github_hostname_spoof file_scheme_with_github_hostname_rejected case_github_hostname_spoof_failure pass
   run_fixture_case divergent_branch ancestry_conflict case_divergent_branch_failure pass
   run_fixture_case fixture_escape inventory_boundary_rejection case_fixture_escape_failure pass
   run_fixture_case packet_forced_failure packet_before_atomic_rename case_packet_forced_failure pass
