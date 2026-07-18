@@ -114,6 +114,31 @@ def require_repo():
     if repo != expected_repo:
         fail("unexpected repository target")
 
+def require_options(positional, value_options=(), flag_options=()):
+    index = positional
+    seen = set()
+    while index < len(args):
+        item = args[index]
+        if item in flag_options:
+            if item in seen:
+                fail(f"duplicate option {item}")
+            seen.add(item)
+            index += 1
+        elif item in value_options:
+            if item in seen or index + 1 >= len(args) or args[index + 1].startswith("--"):
+                fail(f"invalid option {item}")
+            seen.add(item)
+            index += 2
+        elif any(item.startswith(name + "=") for name in value_options):
+            name = item.split("=", 1)[0]
+            if name in seen or not item.split("=", 1)[1]:
+                fail(f"invalid option {name}")
+            seen.add(name)
+            index += 1
+        else:
+            fail(f"forbidden or malformed option {item}")
+    return seen
+
 def notes_text():
     notes = pathlib.Path(option("--notes-file"))
     root = pathlib.Path(os.environ["RELEASE_PUBLICATION_FIXTURE_ROOT"]).resolve()
@@ -142,15 +167,21 @@ elif args == ["auth", "status", "--hostname", "github.com"]:
 elif len(args) >= 2 and args[:2] == ["api", f"repos/{expected_repo}"]:
     if args[2:] not in ([], ["--jq", ".full_name"], ["--jq", ".nameWithOwner"]):
         fail("unrecognized api arguments")
+    if not state.get("repo_read", True):
+        raise SystemExit(2)
     print(expected_repo if args[2:] else json.dumps({"full_name": expected_repo}))
 elif len(args) >= 3 and args[:2] == ["release", "view"]:
+    require_options(3, ("--repo", "--json"))
     require_repo()
     tag = args[2]
+    if state.get("page_read_error"):
+        raise SystemExit(2)
     page = state["page"]
-    if page is None or page["tagName"] != tag:
+    if page is None or (page["tagName"] != tag and not state.get("page_lookup_any")):
         raise SystemExit(1)
     print(json.dumps(page, sort_keys=True))
 elif len(args) >= 3 and args[:2] == ["release", "create"]:
+    options = require_options(3, ("--repo", "--title", "--notes-file"), ("--verify-tag", "--prerelease"))
     require_repo()
     tag = args[2]
     if "--verify-tag" not in args or state["page"] is not None:
@@ -172,6 +203,7 @@ elif len(args) >= 3 and args[:2] == ["release", "create"]:
     save(state)
     print("https://example.invalid/fixture/release")
 elif len(args) >= 3 and args[:2] == ["release", "edit"]:
+    require_options(3, ("--repo", "--title", "--notes-file", "--draft", "--prerelease"), ("--verify-tag",))
     require_repo()
     tag = args[2]
     page = state["page"]
@@ -213,6 +245,7 @@ setup_fixture() {
   git -C "$FIXTURE_REPO" init --initial-branch=main >/dev/null
   git -C "$FIXTURE_REPO" config user.name "Publication Fixture"
   git -C "$FIXTURE_REPO" config user.email "fixture@example.invalid"
+  printf '.release/\n' >>"$FIXTURE_REPO/.git/info/exclude"
 
   mkdir -p "$FIXTURE_REPO/.claude-plugin" "$FIXTURE_REPO/.codex-plugin"
   printf '{"version":"9.8.6"}\n' >"$FIXTURE_REPO/.claude-plugin/plugin.json"
@@ -223,6 +256,7 @@ setup_fixture() {
   git -C "$FIXTURE_REPO" commit -m "fixture: base" >/dev/null
   git -C "$FIXTURE_REPO" remote add origin "file://$FIXTURE_REMOTE"
   git -C "$FIXTURE_REPO" push origin main >/dev/null 2>&1
+  git -C "$FIXTURE_REPO" remote set-head origin main
 
   printf '{"version":"9.8.7"}\n' >"$FIXTURE_REPO/.claude-plugin/plugin.json"
   printf '{"version":"9.8.7"}\n' >"$FIXTURE_REPO/.codex-plugin/plugin.json"
@@ -381,20 +415,14 @@ case_cleanup_pass() {
 
 case_cleanup_failure() {
   assert_fixture_boundary
+  printf '%s\n' intentional-cleanup-probe >"$CLEANUP_PROBE_SENTINEL"
   echo "ASSERTION=intentional cleanup probe"
   return 1
 }
 
-case_missing_engine() {
-  local engine="$ROOT/scripts/release-publication.sh" out code remote_before remote_after
-  assert_fixture_boundary
-  if [[ -e "$engine" ]]; then
-    echo "ASSERTION=U1 expected publication engine to be absent"
-    return 1
-  fi
-  remote_before="$(git --git-dir="$FIXTURE_REMOTE" show-ref | sort)"
-  set +e
-  out="$(
+invoke_prepare() {
+  local engine="$ROOT/scripts/release-publication.sh"
+  (
     cd "$FIXTURE_REPO" &&
     env -u GH_TOKEN -u GITHUB_TOKEN \
       HOME="$FIXTURE_HOME" TMPDIR="$FIXTURE_TMPDIR" \
@@ -402,24 +430,359 @@ case_missing_engine() {
       GH_STUB_STATE="$GH_STUB_STATE" GH_STUB_LOG="$GH_STUB_LOG" \
       GH_STUB_BARE_REMOTE="$FIXTURE_REMOTE" GH_STUB_REPO="fixture-owner/fixture-repo" \
       RELEASE_PUBLICATION_FIXTURE_ROOT="$CASE_ROOT" \
-      bash "$engine" prepare --version 9.8.7 --headless 2>&1
-  )"
-  code=$?
-  set -e
-  remote_after="$(git --git-dir="$FIXTURE_REMOTE" show-ref | sort)"
+      bash "$engine" prepare --version "${TEST_VERSION:-9.8.7}" "$@"
+  )
+}
 
-  [[ $code -ne 0 ]] || { echo "ASSERTION=missing publication engine unexpectedly exited zero"; return 1; }
-  ((${#out} <= 4096)) || { echo "ASSERTION=missing engine output exceeded 4096 bytes"; return 1; }
-  assert_contains "$out" "$engine" missing-engine-path
-  assert_eq "$remote_after" "$remote_before" remote-unchanged
-  [[ ! -s "$GH_STUB_LOG" ]] || { echo "ASSERTION=missing engine contacted gh stub"; return 1; }
-  echo "ASSERTION=missing publication engine"
-  return 1
+assert_no_outward_mutation() {
+  local state
+  state="$(cat "$GH_STUB_STATE")"
+  assert_contains "$state" '"create":0' no-page-create
+  assert_contains "$state" '"edit":0' no-page-edit
+}
+
+case_prepare_fast_forwardable() {
+  local out expected_notes_sha packet_sha
+  assert_fixture_boundary
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  out="$(invoke_prepare --headless)"
+  assert_eq "$out" "$(printf '%s\n' \
+    'PUBLICATION_STATUS=ready' \
+    'PUBLICATION_CLASS=fast-forwardable' \
+    'PUBLICATION_PACKET=.release/publication-v9.8.7.md' \
+    "PUBLICATION_PACKET_SHA256=$(python3 - "$PUBLICATION_PACKET" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)")" exact-ready-output
+  cmp -s "$PUBLICATION_NOTES" <(printf '%s' '- Fixture note with spaces.
+- Fixture note with shell text: $(not-run); [still-data].
+') || { echo "ASSERTION=exact notes bytes differ"; return 1; }
+  expected_notes_sha="$(python3 - "$PUBLICATION_NOTES" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+  grep -F -q "Notes SHA-256: \`$expected_notes_sha\`" "$PUBLICATION_PACKET"
+  grep -F -q 'Ordered transitions: `branch -> tag -> page-create`' "$PUBLICATION_PACKET"
+  grep -F -q "$(git -C "$FIXTURE_REPO" rev-parse HEAD)" "$PUBLICATION_PACKET"
+  assert_eq "$(grep -c '^```bash$' "$PUBLICATION_PACKET")" 1 one-bash-fence
+  assert_no_outward_mutation
+}
+
+case_headless_prepare_only() {
+  local refs_before refs_after state_before state_after out
+  refs_before="$(git --git-dir="$FIXTURE_REMOTE" show-ref | sort)"
+  state_before="$(cat "$GH_STUB_STATE")"
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  out="$(invoke_prepare --headless)"
+  refs_after="$(git --git-dir="$FIXTURE_REMOTE" show-ref | sort)"
+  state_after="$(cat "$GH_STUB_STATE")"
+  assert_contains "$out" 'PUBLICATION_STATUS=ready' headless-ready
+  assert_eq "$refs_after" "$refs_before" headless-refs-unchanged
+  assert_eq "$state_after" "$state_before" headless-page-unchanged
+  [[ -s "$PUBLICATION_PACKET" && -s "$PUBLICATION_NOTES" ]]
+}
+
+set_page() {
+  local body_file="$1" title="$2" draft="$3" prerelease="$4"
+  python3 - "$GH_STUB_STATE" "$body_file" "$title" "$draft" "$prerelease" <<'PY'
+import json, pathlib, sys
+state_path, body_path, title, draft, prerelease = sys.argv[1:]
+path = pathlib.Path(state_path)
+state = json.loads(path.read_text())
+state["page"] = {"tagName":"v9.8.7", "name":title,
+                 "body":pathlib.Path(body_path).read_text(),
+                 "isDraft":draft == "true", "isPrerelease":prerelease == "true",
+                 "targetCommitish":"informational-only"}
+path.write_text(json.dumps(state, sort_keys=True) + "\n")
+PY
+}
+
+case_branch_ready_tag_missing() {
+  git -C "$FIXTURE_REPO" push origin HEAD:refs/heads/main >/dev/null 2>&1
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  assert_contains "$(invoke_prepare --headless)" 'PUBLICATION_CLASS=branch-ready-tag-missing' branch-ready
+  grep -F -q 'Ordered transitions: `tag -> page-create`' "$PUBLICATION_PACKET"
+  assert_no_outward_mutation
+}
+
+case_refs_ready_page_missing() {
+  git -C "$FIXTURE_REPO" push origin HEAD:refs/heads/main refs/tags/v9.8.7:refs/tags/v9.8.7 >/dev/null 2>&1
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  assert_contains "$(invoke_prepare --headless)" 'PUBLICATION_CLASS=refs-ready-page-missing' refs-ready
+  grep -F -q 'Ordered transitions: `page-create`' "$PUBLICATION_PACKET"
+}
+
+case_fully_matching_noop() {
+  git -C "$FIXTURE_REPO" push origin HEAD:refs/heads/main refs/tags/v9.8.7:refs/tags/v9.8.7 >/dev/null 2>&1
+  set_page "$PUBLICATION_NOTES" 'fixture-repo v9.8.7' false false
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  assert_eq "$(invoke_prepare --headless)" "$(printf '%s\n' 'PUBLICATION_STATUS=noop' 'PUBLICATION_CLASS=fully-matching')" noop-output
+  [[ ! -e "$PUBLICATION_PACKET" ]] || { echo 'ASSERTION=noop created packet'; return 1; }
+}
+
+case_repairable_page() {
+  git -C "$FIXTURE_REPO" push origin HEAD:refs/heads/main refs/tags/v9.8.7:refs/tags/v9.8.7 >/dev/null 2>&1
+  set_page "$PUBLICATION_NOTES" 'wrong title' true false
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  assert_contains "$(invoke_prepare --repair --headless)" 'PUBLICATION_CLASS=repairable-page' repairable-page
+  grep -F -q 'Ordered transitions: `page-edit`' "$PUBLICATION_PACKET"
+  ! grep -Eq -- 'gh release edit.*(--tag|--target|--latest|--delete)' "$PUBLICATION_PACKET"
+}
+
+case_unordered_page() {
+  git -C "$FIXTURE_REPO" push origin HEAD:refs/heads/main >/dev/null 2>&1
+  set_page "$PUBLICATION_NOTES" 'fixture-repo v9.8.7' false false
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  local out code
+  set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'exists before the matching remote tag' unordered-normal-fails
+  out="$(invoke_prepare --repair --headless)"
+  assert_contains "$out" 'PUBLICATION_CLASS=repairable-unordered-page' unordered-repair
+  grep -F -q 'Ordered transitions: `tag`' "$PUBLICATION_PACKET"
+}
+
+case_different_tag_object_conflict() {
+  git -C "$FIXTURE_REPO" tag -a v-other-object -m 'different annotation' HEAD
+  git -C "$FIXTURE_REPO" push origin HEAD:refs/heads/main refs/tags/v-other-object:refs/tags/v9.8.7 >/dev/null 2>&1
+  local out code
+  set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'annotated tag identity conflicts' different-tag-object
+}
+
+case_protected_version() {
+  git -C "$FIXTURE_REPO" tag -d v9.8.7 >/dev/null
+  git -C "$FIXTURE_REPO" tag -a v0.2.0 -m protected
+  sed -i.bak 's/9\.8\.7/0.2.0/g' "$FIXTURE_REPO/.claude-plugin/plugin.json" "$FIXTURE_REPO/.codex-plugin/plugin.json" "$FIXTURE_REPO/CHANGELOG.md"
+  find "$FIXTURE_REPO" -name '*.bak' -delete
+  git -C "$FIXTURE_REPO" add . && git -C "$FIXTURE_REPO" commit --amend --no-edit >/dev/null
+  git -C "$FIXTURE_REPO" tag -f -a v0.2.0 -m protected >/dev/null
+  TEST_VERSION=0.2.0
+  export TEST_VERSION
+  local out
+  out="$(invoke_prepare --headless)"
+  assert_contains "$out" 'PUBLICATION_REASON=protected-version-requires-repair' protected-repair-direction
+  unset TEST_VERSION
+}
+
+case_prerelease_packet() {
+  git -C "$FIXTURE_REPO" tag -d v9.8.7 >/dev/null
+  sed -i.bak 's/9\.8\.7/9.8.7-rc.1/g' "$FIXTURE_REPO/.claude-plugin/plugin.json" "$FIXTURE_REPO/.codex-plugin/plugin.json" "$FIXTURE_REPO/CHANGELOG.md"
+  find "$FIXTURE_REPO" -name '*.bak' -delete
+  git -C "$FIXTURE_REPO" add . && git -C "$FIXTURE_REPO" commit --amend --no-edit >/dev/null
+  git -C "$FIXTURE_REPO" tag -a v9.8.7-rc.1 -m prerelease
+  TEST_VERSION=9.8.7-rc.1; export TEST_VERSION
+  PUBLICATION_PACKET="$FIXTURE_REPO/.release/publication-v9.8.7-rc.1.md"
+  PUBLICATION_NOTES="$FIXTURE_REPO/.release/publication-v9.8.7-rc.1-notes.md"
+  local out; out="$(invoke_prepare --headless)"
+  assert_contains "$out" 'PUBLICATION_CLASS=fast-forwardable' prerelease-class
+  grep -F -q 'Canonical prerelease: `true`' "$PUBLICATION_PACKET"
+  grep -F -q -- '--prerelease' "$PUBLICATION_PACKET"
+  unset TEST_VERSION
+}
+
+case_remote_later_repair() {
+  printf later >"$FIXTURE_REPO/later"; git -C "$FIXTURE_REPO" add .; git -C "$FIXTURE_REPO" commit -m later >/dev/null
+  git -C "$FIXTURE_REPO" push origin HEAD:refs/heads/main >/dev/null 2>&1
+  local out code
+  set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'HEAD must equal' later-normal-fails
+  out="$(invoke_prepare --repair --headless)"
+  assert_contains "$out" 'PUBLICATION_CLASS=branch-ready-tag-missing' later-repair
+  ! grep -F -q 'git push origin '"$(git -C "$FIXTURE_REPO" rev-parse 'v9.8.7^{}')"':refs/heads/main' "$PUBLICATION_PACKET"
+}
+
+case_prepare_argument_errors() {
+  local out code engine="$ROOT/scripts/release-publication.sh"
+  set +e; out="$(cd "$FIXTURE_REPO" && bash "$engine" prepare --version nope 2>&1)"; code=$?; set -e
+  [[ $code -eq 2 ]]; assert_contains "$out" 'not valid SemVer' invalid-semver
+  set +e; out="$(cd "$FIXTURE_REPO" && bash "$engine" prepare --version 9.8.7 --wat 2>&1)"; code=$?; set -e
+  [[ $code -eq 2 ]]; assert_contains "$out" 'unknown argument' unknown-argument
+}
+
+case_dirty_tree_failure() {
+  printf dirty >>"$FIXTURE_REPO/README.md"
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'worktree must be clean' dirty-tree
+  [[ ! -e "$PUBLICATION_PACKET" ]]
+}
+
+case_non_default_branch_failure() {
+  git -C "$FIXTURE_REPO" checkout -b other >/dev/null 2>&1
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'not the default branch' non-default
+}
+
+case_advanced_head_failure() {
+  printf advanced >>"$FIXTURE_REPO/README.md"; git -C "$FIXTURE_REPO" add .; git -C "$FIXTURE_REPO" commit -m advanced >/dev/null
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'HEAD must equal' advanced-head
+}
+
+case_manifest_changelog_failure() {
+  printf '{"version":"1.0.0"}\n' >"$FIXTURE_REPO/.codex-plugin/plugin.json"
+  git -C "$FIXTURE_REPO" add . && git -C "$FIXTURE_REPO" commit --amend --no-edit >/dev/null
+  git -C "$FIXTURE_REPO" tag -f -a v9.8.7 -m fixture >/dev/null
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'manifests do not match' manifest-mismatch
+}
+
+case_changelog_mismatch_failure() {
+  python3 - "$FIXTURE_REPO/CHANGELOG.md" <<'PY'
+import pathlib, sys
+p=pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("## [9.8.7]", "## [9.8.8]", 1))
+PY
+  git -C "$FIXTURE_REPO" add . && git -C "$FIXTURE_REPO" commit --amend --no-edit >/dev/null
+  git -C "$FIXTURE_REPO" tag -f -a v9.8.7 -m fixture >/dev/null
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'newest CHANGELOG section does not match' changelog-mismatch
+}
+
+case_inactive_auth_failure() {
+  python3 - "$GH_STUB_STATE" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); s["auth"]=False; p.write_text(json.dumps(s)+"\n")
+PY
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'authentication is inactive' inactive-auth
+}
+
+case_missing_gh_failure() {
+  rm -f "$FIXTURE_BIN/gh"
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'fixture target escapes root: gh' missing-gh
+}
+
+case_unreadable_repository_failure() {
+  python3 - "$GH_STUB_STATE" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); s["repo_read"]=False; p.write_text(json.dumps(s)+"\n")
+PY
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'repository state is unreadable' unreadable-repository
+}
+
+case_unreadable_page_failure() {
+  python3 - "$GH_STUB_STATE" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); s["page_read_error"]=True; p.write_text(json.dumps(s)+"\n")
+PY
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'release page state is unreadable' unreadable-page
+}
+
+case_conflicting_page_identity_failure() {
+  set_page "$PUBLICATION_NOTES" 'fixture-repo v9.8.7' false false
+  python3 - "$GH_STUB_STATE" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); s["page"]["tagName"]="v-other"; s["page_lookup_any"]=True; p.write_text(json.dumps(s)+"\n")
+PY
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'PUBLICATION_CLASS=conflicting' page-conflict-class
+  assert_contains "$out" 'page identity conflicts' page-conflict-message
+}
+
+case_unreadable_remote_failure() {
+  mv "$FIXTURE_REMOTE" "$FIXTURE_REMOTE.offline"
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'remote refs are unreadable' unreadable-remote
+}
+
+case_non_github_production_failure() {
+  local out code
+  set +e
+  out="$(cd "$FIXTURE_REPO" && env -u RELEASE_PUBLICATION_FIXTURE_ROOT -u GH_TOKEN -u GITHUB_TOKEN \
+    HOME="$FIXTURE_HOME" TMPDIR="$FIXTURE_TMPDIR" PATH="$FIXTURE_BIN:$PYTHON_DIR:/usr/bin:/bin" \
+    bash "$ROOT/scripts/release-publication.sh" prepare --version 9.8.7 --headless 2>&1)"; code=$?
+  set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'origin is not a GitHub repository' non-github-production
+}
+
+case_divergent_branch_failure() {
+  local other="$CASE_ROOT/other"; git clone "file://$FIXTURE_REMOTE" "$other" >/dev/null 2>&1
+  git -C "$other" config user.name fixture; git -C "$other" config user.email fixture@example.invalid
+  printf divergent >"$other/divergent"; git -C "$other" add .; git -C "$other" commit -m divergent >/dev/null; git -C "$other" push origin main >/dev/null 2>&1
+  local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'conflicts with the release commit' divergent
+}
+
+case_fixture_escape_failure() {
+  local out code
+  set +e
+  out="$(cd "$FIXTURE_REPO" && env HOME=/tmp TMPDIR="$FIXTURE_TMPDIR" PATH="$FIXTURE_BIN:$PYTHON_DIR:/usr/bin:/bin" \
+    GH_STUB_STATE="$GH_STUB_STATE" GH_STUB_LOG="$GH_STUB_LOG" GH_STUB_BARE_REMOTE="$FIXTURE_REMOTE" GH_STUB_REPO=fixture-owner/fixture-repo \
+    RELEASE_PUBLICATION_FIXTURE_ROOT="$CASE_ROOT" bash "$ROOT/scripts/release-publication.sh" prepare --version 9.8.7 --headless 2>&1)"; code=$?
+  set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'fixture target escapes root: HOME' fixture-escape
+}
+
+case_packet_forced_failure() {
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  local out code
+  set +e; out="$(RELEASE_PUBLICATION_FAIL_AT=packet-before-rename invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" 'packet-before-rename' intended-injection
+  [[ ! -e "$PUBLICATION_PACKET" ]]; [[ -s "$PUBLICATION_NOTES" ]]
+  ! find "$FIXTURE_REPO/.release" -name '*.tmp.*' -print -quit | grep -q .
+  assert_no_outward_mutation
+}
+
+case_packet_rerun() {
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  local first_sha second_sha refs_before refs_after state_before state_after
+  refs_before="$(git --git-dir="$FIXTURE_REMOTE" show-ref | sort)"; state_before="$(cat "$GH_STUB_STATE")"
+  invoke_prepare --headless >/dev/null
+  first_sha="$(python3 - "$PUBLICATION_PACKET" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+  printf stale >>"$PUBLICATION_PACKET"
+  invoke_prepare --headless >/dev/null
+  second_sha="$(python3 - "$PUBLICATION_PACKET" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+  assert_eq "$second_sha" "$first_sha" deterministic-fresh-rerun
+  ! grep -F -q stale "$PUBLICATION_PACKET"
+  refs_after="$(git --git-dir="$FIXTURE_REMOTE" show-ref | sort)"; state_after="$(cat "$GH_STUB_STATE")"
+  assert_eq "$refs_after" "$refs_before" rerun-refs-unchanged
+  assert_eq "$state_after" "$state_before" rerun-page-unchanged
+}
+
+case_packet_compensation() {
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  invoke_prepare --headless >/dev/null
+  [[ -s "$PUBLICATION_PACKET" ]]
+  local out code
+  set +e; out="$(RELEASE_PUBLICATION_FAIL_AT=packet-before-rename invoke_prepare --headless 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" packet-before-rename compensation-marker
+  [[ ! -e "$PUBLICATION_PACKET" ]] || { echo 'ASSERTION=older executable packet survived notes replacement'; return 1; }
+  [[ -s "$PUBLICATION_NOTES" ]]
+  ! grep -q '^```bash$' "$PUBLICATION_NOTES"
+  ! find "$FIXTURE_REPO/.release" -name '*.tmp.*' -print -quit | grep -q .
+}
+
+case_packet_cancellation_abort() {
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  local out code refs_before refs_after state_before state_after
+  refs_before="$(git --git-dir="$FIXTURE_REMOTE" show-ref | sort)"; state_before="$(cat "$GH_STUB_STATE")"
+  set +e; out="$(invoke_prepare --headless --headless 2>&1)"; code=$?; set -e
+  [[ $code -eq 2 ]]; [[ ! -e "$PUBLICATION_PACKET" && ! -e "$PUBLICATION_NOTES" ]]
+  invoke_prepare --headless >/dev/null
+  [[ -s "$PUBLICATION_PACKET" && -s "$PUBLICATION_NOTES" ]]
+  refs_after="$(git --git-dir="$FIXTURE_REMOTE" show-ref | sort)"; state_after="$(cat "$GH_STUB_STATE")"
+  assert_eq "$refs_after" "$refs_before" cancel-after-write-refs-unchanged
+  assert_eq "$state_after" "$state_before" cancel-after-write-page-unchanged
+  assert_no_outward_mutation
 }
 
 run_fixture_case() {
   local name="$1" mechanism="$2" callback="$3" expected="$4"
   local marker="$HARNESS_TMP_BASE/$name.root" fixture_path code
+  CLEANUP_PROBE_SENTINEL="$HARNESS_TMP_BASE/$name.intentional-sentinel"
+  export CLEANUP_PROBE_SENTINEL
   echo "CASE=$name"
   echo "MECHANISM=$mechanism"
   set +e
@@ -442,7 +805,8 @@ run_fixture_case() {
   if [[ "$expected" == pass && $code -eq 0 ]]; then
     echo "RESULT=PASS"
     PASS_COUNT=$((PASS_COUNT + 1))
-  elif [[ "$expected" == probe-failure && $code -ne 0 && $code -ne 99 ]]; then
+  elif [[ "$expected" == probe-failure && $code -ne 0 && $code -ne 99 ]] \
+    && [[ "$(cat "$CLEANUP_PROBE_SENTINEL" 2>/dev/null || true)" == intentional-cleanup-probe ]]; then
     echo "RESULT=PASS (expected assertion failure; cleanup verified)"
     PASS_COUNT=$((PASS_COUNT + 1))
   else
@@ -457,7 +821,36 @@ run_prepare_group() {
   run_fixture_case quoted_paths_and_notes literal_metacharacter_paths_and_trailing_newline case_quoted_paths_and_notes pass
   run_fixture_case cleanup_on_pass exit_trap_success_path case_cleanup_pass pass
   run_fixture_case cleanup_on_assertion_failure exit_trap_failure_path case_cleanup_failure probe-failure
-  run_fixture_case missing_publication_engine publication_engine_absent case_missing_engine pass
+  run_fixture_case fast_forwardable_prepare read_only_branch_tag_page_packet case_prepare_fast_forwardable pass
+  run_fixture_case headless_prepare_only before_after_refs_and_page_bytes case_headless_prepare_only pass
+  run_fixture_case branch_ready_tag_missing remote_main_equals_release case_branch_ready_tag_missing pass
+  run_fixture_case refs_ready_page_missing matching_remote_refs case_refs_ready_page_missing pass
+  run_fixture_case fully_matching_noop exact_refs_and_page case_fully_matching_noop pass
+  run_fixture_case repairable_page canonical_fields_only case_repairable_page pass
+  run_fixture_case unordered_page repair_only_tag_restoration case_unordered_page pass
+  run_fixture_case different_tag_object same_commit_distinct_annotation case_different_tag_object_conflict pass
+  run_fixture_case protected_version normal_0_2_0_requires_repair case_protected_version pass
+  run_fixture_case prerelease_packet semver_prerelease_maps_to_page_flag case_prerelease_packet pass
+  run_fixture_case remote_later_repair repair_never_mutates_branch case_remote_later_repair pass
+  run_fixture_case invalid_arguments strict_parser case_prepare_argument_errors pass
+  run_fixture_case dirty_tree clean_worktree_precondition case_dirty_tree_failure pass
+  run_fixture_case non_default_branch default_branch_precondition case_non_default_branch_failure pass
+  run_fixture_case advanced_head immediate_publication_precondition case_advanced_head_failure pass
+  run_fixture_case manifest_mismatch synchronized_manifest_precondition case_manifest_changelog_failure pass
+  run_fixture_case changelog_mismatch newest_section_precondition case_changelog_mismatch_failure pass
+  run_fixture_case inactive_auth read_only_capability_precondition case_inactive_auth_failure pass
+  run_fixture_case missing_gh executable_capability_precondition case_missing_gh_failure pass
+  run_fixture_case unreadable_repository repository_api_capability_precondition case_unreadable_repository_failure pass
+  run_fixture_case unreadable_page release_api_capability_precondition case_unreadable_page_failure pass
+  run_fixture_case conflicting_page_identity immutable_page_tag_identity case_conflicting_page_identity_failure pass
+  run_fixture_case unreadable_remote remote_inspection_precondition case_unreadable_remote_failure pass
+  run_fixture_case non_github_production production_target_rejection case_non_github_production_failure pass
+  run_fixture_case divergent_branch ancestry_conflict case_divergent_branch_failure pass
+  run_fixture_case fixture_escape inventory_boundary_rejection case_fixture_escape_failure pass
+  run_fixture_case packet_forced_failure packet_before_atomic_rename case_packet_forced_failure pass
+  run_fixture_case packet_rerun fresh_atomic_replacement case_packet_rerun pass
+  run_fixture_case packet_compensation invalidate_old_packet_and_remove_temps case_packet_compensation pass
+  run_fixture_case packet_cancellation_abort before_write_abort_and_after_write_handoff case_packet_cancellation_abort pass
 }
 
 run_empty_group() {
