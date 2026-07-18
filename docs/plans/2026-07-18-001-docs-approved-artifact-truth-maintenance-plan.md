@@ -39,6 +39,12 @@ records and reuse the existing generalized deviation guidance.
 - **Item 2 stays separate**: this plan does not define a matrix schema or a
   retained forced-failure fixture protocol. It only preserves the existing
   solution's statement that an addendum names verification changes.
+- **Post-approval deviation**: external plan review restored standing feedback
+  from commit `a8a1318`: every spec needs an Assumptions and Preconditions
+  section even when it has no live assumptions. The approved spec made only the
+  evidence table conditional, so
+  `docs/deviations/2026-07-18-approved-artifact-truth-maintenance-001.md`
+  records the expanded observable contract without rewriting the spec.
 
 ## Assumption Recheck
 
@@ -54,8 +60,10 @@ Rechecked at `2026-07-18T18:55:58+09:00` on branch
 | Implementation review lacks a committed-addendum prerequisite. | `rg -n "Plan-mandated conflicts|deviation addendum" skills/implementing/SKILL.md skills/reviewing/SKILL.md` returned only the existing plan-conflict rule. | match |
 | Incomplete-release recovery is a real post-approval deviation. | The retained `sed` commands from the spec again showed direct commit-to-tag approved behavior and the solution's review-discovered untagged-release state. | match |
 
-No contradiction or unavailable result exists, so this plan does not require a
-deviation addendum before finalization.
+No live-assumption recheck produced a contradiction or unavailable result.
+External plan review did introduce the always-present section behavior absent
+from the approved spec, so deviation addendum 001 is required and committed
+before this plan is finalized.
 
 ## File structure
 
@@ -76,7 +84,7 @@ deviation addendum before finalization.
 
 | Scenario | Unit chain | Observable verification |
 |---|---|---|
-| S1 — designer makes a live assumption | U1 | A reader following `designing` and the spec template can create a sanitized evidence row with claim, command, observation time, result, and source. |
+| S1 — designer makes a live assumption | U1 | A reader following `designing` and the spec template always encounters Assumptions and Preconditions, then creates a sanitized evidence row with claim, command, observation time, result, and source when live assumptions exist. |
 | S2 — planner finds reality changed | U1 → U2 | A reviewer walks one match, one contradiction, one unavailable result, and the no-origin/zero-assumption fallback through the planning rules. |
 | S3 — review discovers necessary observable behavior | U2 → U3 | The existing incomplete-release recovery example is classified as addendum-required before unit or branch acceptance. |
 | S4 — internal refactor stays lightweight | U3 | The reviewing rule exempts a change that preserves interfaces, state transitions, persistence, consent boundaries, and terminal behavior. |
@@ -104,10 +112,10 @@ Files:
 Steps:
   1. Add a Live assumption evidence rule to `skills/designing/SKILL.md` that requires claim, exact command, observation timestamp, concise result, and evidence source for each live assumption.
   2. Require empirical review to rerun or inspect the retained command and forbid secrets, personal data, and unbounded raw output in committed evidence.
-  3. Add the exact table shape and safe-reference fallback to `skills/designing/references/spec-template.md` without making the section mandatory when a spec has no live assumptions.
+  3. Make the Assumptions and Preconditions section mandatory in `skills/designing/references/spec-template.md`, require an explicit none-fallback when no live assumptions exist, and make only the five-field evidence table conditional on live assumptions.
   4. Self-review against spec S1, the Assumptions and Preconditions contract, and the no-live-assumption case; run `bash scripts/validate.sh`.
   5. Commit with a docs-scoped conventional message, then rerun `bash scripts/validate.sh` against the committed tree.
-Acceptance: targeted search finds the five evidence fields and safe-retention boundary in both files; `bash scripts/validate.sh` exits 0 before and after commit.
+Acceptance: targeted search finds the always-present section rule, explicit none-fallback, five evidence fields, and safe-retention boundary; `bash scripts/validate.sh` exits 0 before and after commit.
 
 ## U2: Recheck approved assumptions during planning
 Files:
