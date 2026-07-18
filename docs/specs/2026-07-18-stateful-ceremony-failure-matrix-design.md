@@ -1,6 +1,6 @@
 ---
 title: Stateful Ceremony Mutation and Failure-State Matrix
-status: draft
+status: approved
 date: 2026-07-18
 schema: spec/v1
 ---
