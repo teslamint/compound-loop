@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Require stateful ceremony mutation and failure-state matrices
 type: docs
-status: draft
+status: approved
 date: 2026-07-18
 execution: non-code
 origin: docs/specs/2026-07-18-stateful-ceremony-failure-matrix-design.md
