@@ -367,6 +367,8 @@ expected_branch={q(remote_branch)}
 expected_tag_object={q(remote_tag_object or "absent")}
 expected_tag_target={q(remote_tag_target or "absent")}
 expected_page_fingerprint={q(page_fingerprint)}
+expected_fetch_url={q(fetch_url)}
+expected_push_url={q(push_url)}
 fixture_root={q(str(fixture_root) if fixture_root else "")}
 fixture_remote={q(push_url[7:] if fixture_root else "")}
 fixture_state={q(os.environ.get("GH_STUB_STATE", "") if fixture_root else "")}
@@ -385,7 +387,15 @@ print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
 PY
 }}
 
+assert_transport() {{
+  local boundary="$1" current_fetch_url current_push_url
+  current_fetch_url="$(git remote get-url origin 2>/dev/null || true)"
+  current_push_url="$(git remote get-url --push origin 2>/dev/null || true)"
+  [[ "$current_fetch_url" == "$expected_fetch_url" && "$current_push_url" == "$expected_push_url" ]] || publication_fail "$boundary-transport" "origin fetch or push target changed before $boundary"
+}}
+
 remote_ref() {{
+  assert_transport remote-read
   git ls-remote origin "$1" 2>/dev/null | awk -v wanted="$1" '$2 == wanted {{ print $1 }}'
 }}
 
@@ -413,8 +423,12 @@ PY
 }}
 
 assert_fingerprint() {{
-  local boundary="$1" branch tag_obj tag_peeled current_page current_page_fp
+  local boundary="$1" branch tag_obj tag_peeled current_page current_page_fp local_tag_object local_tag_target
   [[ "$(notes_sha)" == "$expected_notes_sha" ]] || publication_fail "$boundary-notes" "notes fingerprint changed before $boundary"
+  local_tag_object="$(git rev-parse "refs/tags/$tag" 2>/dev/null || true)"
+  local_tag_target="$(git rev-parse "refs/tags/$tag^{{}}" 2>/dev/null || true)"
+  [[ "$local_tag_object" == "$tag_object" && "$local_tag_target" == "$tag_target" ]] || publication_fail "$boundary-local-tag" "local annotated tag identity changed before $boundary"
+  assert_transport "$boundary"
   branch="$(remote_ref "$default_ref")"
   tag_obj="$(remote_ref "refs/tags/$tag")"
   tag_peeled="$(remote_ref "refs/tags/$tag^{{}}")"
@@ -454,7 +468,7 @@ validate_injection() {{
     *) publication_fail fixture-boundary "unknown fixture failure boundary" ;;
   esac
   case "$mutate_at" in
-    ''|branch-before|branch-post-verify|tag-before|tag-post-verify|page-create-before|page-create-post-verify|page-edit-before|page-edit-post-verify) ;;
+    ''|branch-before|branch-post-verify|tag-before|tag-post-verify|page-create-before|page-create-tag-before|page-create-post-verify|page-edit-before|page-edit-post-verify) ;;
     *) publication_fail fixture-boundary "unknown fixture mutation boundary" ;;
   esac
   for path in "$PWD" "$notes" "$gh_bin" "$fixture_remote" "$fixture_state"; do
@@ -473,6 +487,7 @@ inject_at() {{
     case "$boundary" in
       branch-before ) git --git-dir="$fixture_remote" fetch "$PWD" "$release_commit" >/dev/null 2>&1; git --git-dir="$fixture_remote" update-ref "$default_ref" "$release_commit" ;;
       branch-* ) git --git-dir="$fixture_remote" update-ref "$default_ref" "$(git rev-parse HEAD^)" ;;
+      page-create-tag-before ) git --git-dir="$fixture_remote" update-ref "refs/tags/$tag" "$release_commit" ;;
       tag-* ) git --git-dir="$fixture_remote" update-ref "refs/tags/$tag" "$release_commit" ;;
       page-* ) python3 - "$fixture_state" <<'PY'
 import json, pathlib, sys
@@ -521,6 +536,7 @@ if "page-create" in transitions:
     if prerelease:
         command.append("--prerelease")
     program += [
+        'inject_at page-create-tag-before',
         'inject_at page-create-before',
         'assert_fingerprint page-create',
         'inject_at page-create',

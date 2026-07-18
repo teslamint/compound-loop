@@ -1096,6 +1096,78 @@ case_missing_fixture_injection_boundary() {
   assert_eq "$(remote_oid refs/tags/v9.8.7)" absent no-transition-without-boundary
 }
 
+move_local_tag() {
+  git -C "$FIXTURE_REPO" tag -f -a v9.8.7 -m 'moved fixture annotation' HEAD >/dev/null
+}
+
+redirect_origin() {
+  WRONG_REMOTE="$CASE_ROOT/wrong target ;[fixture].git"
+  git init --bare --initial-branch=main "$WRONG_REMOTE" >/dev/null
+  git -C "$FIXTURE_REPO" remote set-url origin "file://$WRONG_REMOTE"
+  git -C "$FIXTURE_REPO" remote set-url --push origin "file://$WRONG_REMOTE"
+}
+
+assert_wrong_remote_untouched() {
+  [[ -z "$(git --git-dir="$WRONG_REMOTE" show-ref 2>/dev/null)" ]] || { echo 'ASSERTION=redirected remote received a ref'; return 1; }
+  assert_eq "$(state_value mutations.create)" 0 redirected-no-create
+  assert_eq "$(state_value mutations.edit)" 0 redirected-no-edit
+}
+
+case_stale_local_tag_branch() {
+  prepare_program --headless; move_local_tag; local out code
+  set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" branch-push-local-tag local-tag-before-branch
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" absent stale-local-no-remote-tag; assert_eq "$(state_value page)" null stale-local-no-page
+}
+case_stale_local_tag_tag() {
+  branch_ready; prepare_program --headless; move_local_tag; local out code
+  set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" tag-push-local-tag local-tag-before-tag
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" absent stale-local-no-tag-push; assert_eq "$(state_value page)" null stale-local-no-page
+}
+case_stale_local_tag_create() {
+  refs_ready; prepare_program --headless; move_local_tag; local out code
+  set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" page-create-local-tag local-tag-before-create
+  assert_eq "$(state_value mutations.create)" 0 stale-local-no-create; assert_eq "$(state_value page)" null stale-local-no-page
+}
+case_stale_local_tag_edit() {
+  repair_ready; prepare_program --repair --headless; move_local_tag; local out code before
+  before="$(state_value page)"; set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" page-edit-local-tag local-tag-before-edit
+  assert_eq "$(state_value mutations.edit)" 0 stale-local-no-edit; assert_eq "$(state_value page)" "$before" stale-local-page-unchanged
+}
+
+case_redirect_origin_branch() {
+  prepare_program --headless; redirect_origin; local out code
+  set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" branch-push-transport redirect-before-branch; assert_wrong_remote_untouched
+}
+case_redirect_origin_tag() {
+  branch_ready; prepare_program --headless; redirect_origin; local out code
+  set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" tag-push-transport redirect-before-tag; assert_wrong_remote_untouched
+}
+case_redirect_origin_create() {
+  refs_ready; prepare_program --headless; redirect_origin; local out code
+  set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" page-create-transport redirect-before-create; assert_wrong_remote_untouched
+}
+case_redirect_origin_edit() {
+  repair_ready; prepare_program --repair --headless; redirect_origin; local out code before
+  before="$(state_value page)"; set +e; out="$(execute_packet 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" page-edit-transport redirect-before-edit; assert_wrong_remote_untouched; assert_eq "$(state_value page)" "$before" redirect-page-unchanged
+}
+
+case_implicit_tag_disappearance() {
+  refs_ready; prepare_program --headless; local out code release
+  release="$(git -C "$FIXTURE_REPO" rev-parse HEAD)"
+  set +e; out="$(execute_packet env RELEASE_PUBLICATION_MUTATE_AT=page-create-tag-before 2>&1)"; code=$?; set -e
+  [[ $code -ne 0 ]]; assert_contains "$out" page-create-tag implicit-tag-boundary
+  assert_eq "$(remote_oid refs/tags/v9.8.7)" "$release" mutated-lightweight-tag
+  assert_eq "$(state_value mutations.create)" 0 no-implicit-create-call; assert_eq "$(state_value page)" null no-implicit-page
+}
+
 run_fixture_case() {
   local name="$1" mechanism="$2" callback="$3" expected="$4"
   local marker="$HARNESS_TMP_BASE/$name.root" fixture_path code
@@ -1216,6 +1288,15 @@ run_mutations_group() {
   run_fixture_case stale_notes_before_transition exact_notes_sha_before_transition case_notes_stale pass
   run_fixture_case unknown_injection_boundary fail_closed_fixture_seam case_invalid_injection_boundary pass
   run_fixture_case injection_without_fixture_root fail_closed_fixture_seam case_missing_fixture_injection_boundary pass
+  run_fixture_case stale_local_tag_before_branch approved_local_tag_object_and_peel case_stale_local_tag_branch pass
+  run_fixture_case stale_local_tag_before_tag approved_local_tag_object_and_peel case_stale_local_tag_tag pass
+  run_fixture_case stale_local_tag_before_create approved_local_tag_object_and_peel case_stale_local_tag_create pass
+  run_fixture_case stale_local_tag_before_edit approved_local_tag_object_and_peel case_stale_local_tag_edit pass
+  run_fixture_case redirected_origin_before_branch approved_fetch_and_push_urls case_redirect_origin_branch pass
+  run_fixture_case redirected_origin_before_tag approved_fetch_and_push_urls case_redirect_origin_tag pass
+  run_fixture_case redirected_origin_before_create approved_fetch_and_push_urls case_redirect_origin_create pass
+  run_fixture_case redirected_origin_before_edit approved_fetch_and_push_urls case_redirect_origin_edit pass
+  run_fixture_case implicit_tag_disappearance_before_create remote_tag_fingerprint_blocks_gh case_implicit_tag_disappearance pass
 }
 
 case "$GROUP" in
