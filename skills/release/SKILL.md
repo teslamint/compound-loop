@@ -5,10 +5,11 @@ description: Cut a local versioned release from committed lifecycle evidence wit
 
 # Release
 
-Owns the local post-merge versioned-release ceremony. It turns committed specs,
+Owns the local post-merge versioned-release ceremony and an explicitly selected,
+separate outward-publication ceremony. The local action turns committed specs,
 retros, and notable commits into one release draft, synchronizes both plugin
-manifests, and tags the resulting release commit. It never pushes a commit or
-tag and never creates a GitHub release.
+manifests, and tags the resulting release commit. That local action never pushes
+a commit or tag and never creates a GitHub release.
 
 Every invocation ends with exactly one canonical terminal line as its last
 non-empty output: `Release complete — v<version>`,
@@ -21,9 +22,24 @@ The separate outward-publication action uses its own additive terminal family:
 `Publication failed — <reason>`. These are the only inline Publication signal
 placeholders; concrete publication outcomes must remain prose or fenced output.
 
+## Action dispatch
+
+Parse the complete invocation before doing any phase work.
+
+- When the token `publish` is present, require exactly the form
+  `publish <semver> [repair] [mode:headless]`, with the optional tokens allowed
+  in either order. Reject a duplicate `publish`, version, `repair`, or mode
+  token; reject a missing version and every unknown token. Dispatch to
+  `skills/release/references/publication.md`; return before any local-release
+  phase. The publication action owns its own Preflight, Packet, Gate, Execute,
+  Verify, and Report phases and never inherits consent from this local action.
+- When `publish` is absent, reject `repair` without `publish`. Otherwise use the
+  unchanged local-release argument contract below. Publication-only tokens must
+  never fall through to the local ceremony.
+
 ## Arguments
 
-Accept zero, one, or both of these arguments, in either order:
+Accept zero, one, or both of these local-release arguments, in either order:
 
 - `mode:headless` — prepare `.release/draft.md`, then stop before the USER gate.
 - `<explicit-semver>` — use this SemVer 2.0.0 value as the proposed version;

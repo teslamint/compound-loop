@@ -1299,8 +1299,209 @@ assert publication_inline == [placeholder[1:-1] for placeholder in placeholders]
 PY
 }
 
+case_publication_skill_dispatch_contract() {
+  python3 - "$ROOT" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+skill = (root / "skills/release/SKILL.md").read_text(encoding="utf-8")
+protocol = (root / "skills/release/references/publication.md").read_text(encoding="utf-8")
+skill_words = " ".join(skill.split())
+protocol_words = " ".join(protocol.split())
+
+dispatch = skill.index("## Action dispatch")
+local_phases = skill.index("Run the seven phases in order")
+assert dispatch < local_phases, "publication dispatch must precede the local seven phases"
+for text in (
+    "`publish <semver> [repair] [mode:headless]`",
+    "return before any local-release phase",
+    "repair` without `publish",
+    "duplicate",
+    "unknown",
+    "skills/release/references/publication.md",
+):
+    assert text in skill_words, f"missing publication dispatch contract: {text}"
+for text in (
+    "Approve this exact publication/repair",
+    "Revise",
+    "Cancel",
+    "same executing session",
+    "relayed approval",
+    "prior local release",
+    "blocking question",
+):
+    assert text in protocol_words, f"missing first-hand gate contract: {text}"
+PY
+}
+
+case_exact_packet_execution_contract() {
+  python3 - "$ROOT" <<'PY'
+import pathlib
+import sys
+
+protocol = (pathlib.Path(sys.argv[1]) / "skills/release/references/publication.md").read_text(encoding="utf-8")
+protocol_words = " ".join(protocol.split())
+for text in (
+    "PUBLICATION_PACKET_SHA256",
+    "SHA-256",
+    "exactly one fenced `bash` program",
+    "first non-empty line is exactly `set -euo pipefail`",
+    "one Bash invocation",
+    "delete the temporary program",
+    "fresh packet and fresh gate",
+    "last non-empty output",
+):
+    assert text in protocol_words, f"missing exact-packet execution contract: {text}"
+PY
+}
+
+case_first_hand_approved_publication() {
+  local prepare_out approved_sha actual_sha program_count out
+  prepare_out="$(invoke_prepare)"
+  assert_no_outward_mutation
+  approved_sha="$(printf '%s\n' "$prepare_out" | sed -n 's/^PUBLICATION_PACKET_SHA256=//p')"
+  actual_sha="$(python3 - "$PUBLICATION_PACKET" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+  assert_eq "$actual_sha" "$approved_sha" exact-approved-packet-hash
+  program_count="$(grep -c '^```bash$' "$PUBLICATION_PACKET")"
+  assert_eq "$program_count" 1 exactly-one-bash-fence
+  out="$(execute_packet; printf '%s\n' 'Publication complete — v9.8.7')"
+  assert_eq "$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -1)" \
+    'Publication complete — v9.8.7' terminal-last-line
+  assert_eq "$(state_value mutations.create)" 1 exactly-one-page-create
+  assert_canonical_page
+  echo 'Covers S1'
+}
+
+case_headless_handoff_scenario() {
+  local before after
+  before="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  invoke_prepare --headless >/dev/null
+  after="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  assert_eq "$after" "$before" headless-state-unchanged
+  [[ -s "$PUBLICATION_PACKET" && -s "$PUBLICATION_NOTES" ]]
+  echo 'Publication skipped — headless: packet prepared for first-hand publication consent'
+  echo 'Covers S2'
+}
+
+case_partial_resume_scenario() {
+  prepare_program --headless
+  printf '%s\n' refs/tags/v9.8.7 >"$GIT_REJECT_REF"
+  set +e
+  execute_packet >/dev/null 2>&1
+  local code=$?
+  set -e
+  [[ $code -ne 0 ]]
+  : >"$GIT_REJECT_REF"
+  local branch_after_failure="$(remote_oid refs/heads/main)"
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  invoke_prepare --headless >/dev/null
+  execute_packet >/dev/null
+  assert_eq "$(remote_oid refs/heads/main)" "$branch_after_failure" branch-not-repushed
+  assert_canonical_page
+  echo 'Covers S3'
+}
+
+case_fully_matching_scenario() {
+  prepare_program --headless
+  execute_packet >/dev/null
+  local before out
+  before="$(cat "$GIT_MUTATION_LOG")|$(cat "$GH_STUB_STATE")"
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  out="$(invoke_prepare)"
+  assert_contains "$out" 'PUBLICATION_CLASS=fully-matching' full-match-class
+  assert_eq "$(cat "$GIT_MUTATION_LOG")|$(cat "$GH_STUB_STATE")" "$before" full-match-noop
+  echo 'Covers S4'
+}
+
+case_narrow_repair_scenario() {
+  repair_ready
+  prepare_program --repair
+  ! grep -F -q 'refs/heads/main' "$PUBLICATION_PACKET"
+  execute_packet >/dev/null
+  assert_eq "$(state_value mutations.edit)" 1 one-page-repair
+  assert_canonical_page
+  echo 'Covers S5'
+}
+
+case_fail_closed_scenario_inventory() {
+  python3 - "$ROOT" <<'PY'
+import pathlib
+import sys
+
+protocol = (pathlib.Path(sys.argv[1]) / "skills/release/references/publication.md").read_text(encoding="utf-8")
+for text in (
+    "unavailable or errors",
+    "silence",
+    "relayed approval",
+    "packet hash",
+    "multiple fenced programs",
+    "strict-mode",
+    "0.2.0",
+    "wrong fixture injection seam",
+    "stale",
+):
+    assert text in protocol, f"missing fail-closed classification: {text}"
+PY
+  echo 'Covers S6'
+}
+
+case_gate_cancel_and_revision() {
+  local first_hash changed_hash before after
+  invoke_prepare >/dev/null
+  first_hash="$(python3 - "$PUBLICATION_PACKET" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+  before="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  # Cancel performs no packet execution. A revision changes the packet bytes,
+  # invalidating the old approval and requiring a new displayed hash/gate.
+  printf '\nrevision requested\n' >>"$PUBLICATION_PACKET"
+  changed_hash="$(python3 - "$PUBLICATION_PACKET" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+  [[ "$first_hash" != "$changed_hash" ]]
+  after="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  assert_eq "$after" "$before" cancel-revise-no-mutation
+}
+
+case_local_release_behavior_regression() {
+  python3 - "$ROOT" <<'PY'
+import pathlib
+import sys
+
+skill = (pathlib.Path(sys.argv[1]) / "skills/release/SKILL.md").read_text(encoding="utf-8")
+assert "Accept zero, one, or both of these local-release arguments, in either order:" in skill
+assert "Run the seven phases in order" in skill
+assert "- `mode:headless` — prepare `.release/draft.md`" in skill
+assert "- `<explicit-semver>` — use this SemVer 2.0.0 value" in skill
+assert "Reject duplicate mode arguments, more than one version, unknown arguments" in skill
+PY
+}
+
+all_user_scenarios() {
+  run_fixture_case publication_skill_dispatch explicit_publish_returns_before_local_phases case_publication_skill_dispatch_contract pass
+  run_fixture_case exact_packet_execution hash_one_fence_one_bash_and_terminal_last case_exact_packet_execution_contract pass
+  run_fixture_case s1_first_hand_approval prepare_then_one_exact_execution case_first_hand_approved_publication pass
+  run_fixture_case s2_headless_prepare_only packet_without_gate_or_mutation case_headless_handoff_scenario pass
+  run_fixture_case s3_partial_resume durable_branch_then_missing_suffix case_partial_resume_scenario pass
+  run_fixture_case s4_fully_matching_noop third_invocation_no_mutation case_fully_matching_scenario pass
+  run_fixture_case s5_narrow_repair canonical_page_fields_only case_narrow_repair_scenario pass
+  run_fixture_case s6_fail_closed_inventory unsafe_inputs_require_failure_or_fresh_gate case_fail_closed_scenario_inventory pass
+  run_fixture_case gate_cancel_and_revision old_hash_never_authorizes_revised_packet case_gate_cancel_and_revision pass
+  run_fixture_case local_release_regression zero_or_one_semver_and_release_bytes_unchanged case_local_release_behavior_regression pass
+}
+
 run_integration_group() {
   run_fixture_case publication_terminal_contract contract_v1_additive_publish_signals case_publication_terminal_contract pass
+  all_user_scenarios
 }
 
 run_mutations_group() {
