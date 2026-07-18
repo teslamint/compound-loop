@@ -83,7 +83,7 @@ Specs without a User Scenarios section (or plans with no spec) record that fact 
 
 A unit is the smallest change worth a fresh reviewer's gate — small enough that a reviewer could reject one unit while approving its neighbor, but not a 2–5 minute micro-step. Fold setup and scaffolding into the unit that needs them.
 
-U-IDs follow the stability rule in `schemas/plan-schema.md` (never renumbered on reorder, split, or delete) — this matters most during the deepening pass in step 14, the likeliest accidental-renumber vector.
+U-IDs follow the stability rule in `schemas/plan-schema.md` (never renumbered on reorder, split, or delete) — this matters most during the deepening pass in step 15, the likeliest accidental-renumber vector.
 
 Smell test: 3–7 units is typical. More than 10 suggests under-decomposition — split the plan or revisit the spec. Fewer than 3 suggests step 1 may have been wrong to write a plan doc at all.
 
@@ -91,19 +91,30 @@ Smell test: 3–7 units is typical. More than 10 suggests under-decomposition �
 
 Use the code or non-code unit template from `schemas/plan-schema.md` as-is — do not redefine it here. For code units, fill test scenarios by category (happy / edge / error / integration); every category that applies to the unit gets a scenario, right-sized to its risk. Integration scenarios come from step 7's walkthrough first — tag the ones that walk a user scenario with `Covers S<n>`. Link a scenario to a spec acceptance criterion with `Covers AE<n>` only when it directly enforces that criterion — sparse by design, since most scenarios are finer-grained than an AE. A `Covers AE<n>` or `Covers S<n>` naming a nonexistent target is a validation error, not a soft note.
 
-## 10. Planning-time vs. implementation-time unknowns
+## 10. Mutation/failure-state matrix
+
+A **stateful ceremony** is a workflow whose deliverable can cross an observable side-effect boundary. A **durable transition** is a step that changes persisted or externally observable state across invocations.
+
+If the deliverable contains a stateful ceremony, add a **Mutation/failure-state matrix** plan section. Include one row for every durable transition. Each row must name the transition identity, pre-state, action, expected post-state, owning implementation unit, and evidence owner that will produce disposable fixture evidence under `.release-loop/evidence/U<N>/`. Fill all six outcome classes: success; forced failure; rerun; rollback or compensation; headless; and cancellation or abort. Every forced-failure outcome names a safe injection boundary and isolation approach. Irreversible transitions describe compensation or explicit manual recovery rather than fictional rollback. Blank cells are invalid; every not-applicable cell gives a concrete reason tied to the interface or irreversibility boundary.
+
+Use `references/stateful-ceremony-matrix-example.md` as the worked example and `docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md` as the deviation authority; link them rather than duplicating their contracts. Changing an approved matrix row or outcome is observable behavior and triggers item 1's deviation-addendum rule before release.
+
+If the deliverable contains no stateful ceremony, write exactly:
+`No stateful ceremony in the deliverable; no mutation/failure-state matrix required.`
+
+## 11. Planning-time vs. implementation-time unknowns
 
 Split every open unknown by when it can resolve. Planning-time unknowns block approval — resolve them, or ask, before finalizing the plan. Implementation-time unknowns (exact method or helper names, final SQL, runtime-dependent behavior only discoverable once code is touched) are not gaps — record them under the implementation-time half of Open unknowns so they read as deferred-by-design, never as something missed.
 
-## 11. Anti-expansion
+## 12. Anti-expansion
 
-Distinct from step 10: this is *known but tangential* work noticed while planning — an adjacent refactor, a "while we're here" cleanup, a scope-adjacent nice-to-have. Route it to Deferred to Follow-Up Work, never into an active unit (`enforces: P4, P6`). The user's explicit ask overrides this default — if they asked for the refactor, it's in scope, not deferred. Worked example: a version bump or CHANGELOG entry belongs to `shipping`, never to a planning unit.
+Distinct from step 11: this is *known but tangential* work noticed while planning — an adjacent refactor, a "while we're here" cleanup, a scope-adjacent nice-to-have. Route it to Deferred to Follow-Up Work, never into an active unit (`enforces: P4, P6`). The user's explicit ask overrides this default — if they asked for the refactor, it's in scope, not deferred. Worked example: a version bump or CHANGELOG entry belongs to `shipping`, never to a planning unit.
 
-## 12. No-placeholder rule
+## 13. No-placeholder rule
 
 Banned in any unit: "TBD", "TODO", "similar to Task N" / "see U3", "as appropriate", "etc.", "add appropriate error handling", steps that describe what to do without showing how, and references to types or functions not defined in any unit. Units may be read out of order by their implementer — repeat content rather than pointing sideways.
 
-## 13. Self-review
+## 14. Self-review
 
 Before finalizing, the author (not a subagent) checks:
 - **Assumption recheck flows** — walk one match, one contradiction, one
@@ -113,29 +124,30 @@ Before finalizing, the author (not a subagent) checks:
   stays a planning-time unknown unless the user narrows the claim.
 - **Spec coverage** — every spec requirement traces to a unit; list gaps.
 - **Scenario coverage** — re-walk the Scenario coverage map against the final unit set: every S-ID still completes end to end (deepening and unit edits are the likeliest breakage vector), and every map row names real scenario evidence (integration test, or observable verification for non-code plans). `enforces: P8`
-- **Placeholder scan** — search for step 12's red flags; fix inline.
+- **Mutation/failure-state completeness** — when the deliverable contains a stateful ceremony, confirm every durable transition has a row with transition identity, pre-state, action, expected post-state, all six outcome classes, and an implementation-unit/evidence-owner mapping. Confirm irreversible transitions name compensation or manual recovery, every forced failure uses safe isolated injection, and no cell is blank or uses not-applicable without a concrete reason. Otherwise confirm the exact stateless fallback is present.
+- **Placeholder scan** — search for step 13's red flags; fix inline.
 - **Type consistency** — do signatures, names, and types agree across units (a function `clearLayers()` in U2 and `clearFullLayers()` in U5 is a bug)?
 - **Callers + invariants** — for code units, who calls the functions being changed, and what invariants must still hold afterward?
 - **Retro carryover** — does a prior retrospective's carry-forward item belong in this plan? Check the durable tracker before finalizing.
 
 Fix issues inline; no separate review pass is needed.
 
-## 14. Deepening pass
+## 15. Deepening pass
 
 After self-review, run the confidence check in `references/deepening.md`: six trigger categories score the plan (vague rationale, missing risk treatment, weak sequencing, thin external grounding, unclear verification, thin scenario coverage) — skip deepening entirely when nothing scores. When triggered, dispatch reviewer personas — Architecture and Feasibility always-on, Security/Risk and Scope/Coherence conditional on activation signals — per the dispatch ladder in `references/dispatch-degradation.md` (native parallel → sequential passes; correctness never depends on parallelism being available). Change discipline: tightening prose is in scope; writing implementation code is not; U-IDs are never renumbered; superseded text is resolved in place, never stacked as a separate layer.
 
-## 15. Outstanding-question triage
+## 16. Outstanding-question triage
 
 Classify every open question as planning-owned (resolvable from repo context, docs, or a user choice made now) or a product blocker (would change scope, behavior, or success criteria). Never plan over a live product blocker — surface it and either send the user back to `designing` to resolve it, or convert it to an explicit assumption before continuing.
 
-## 16. Commit the plan
+## 17. Commit the plan
 
 Write to `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md` per the naming rule in `schemas/plan-schema.md`, then `git add` and commit following the repo's commit protocol. From this point the plan is a decision artifact — `implementing` never edits its body.
 
 Do not finalize or commit a plan whose Assumption Recheck contains a
 contradiction unless the separate addendum commit already exists.
 
-## 17. Handoff
+## 18. Handoff
 
 Offer a 2-option menu: **Subagent-driven** (fresh subagent per unit, review between units — recommended) or **Inline** (execute in this session with checkpoints between units). Fire the chosen path; don't just announce it.
 
