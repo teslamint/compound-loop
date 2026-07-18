@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Gated Outward Publication for Release
 type: feat
-status: draft
+status: approved
 date: 2026-07-18
 execution: code
 origin: docs/specs/2026-07-18-gated-outward-publication-design.md
