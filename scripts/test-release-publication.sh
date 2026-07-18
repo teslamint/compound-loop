@@ -1525,6 +1525,16 @@ for text in (
 PY
 }
 
+case_embedded_engine_syntax_warnings() {
+  local extracted="$CASE_ROOT/release-publication-engine.py"
+  awk '
+    /<<'"'"'RELEASE_PUBLICATION_ENGINE_PY'"'"'/ { inside=1; next }
+    /^RELEASE_PUBLICATION_ENGINE_PY$/ { exit }
+    inside { print }
+  ' "$ROOT/scripts/release-publication.sh" >"$extracted"
+  "$PYTHON_DIR/python3" -W error::SyntaxWarning -m py_compile "$extracted"
+}
+
 case_exact_packet_execution_contract() {
   python3 - "$ROOT" <<'PY'
 import pathlib
@@ -1770,6 +1780,7 @@ all_user_scenarios() {
 
 run_integration_group() {
   run_fixture_case publication_terminal_contract contract_v1_additive_publish_signals case_publication_terminal_contract pass
+  run_fixture_case embedded_engine_syntax_warnings python_syntax_warnings_are_errors case_embedded_engine_syntax_warnings pass
   all_user_scenarios
 }
 

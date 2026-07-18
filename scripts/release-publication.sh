@@ -460,7 +460,7 @@ page_json() {{
   status="$(python3 - "$probe" <<'PY'
 import re, sys
 lines=sys.argv[1].splitlines()
-match=re.fullmatch(r"HTTP/(?:1\.1|2(?:\.0)?) ([0-9]{{3}})(?: .*)?", lines[0] if lines else "")
+match=re.fullmatch(r"HTTP/(?:1\\.1|2(?:\\.0)?) ([0-9]{{3}})(?: .*)?", lines[0] if lines else "")
 print(match.group(1) if match else "")
 PY
 )"
