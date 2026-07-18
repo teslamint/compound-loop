@@ -121,6 +121,8 @@ Scope the review to internal consistency, missing edge cases, scope creep, and f
 
 **Empirical grounding sub-step** (pilot-proven, `enforces: P3`): any spec example that names a specific existing file, line, or behavior — especially Testing-section fixture targets — must be checked against the live repo (grep/dry-run), not just reviewed for internal logic. Two independent reviews of the same spec both missed a fixture target that a one-line grep would have falsified; internal-logic review and live-repo grounding are different checks (see docs/solutions/workflow-issues/spec-review-empirical-grounding-gap.md where present).
 
+**Live assumption evidence**: whenever a spec makes a live assumption, retain it in `Assumptions and Preconditions` with exactly these five fields: claim, exact command, observation timestamp, concise result, and evidence source. Independent review must rerun the retained command or inspect the retained evidence source before treating the assumption as grounded. Never commit secrets, credentials, personal data, or unbounded raw command output as evidence; when output is unsafe or too large, store a committed sanitized evidence artifact and reference that artifact from the retained record instead of pasting the raw output. For post-approval observable-behavior drift and addendum content authority, link to `docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md` rather than duplicating its guidance.
+
 ## Step 11: Spec Self-Review
 
 Four fixed checks, fixed inline, no re-loop:

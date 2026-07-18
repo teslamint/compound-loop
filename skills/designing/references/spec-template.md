@@ -40,6 +40,17 @@ unlabeled scenario is invisible to the rest of the pipeline.]
 ### Out
 [Bulleted list of what's explicitly excluded]
 
+## Assumptions and Preconditions
+[Always present. If there are no live assumptions, say so explicitly and note any repository or environment invariants that still apply.]
+
+_No live assumptions were retained for this spec. Repository or environment invariants: [none / list]._
+
+[When live assumptions exist, replace the fallback above with the five-field evidence table below and retain only concise sanitized results. If raw output is unsafe or too large, reference a committed sanitized evidence artifact instead of pasting the raw output.]
+
+| Claim | Command | Observed at | Observed result | Evidence source |
+|---|---|---|---|---|
+| [Live assumption being retained] | `[Exact command used to check it]` | `YYYY-MM-DDTHH:MM:SS±HH:MM` | [Concise sanitized result, or a reference to a committed sanitized evidence artifact when raw output is unsafe or too large] | [Working tree / commit / artifact / document inspected] |
+
 ## Architecture
 [Module structure, data flow]
 
@@ -87,6 +98,9 @@ A good spec:
 - Can be handed to someone with zero conversation context
 - Has concrete, S-ID-labeled user scenarios with CLI/MCP examples showing who uses it and why
 - Has explicit scope boundaries (In/Out)
+- Always includes Assumptions and Preconditions, with an explicit none-fallback when no live assumptions exist
+- Retains each live assumption with claim, exact command, observation timestamp, concise result, and evidence source
+- Keeps retained evidence sanitized: no secrets, credentials, personal data, or unbounded raw output; large or unsafe output is referenced through a committed sanitized evidence artifact
 - Names concrete files, tables, functions -- not just concepts
 - Addresses risks and mitigations
 - Has a Success Criteria section with a measurement method per criterion
