@@ -488,6 +488,90 @@ execute_packet() {
   )
 }
 
+validate_ready_output() {
+  python3 - "$1" <<'PY'
+import re
+import sys
+
+lines = sys.argv[1].splitlines()
+assert len(lines) == 4, f"ready output must have exactly four lines, got {len(lines)}"
+assert lines[0] == "PUBLICATION_STATUS=ready"
+allowed = {
+    "branch-ready-tag-missing", "fast-forwardable", "refs-ready-page-missing",
+    "repairable-page", "repairable-unordered-page",
+}
+assert lines[1].startswith("PUBLICATION_CLASS=")
+assert lines[1].split("=", 1)[1] in allowed
+assert re.fullmatch(r"PUBLICATION_PACKET=\.release/publication-v[^/]+\.md", lines[2])
+assert re.fullmatch(r"PUBLICATION_PACKET_SHA256=[0-9a-f]{64}", lines[3])
+PY
+}
+
+validate_fully_matching_output() {
+  python3 - "$1" <<'PY'
+import sys
+
+lines = sys.argv[1].splitlines()
+assert lines == ["PUBLICATION_STATUS=noop", "PUBLICATION_CLASS=fully-matching"], lines
+PY
+}
+
+validate_packet_for_gate() {
+  python3 - "$PUBLICATION_PACKET" <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+blocks = re.findall(r"^```([^\n]*)\n(.*?)^```$", text, flags=re.MULTILINE | re.DOTALL)
+assert len(blocks) == 1, f"expected exactly one fence, got {len(blocks)}"
+language, program = blocks[0]
+assert language == "bash", f"expected Bash fence, got {language!r}"
+lines = [line for line in program.splitlines() if line.strip()]
+assert lines and lines[0] == "set -euo pipefail", "strict mode must be first"
+PY
+}
+
+simulate_publication_ceremony() {
+  local response="$1" source="$2" prepare_out approved_sha actual_sha verify_out
+  prepare_out="$(invoke_prepare)" || return
+  validate_ready_output "$prepare_out"
+  approved_sha="$(printf '%s\n' "$prepare_out" | sed -n 's/^PUBLICATION_PACKET_SHA256=//p')"
+  actual_sha="$(python3 - "$PUBLICATION_PACKET" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+  assert_eq "$actual_sha" "$approved_sha" displayed-packet-hash
+  validate_packet_for_gate
+  printf 'GATE_PACKET_SHA256=%s\n' "$approved_sha"
+  cat "$PUBLICATION_PACKET"
+
+  if [[ "$source" != direct ]]; then
+    printf '%s\n' 'Publication failed — publication gate requires a direct same-session response'
+    return 3
+  fi
+  case "$response" in
+    Approve)
+      execute_packet
+      verify_out="$(invoke_prepare)"
+      validate_fully_matching_output "$verify_out"
+      printf '%s\n' 'Publication complete — v9.8.7'
+      ;;
+    Revise)
+      printf '%s\n' 'CEREMONY_RESULT=revise-requires-new-packet-and-gate'
+      return 4
+      ;;
+    Cancel)
+      printf '%s\n' 'Publication skipped — publication cancelled'
+      ;;
+    silence|missing|error|prior-approval|relay|*)
+      printf '%s\n' 'Publication failed — publication gate did not receive direct approval'
+      return 3
+      ;;
+  esac
+}
+
 remote_oid() {
   git --git-dir="$FIXTURE_REMOTE" rev-parse --verify "$1" 2>/dev/null || printf absent
 }
@@ -649,7 +733,8 @@ case_protected_version() {
   export TEST_VERSION
   local out
   out="$(invoke_prepare --headless)"
-  assert_contains "$out" 'PUBLICATION_REASON=protected-version-requires-repair' protected-repair-direction
+  assert_eq "$out" $'PUBLICATION_STATUS=noop\nPUBLICATION_CLASS=conflicting\nPUBLICATION_REASON=protected-version-requires-repair' \
+    protected-exact-output-shape
   unset TEST_VERSION
 }
 
@@ -1357,22 +1442,14 @@ PY
 }
 
 case_first_hand_approved_publication() {
-  local prepare_out approved_sha actual_sha program_count out
-  prepare_out="$(invoke_prepare)"
+  local out
   assert_no_outward_mutation
-  approved_sha="$(printf '%s\n' "$prepare_out" | sed -n 's/^PUBLICATION_PACKET_SHA256=//p')"
-  actual_sha="$(python3 - "$PUBLICATION_PACKET" <<'PY'
-import hashlib, pathlib, sys
-print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
-PY
-)"
-  assert_eq "$actual_sha" "$approved_sha" exact-approved-packet-hash
-  program_count="$(grep -c '^```bash$' "$PUBLICATION_PACKET")"
-  assert_eq "$program_count" 1 exactly-one-bash-fence
-  out="$(execute_packet; printf '%s\n' 'Publication complete — v9.8.7')"
+  out="$(simulate_publication_ceremony Approve direct)"
   assert_eq "$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -1)" \
     'Publication complete — v9.8.7' terminal-last-line
+  assert_contains "$out" 'GATE_PACKET_SHA256=' displayed-gate-hash
   assert_eq "$(state_value mutations.create)" 1 exactly-one-page-create
+  assert_eq "$(wc -l <"$GIT_MUTATION_LOG" | tr -d ' ')" 2 branch-and-tag-once
   assert_canonical_page
   echo 'Covers S1'
 }
@@ -1451,38 +1528,64 @@ PY
 }
 
 case_gate_cancel_and_revision() {
-  local first_hash changed_hash before after
-  invoke_prepare >/dev/null
-  first_hash="$(python3 - "$PUBLICATION_PACKET" <<'PY'
-import hashlib, pathlib, sys
-print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
-PY
-)"
+  local first_out first_hash second_out second_hash before after code
   before="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
-  # Cancel performs no packet execution. A revision changes the packet bytes,
-  # invalidating the old approval and requiring a new displayed hash/gate.
-  printf '\nrevision requested\n' >>"$PUBLICATION_PACKET"
-  changed_hash="$(python3 - "$PUBLICATION_PACKET" <<'PY'
-import hashlib, pathlib, sys
-print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
-PY
-)"
-  [[ "$first_hash" != "$changed_hash" ]]
+  set +e
+  first_out="$(simulate_publication_ceremony Revise direct 2>&1)"; code=$?
+  set -e
+  [[ $code -eq 4 ]]
+  first_hash="$(printf '%s\n' "$first_out" | sed -n 's/^GATE_PACKET_SHA256=//p' | head -1)"
   after="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
-  assert_eq "$after" "$before" cancel-revise-no-mutation
+  assert_eq "$after" "$before" revise-no-mutation
+
+  git -C "$FIXTURE_REPO" tag -d v9.8.7 >/dev/null
+  git -C "$FIXTURE_REPO" tag -a v9.8.7 -m 'fixture release 9.8.7 revised packet'
+  rm -f "$PUBLICATION_PACKET" "$PUBLICATION_NOTES"
+  second_out="$(simulate_publication_ceremony Approve direct)"
+  second_hash="$(printf '%s\n' "$second_out" | sed -n 's/^GATE_PACKET_SHA256=//p' | head -1)"
+  [[ -n "$first_hash" && -n "$second_hash" && "$first_hash" != "$second_hash" ]]
+  assert_eq "$(printf '%s\n' "$second_out" | sed '/^[[:space:]]*$/d' | tail -1)" \
+    'Publication complete — v9.8.7' revised-terminal
+}
+
+case_gate_cancel() {
+  local before after out
+  before="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  out="$(simulate_publication_ceremony Cancel direct)"
+  after="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  assert_eq "$after" "$before" cancel-no-mutation
+  assert_eq "$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -1)" \
+    'Publication skipped — publication cancelled' cancel-terminal
+}
+
+case_gate_rejects_non_direct_approval() {
+  local response source before after out code
+  before="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  for response in Approve silence missing error prior-approval relay; do
+    source=direct
+    [[ "$response" == Approve ]] && source=relay
+    set +e
+    out="$(simulate_publication_ceremony "$response" "$source" 2>&1)"; code=$?
+    set -e
+    [[ $code -eq 3 ]]
+    assert_contains "$out" 'Publication failed —' rejected-gate-terminal
+  done
+  after="$(remote_oid refs/heads/main)|$(remote_oid refs/tags/v9.8.7)|$(state_value page)"
+  assert_eq "$after" "$before" rejected-gates-no-mutation
 }
 
 case_local_release_behavior_regression() {
   python3 - "$ROOT" <<'PY'
+import hashlib
 import pathlib
 import sys
 
 skill = (pathlib.Path(sys.argv[1]) / "skills/release/SKILL.md").read_text(encoding="utf-8")
-assert "Accept zero, one, or both of these local-release arguments, in either order:" in skill
-assert "Run the seven phases in order" in skill
-assert "- `mode:headless` — prepare `.release/draft.md`" in skill
-assert "- `<explicit-semver>` — use this SemVer 2.0.0 value" in skill
-assert "Reject duplicate mode arguments, more than one version, unknown arguments" in skill
+marker = "## Arguments\n"
+local_section = skill[skill.index(marker):].encode("utf-8")
+assert hashlib.sha256(local_section).hexdigest() == "1a23b7d0703bc853cf094081eeed73d209b8a052b2b2c3d33ccdfb0905775053", (
+    "local release section differs byte-for-byte from the 48eccb0 base"
+)
 PY
 }
 
@@ -1495,8 +1598,10 @@ all_user_scenarios() {
   run_fixture_case s4_fully_matching_noop third_invocation_no_mutation case_fully_matching_scenario pass
   run_fixture_case s5_narrow_repair canonical_page_fields_only case_narrow_repair_scenario pass
   run_fixture_case s6_fail_closed_inventory unsafe_inputs_require_failure_or_fresh_gate case_fail_closed_scenario_inventory pass
-  run_fixture_case gate_cancel_and_revision old_hash_never_authorizes_revised_packet case_gate_cancel_and_revision pass
-  run_fixture_case local_release_regression zero_or_one_semver_and_release_bytes_unchanged case_local_release_behavior_regression pass
+  run_fixture_case gate_revision fresh_hash_and_fresh_gate_required case_gate_cancel_and_revision pass
+  run_fixture_case gate_cancel direct_cancel_never_mutates case_gate_cancel pass
+  run_fixture_case gate_rejects_non_direct relay_silence_missing_error_and_prior_approval case_gate_rejects_non_direct_approval pass
+  run_fixture_case local_release_regression base_local_section_bytes_unchanged case_local_release_behavior_regression pass
 }
 
 run_integration_group() {

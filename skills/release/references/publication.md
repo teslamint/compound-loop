@@ -26,12 +26,39 @@ recovery snippet.
    variable in a real invocation. `RELEASE_PUBLICATION_FIXTURE_ROOT` and the
    failure/mutation seams are test-only and a wrong fixture injection seam is
    a failure.
-3. Capture bounded stdout and the exit status. Accept only these machine fields
-   as applicable: `PUBLICATION_STATUS`, `PUBLICATION_CLASS`,
-   `PUBLICATION_REASON`, `PUBLICATION_PACKET`, and
-   `PUBLICATION_PACKET_SHA256`. Treat missing, duplicate, malformed, absolute,
-   or unexpected fields as unverifiable. The packet and notes paths must be
-   ignored repository-relative paths below `.release/` for the requested tag.
+3. Capture bounded stdout and the exit status. Parse it as an exact ordered
+   status shape, not as an unordered set of fields:
+   - ready output is exactly four lines in this order: status `ready`, one
+     classification line, one packet-path line, and one packet-SHA-256 line;
+   - a fully matching no-op is exactly two lines in this order: status `noop`
+     and class `fully-matching`, with no reason, packet, or SHA line; and
+   - protected normal `0.2.0` is exactly three lines in this order: status
+     `noop`, class `conflicting`, and reason
+     `protected-version-requires-repair`, with no packet or SHA line.
+
+   The literal machine forms are:
+
+   ```text
+   PUBLICATION_STATUS=ready
+   PUBLICATION_CLASS=<allowed-ready-class>
+   PUBLICATION_PACKET=.release/publication-v<resolved-semver>.md
+   PUBLICATION_PACKET_SHA256=<64-lowercase-hex>
+   ```
+
+   ```text
+   PUBLICATION_STATUS=noop
+   PUBLICATION_CLASS=fully-matching
+   ```
+
+   ```text
+   PUBLICATION_STATUS=noop
+   PUBLICATION_CLASS=conflicting
+   PUBLICATION_REASON=protected-version-requires-repair
+   ```
+
+   Reject every extra, missing, duplicate, malformed, or out-of-order line
+   before reading a packet or presenting a gate. The packet path must be an
+   ignored repository-relative path below `.release/` for the requested tag.
 4. A nonzero preparation, unavailable authentication/API/remote inspection,
    protected normal version, unsafe state, or malformed output ends before a
    question or mutation. An incomplete preflight must not leave a newly

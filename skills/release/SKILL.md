@@ -39,7 +39,7 @@ Parse the complete invocation before doing any phase work.
 
 ## Arguments
 
-Accept zero, one, or both of these local-release arguments, in either order:
+Accept zero, one, or both of these arguments, in either order:
 
 - `mode:headless` — prepare `.release/draft.md`, then stop before the USER gate.
 - `<explicit-semver>` — use this SemVer 2.0.0 value as the proposed version;
