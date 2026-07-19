@@ -12,9 +12,9 @@ _Created 2026-07-19._
 ## Overview
 
 Declare Python 3.9 through 3.14, inclusive by minor version, as the repository's
-supported Python range. Add one validation gate that extracts every registered
-generated Python artifact and compiles it with syntax warnings promoted to
-errors on both boundary interpreters.
+supported Python range. Add one validation gate that materializes every
+registered committed or generated Python artifact and compiles it with syntax
+warnings promoted to errors on both boundary interpreters.
 
 The gate records the resolved interpreter path and full version before it
 compiles anything. It fails closed when either boundary cannot be proved, so a
@@ -27,9 +27,10 @@ repository's compatibility contract as validated.
 
 A maintainer runs `bash scripts/validate.sh` before completing a change. The
 validator reads the one compatibility declaration, resolves Python 3.9 and
-Python 3.14, reports both interpreter identities, extracts the publication
-engine from `scripts/release-publication.sh`, and compiles that artifact under
-both endpoints with `-W error::SyntaxWarning -m py_compile`.
+Python 3.14, reports both interpreter identities, copies the committed
+frontmatter validator, extracts the publication engine from
+`scripts/release-publication.sh`, and compiles both artifacts under both
+endpoints with `-W error::SyntaxWarning -m py_compile`.
 
 ### S2: Diagnose an incomplete local validation environment
 
@@ -73,8 +74,9 @@ applies without introducing a second support declaration or a new framework.
   rather than restating independently editable endpoint values.
 - **R2 — Inclusive minor semantics**: support means repo-owned Python entry
   points and generated Python artifacts are expected to work on every CPython
-  minor from 3.9 through 3.14. The automated generated-code gate proves the two
-  boundary minors; changing either boundary is an explicit contract change.
+  minor from 3.9 through 3.14. The automated compatibility gate compiles both
+  artifact classes on the two boundary minors; changing either boundary is an
+  explicit contract change.
 - **R3 — Boundary identity**: before compilation, resolve each boundary
   executable, record its absolute path and full `Python X.Y.Z` identity, and
   verify that its major/minor equals the declared endpoint. Patch versions are
@@ -87,17 +89,20 @@ applies without introducing a second support declaration or a new framework.
   oldest and newest interpreter-path overrides. Without overrides it resolves
   the conventional `python3.9` and `python3.14` commands. Overrides select
   executable locations only and cannot change the declared versions.
-- **R6 — Generated-artifact registry**: the focused harness owns a small,
-  explicit list of generated Python artifacts and their extraction rules. The
-  initial registry contains the publication engine embedded in
-  `scripts/release-publication.sh`; ordinary Python heredocs that execute
-  directly are not generated artifacts and are not registered.
-- **R7 — Warning-as-error compilation**: extract each registered artifact once
-  into a private temporary directory, then run each boundary interpreter with
-  `-W error::SyntaxWarning -m py_compile` against that exact extracted file.
-  A failure names the source producer, extracted-artifact label, endpoint role,
-  resolved path, and full interpreter version without emitting unbounded
-  environment output.
+- **R6 — Explicit compatibility registry**: the focused harness owns one small
+  registry with two artifact classes and no globbing. The initial committed
+  source entry is `skills/compound/scripts/validate-frontmatter.py`; the initial
+  generated entry is the publication engine embedded in
+  `scripts/release-publication.sh` plus its extraction rule. Ordinary Python
+  heredocs that execute directly are neither committed entry points nor
+  generated-later artifacts and are not registered.
+- **R7 — Warning-as-error compilation**: copy each registered committed source
+  and extract each registered generated artifact once into a private temporary
+  directory, then run each boundary interpreter with
+  `-W error::SyntaxWarning -m py_compile` against those exact materialized
+  files. A failure names the source or producer, artifact class and label,
+  endpoint role, resolved path, and full interpreter version without emitting
+  unbounded environment output.
 - **R8 — Consumer integration**: `scripts/validate.sh` invokes the focused gate
   and preserves its nonzero result. The publication fixture harness delegates
   its embedded-engine warning check to the same extraction/compile behavior so
@@ -120,8 +125,8 @@ applies without introducing a second support declaration or a new framework.
 - Running the entire repository test suite on every intermediate minor as part
   of this local gate; the declared contract covers the inclusive range, while
   this feature's automated compile proof targets the oldest and newest minors.
-- Treating directly executed Python heredocs as generated artifacts solely
-  because Bash contains their source.
+- Treating directly executed Python heredocs as committed entry points or
+  generated artifacts solely because Bash contains their source.
 - Inferring generated Python through broad repository heuristics or building a
   plugin/registration framework for hypothetical producers.
 - Adding external CI, containers, version managers, package dependencies, or
@@ -149,13 +154,14 @@ shell harness reads and validates that contract with Python stdlib JSON parsing,
 resolves the two endpoint executables, verifies their identities, and emits one
 bounded identity/result record per endpoint.
 
-The harness then extracts each registered generated artifact into one private
-temporary root. Extraction is producer-specific and explicit: the initial entry
-copies only the `RELEASE_PUBLICATION_ENGINE_PY` block from
-`scripts/release-publication.sh`. The same extracted bytes are compiled by the
-oldest endpoint and then the newest endpoint. Any resolution, identity,
-extraction, warning, or compile failure makes the gate nonzero; cleanup still
-runs.
+The harness then materializes each registered artifact into one private
+temporary root. The committed-source class copies the exact bytes of
+`skills/compound/scripts/validate-frontmatter.py`. The generated-artifact class
+uses a producer-specific rule that copies only the
+`RELEASE_PUBLICATION_ENGINE_PY` block from `scripts/release-publication.sh`.
+The same materialized bytes are compiled by the oldest endpoint and then the
+newest endpoint. Any resolution, identity, copy, extraction, warning, or
+compile failure makes the gate nonzero; cleanup still runs.
 
 `scripts/validate.sh` is the repository-level consumer and cannot downgrade the
 gate's result. `scripts/test-release-publication.sh` retains its publication
@@ -163,15 +169,16 @@ integration case but calls the shared focused behavior instead of selecting
 only whichever `python3` happens to lead `PATH`. Documentation points readers
 to the JSON contract and the focused command, not a copied range.
 
-The compatibility declaration, endpoint resolver, and artifact registry have
-separate responsibilities. A future range change edits the declaration; a new
-generated producer edits the registry; neither requires changing consumer
-semantics.
+The compatibility declaration, endpoint resolver, and two-class artifact
+registry have separate responsibilities. A future range change edits the
+declaration; a new committed entry point or generated producer adds one typed
+registry entry; neither requires changing consumer semantics.
 
 ## Interface and Diagnostics
 
-- `bash scripts/test-python-compatibility.sh generated` runs the strict
-  generated-artifact endpoint gate.
+- `bash scripts/test-python-compatibility.sh all` runs the strict two-class
+  endpoint gate. Focused `committed` and `generated` groups exercise one class
+  without changing the fail-closed endpoint policy.
 - `PYTHON_OLDEST=/absolute/path/to/python3.9` and
   `PYTHON_NEWEST=/absolute/path/to/python3.14` select endpoint executables for
   nonstandard local layouts. Relative or non-executable values fail.
@@ -195,13 +202,17 @@ the fields and fail-closed meaning above are public validation behavior.
 - A happy fixture runs the real extracted publication engine through both local
   endpoints and asserts two distinct identity records plus two successful
   warning-as-error compiles.
+- A committed-source fixture copies the real frontmatter validator, compiles it
+  under both endpoints, and proves Python 3.9 rejects a disposable mutation
+  that introduces Python 3.10-only syntax.
 - A mutation fixture changes only the unique doubled escape in the nested HTTP
   regex back to a single invalid outer-template escape. It proves the Python
   3.14 compile fails for `SyntaxWarning` while the diagnostic names the
   publication producer and newest endpoint; it restores or discards the
   disposable copy afterward.
-- A registry fixture proves a missing extraction marker, empty extraction, or
-  duplicate artifact label fails rather than compiling the wrong bytes.
+- Registry fixtures prove a missing committed source, missing extraction
+  marker, empty extraction, duplicate artifact label, or unknown artifact class
+  fails rather than compiling the wrong bytes.
 - A cleanup fixture forces a compile failure and proves no extraction or
   `__pycache__` residue remains outside the harness temporary root.
 - The existing publication, signal-drift, manifest-sync, and structural suites
@@ -217,10 +228,15 @@ the fields and fail-closed meaning above are public validation behavior.
   declaration remains inclusive, so a reported intermediate-version failure is
   still a defect. Endpoint compilation is the required local floor, not a claim
   that intermediate testing is unnecessary.
-- **The registry can omit a future generated artifact.** Maintainer guidance
-  defines registration as part of adding a rendered-and-later-executed Python
-  producer. The registry stays explicit so ordinary direct heredocs are not
-  misclassified by unreliable heuristics.
+- **The registry can omit a future Python artifact.** Maintainer guidance
+  defines registration as part of adding a committed Python entry point or a
+  rendered-and-later-executed Python producer. The registry stays explicit so
+  ordinary direct heredocs are not misclassified by unreliable heuristics.
+- **Direct Python heredocs are not compiled at both endpoints.** This is an
+  accepted residual boundary: they execute immediately inside their owning
+  shell harness and current structural validation passed under isolated 3.9
+  and 3.14 shims. A heredoc promoted into a committed executable or generated
+  later-executed artifact must join the explicit registry.
 - **Harnesses can drift into separate implementations.** Structural validation
   and the publication integration test call the same focused gate; they do not
   copy endpoint values or extraction rules.
@@ -237,11 +253,14 @@ the fields and fail-closed meaning above are public validation behavior.
      0, and a reviewer search for `3.9` and `3.14` confirms executable endpoint
      policy exists only in `schemas/python-support.json` plus fixture inputs and
      historical/design evidence.
-2. Every registered generated Python artifact compiles with
-   `-W error::SyntaxWarning -m py_compile` under both declared boundary minors.
-   - **Measured by**: `bash scripts/test-python-compatibility.sh generated`
-     exits 0 and reports one successful compile for Python 3.9 and one for
-     Python 3.14 for each registered artifact.
+2. Every registered committed source and generated Python artifact compiles
+   with `-W error::SyntaxWarning -m py_compile` under both declared boundary
+   minors.
+   - **Measured by**: `bash scripts/test-python-compatibility.sh all` exits 0
+     and reports one successful Python 3.9 compile and one successful Python
+     3.14 compile for `skills/compound/scripts/validate-frontmatter.py` and the
+     extracted publication engine; its committed-source fixture also proves a
+     Python 3.10-only syntax mutation is rejected by the Python 3.9 endpoint.
 3. Interpreter identity is observable before compile results are evaluated.
    - **Measured by**: the focused happy fixture asserts records containing the
      oldest/newest role, declared minor, absolute resolved path, and full patch
