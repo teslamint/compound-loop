@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "implementation": "CPython",
+  "minimum_minor": "3.9",
+  "maximum_minor": "3.14"
+}
