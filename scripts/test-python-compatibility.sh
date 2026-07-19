@@ -531,6 +531,23 @@ make_fixture_repo() {
   cp "$ROOT/scripts/release-publication.sh" "$destination/scripts/release-publication.sh"
 }
 
+make_validation_fixture_repo() {
+  local destination="$1" rel
+  mkdir -p "$destination"
+  while IFS= read -r -d '' rel; do
+    mkdir -p "$destination/$(dirname "$rel")"
+    cp "$ROOT/$rel" "$destination/$rel"
+  done < <(git -C "$ROOT" ls-files -z)
+}
+
+invoke_validation_fixture_repo() {
+  local destination="$1"
+  PYTHON_OLDEST="${PYTHON_OLDEST_OVERRIDE:-$(command -v python3.9)}" \
+    PYTHON_NEWEST="${PYTHON_NEWEST_OVERRIDE:-$(command -v python3.14)}" \
+    PYTHON_SUPPORT_FILE="${PYTHON_SUPPORT_OVERRIDE:-$destination/schemas/python-support.json}" \
+    TMPDIR="$destination/tmp" bash "$destination/scripts/validate.sh" 2>&1
+}
+
 invoke_fixture_repo() {
   local destination="$1" group="${2:-all}"
   PYTHON_OLDEST="$(command -v python3.9)" PYTHON_NEWEST="$(command -v python3.14)" \
@@ -578,7 +595,7 @@ case_registry_and_materialization_failures() {
 python3 - <<'RELEASE_PUBLICATION_ENGINE_PY'" "$d/scripts/release-publication.sh"; rm "$d/scripts/release-publication.sh.bak" ;;
       missing_end) replace_once "$d/scripts/release-publication.sh" $'\nRELEASE_PUBLICATION_ENGINE_PY\n' $'\nMISSING_ENGINE_END\n' ;;
       duplicate_end) printf '\nRELEASE_PUBLICATION_ENGINE_PY\n' >> "$d/scripts/release-publication.sh" ;;
-      reversed) replace_once "$d/scripts/release-publication.sh" "<<'RELEASE_PUBLICATION_ENGINE_PY'" "<<'MISSING_ENGINE_MARKER'"; sed -i.bak '1i\
+      reversed) replace_once "$d/scripts/release-publication.sh" $'\nRELEASE_PUBLICATION_ENGINE_PY\n' $'\nMISSING_ENGINE_END\n'; sed -i.bak '1i\
 RELEASE_PUBLICATION_ENGINE_PY' "$d/scripts/release-publication.sh"; rm "$d/scripts/release-publication.sh.bak" ;;
       empty) "$BOOTSTRAP" - "$d/scripts/release-publication.sh" <<'PY'
 import pathlib, sys
@@ -598,6 +615,7 @@ PY
       duplicate_label) assert_contains "$out" 'reason=duplicate-label' "$name reason" || result=1 ;;
       empty) assert_contains "$out" 'reason=empty-artifact' "$name reason" || result=1 ;;
       copy_failure) assert_contains "$out" 'reason=copy-failed' "$name reason" || result=1 ;;
+      reversed) assert_contains "$out" 'marker-count: start=1 end=1 ordered=False' "$name exact reversed markers" || result=1 ;;
       *) assert_contains "$out" 'reason=marker-count' "$name reason" || result=1 ;;
     esac
     [[ -z "$(find "$d/tmp" -mindepth 1 -print -quit)" ]] || result=1
@@ -651,6 +669,68 @@ case_absolute_endpoint_overrides() {
   assert_contains "$out" "path=$(resolve_absolute "$(command -v python3.9)")" 'oldest absolute override' && assert_contains "$out" "path=$(resolve_absolute "$(command -v python3.14)")" 'newest absolute override'
 }
 
+case_validate_all_registered_artifacts() {
+  local d="$TMP_ROOT/validate all registered" out rc result=0
+  make_validation_fixture_repo "$d"
+  mkdir -p "$d/tmp"
+  out="$(invoke_validation_fixture_repo "$d")"; rc=$?
+  [[ $rc -eq 0 ]] || { printf '%s\n' "$out"; return 1; }
+  [[ $(printf '%s\n' "$out" | grep -c 'endpoint role=oldest') -eq 1 ]] || result=1
+  [[ $(printf '%s\n' "$out" | grep -c 'endpoint role=newest') -eq 1 ]] || result=1
+  [[ $(printf '%s\n' "$out" | grep -c 'artifact class=.*status=pass') -eq 4 ]] || result=1
+  [[ $(printf '%s\n' "$out" | grep -c '^ALL CHECKS PASSED$') -eq 1 ]] || result=1
+  assert_contains "$out" 'label=compound-frontmatter-validator' 'registered committed artifact' || result=1
+  assert_contains "$out" 'label=release-publication-engine' 'registered generated artifact' || result=1
+  [[ -z "$(find "$d/tmp" -mindepth 1 -print -quit)" ]] || result=1
+  return "$result"
+}
+
+case_validate_missing_oldest_endpoint() {
+  local d="$TMP_ROOT/validate missing oldest" out rc result=0
+  make_validation_fixture_repo "$d"
+  mkdir -p "$d/tmp"
+  out="$(PYTHON_OLDEST_OVERRIDE="$d/missing-python" invoke_validation_fixture_repo "$d")"; rc=$?
+  [[ $rc -ne 0 ]] || result=1
+  assert_contains "$out" 'endpoint role=oldest expected=3.9' 'validation missing oldest' || result=1
+  assert_contains "$out" 'endpoint role=newest expected=3.14' 'validation still checks newest' || result=1
+  assert_contains "$out" 'CHECKS FAILED' 'validation aggregate failure' || result=1
+  assert_not_contains "$out" 'ALL CHECKS PASSED' 'validation no false success' || result=1
+  [[ -z "$(find "$d/tmp" -mindepth 1 -print -quit)" ]] || result=1
+  return "$result"
+}
+
+case_invalid_outer_escape_fails_validation() {
+  local d="$TMP_ROOT/validate invalid outer escape" out rc count result=0 before after
+  make_validation_fixture_repo "$d"
+  mkdir -p "$d/tmp"
+  before="$(shasum -a 256 "$ROOT/scripts/release-publication.sh" | awk '{print $1}')"
+  count="$(grep -F -c 'match=re.fullmatch(r"HTTP/(?:1\\.1|2(?:\\.0)?)' "$d/scripts/release-publication.sh")"
+  [[ "$count" -eq 1 ]] || { echo "  invalid-escape precondition expected one match, got $count"; return 1; }
+  replace_once "$d/scripts/release-publication.sh" \
+    $'match=re.fullmatch(r"HTTP/(?:1\\\\.1|2(?:\\\\.0)?)' \
+    $'match=re.fullmatch(r"HTTP/(?:1\\.1|2(?:\\.0)?)'
+  out="$(invoke_validation_fixture_repo "$d")"; rc=$?
+  [[ $rc -ne 0 ]] || result=1
+  assert_contains "$out" 'label=release-publication-engine' 'validation invalid escape artifact' || result=1
+  assert_contains "$out" 'role=newest' 'validation invalid escape newest' || result=1
+  assert_contains "$out" 'reason=compile-failed' 'validation invalid escape failure' || result=1
+  [[ $(printf '%s\n' "$out" | grep -c 'artifact class=generated.*role=newest.*reason=compile-failed') -eq 1 ]] || result=1
+  [[ $(printf '%s\n' "$out" | grep -c 'artifact class=generated.*role=oldest.*status=pass') -eq 1 ]] || result=1
+  assert_contains "$out" 'CHECKS FAILED' 'invalid escape aggregate failure' || result=1
+  after="$(shasum -a 256 "$ROOT/scripts/release-publication.sh" | awk '{print $1}')"
+  [[ "$before" == "$after" ]] || result=1
+  [[ -z "$(find "$d/tmp" -mindepth 1 -print -quit)" ]] || result=1
+  return "$result"
+}
+
+case_publication_delegates_generated_group() {
+  local body
+  body="$(sed -n '/^case_embedded_engine_syntax_warnings()/,/^}/p' "$ROOT/scripts/test-release-publication.sh")"
+  [[ $(printf '%s\n' "$body" | grep -F -c 'bash "$ROOT/scripts/test-python-compatibility.sh" generated') -eq 1 ]] || return 1
+  assert_not_contains "$body" 'py_compile' 'publication no local compile' && \
+    assert_not_contains "$body" 'RELEASE_PUBLICATION_ENGINE_PY' 'publication no local extraction'
+}
+
 run_fixtures() {
   record_case contract_valid case_contract_valid
   record_case contract_invalids case_contract_invalids
@@ -663,6 +743,10 @@ run_fixtures() {
   record_case boundary_compile_failures case_boundary_compile_failures
   record_case absolute_endpoint_overrides case_absolute_endpoint_overrides
   record_case additional_generated_registry_entry case_additional_generated_registry_entry
+  record_case validate_all_registered_artifacts case_validate_all_registered_artifacts
+  record_case validate_missing_oldest_endpoint case_validate_missing_oldest_endpoint
+  record_case invalid_outer_escape_fails_validation case_invalid_outer_escape_fails_validation
+  record_case publication_delegates_generated_group case_publication_delegates_generated_group
   if [[ $FAIL_COUNT -eq 0 ]]; then
     printf 'All python compatibility fixture cases passed.\n'
     return 0

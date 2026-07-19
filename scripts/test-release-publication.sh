@@ -1526,13 +1526,12 @@ PY
 }
 
 case_embedded_engine_syntax_warnings() {
-  local extracted="$CASE_ROOT/release-publication-engine.py"
-  awk '
-    /<<'"'"'RELEASE_PUBLICATION_ENGINE_PY'"'"'/ { inside=1; next }
-    /^RELEASE_PUBLICATION_ENGINE_PY$/ { exit }
-    inside { print }
-  ' "$ROOT/scripts/release-publication.sh" >"$extracted"
-  "$PYTHON_DIR/python3" -W error::SyntaxWarning -m py_compile "$extracted"
+  local out
+  out="$(bash "$ROOT/scripts/test-python-compatibility.sh" generated)"
+  assert_contains "$out" 'endpoint role=oldest' oldest-endpoint-identity
+  assert_contains "$out" 'endpoint role=newest' newest-endpoint-identity
+  assert_contains "$out" 'label=release-publication-engine' shared-publication-artifact
+  assert_eq "$(printf '%s\n' "$out" | grep -c 'label=release-publication-engine.*status=pass')" 2 both-endpoint-passes
 }
 
 case_exact_packet_execution_contract() {

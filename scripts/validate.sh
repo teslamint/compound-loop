@@ -271,6 +271,12 @@ if claude_version != codex_version:
 print(f"ok:   plugin manifest versions agree: {claude_version}")
 PY
 
+# 8. Declared Python endpoints compile every registered Python artifact
+if ! PYTHON_SUPPORT_FILE="$ROOT/schemas/python-support.json" \
+  bash "$ROOT/scripts/test-python-compatibility.sh" all; then
+  FAIL=1
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"

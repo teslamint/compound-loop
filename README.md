@@ -52,3 +52,19 @@ Skills are invoked as `/name` in Claude Code and `$name` in Codex.
 - Skills communicate through files, never through harness-specific channels: review findings as JSON artifacts (`mode:agent`), knowledge capture with terminal signal strings (`mode:headless`), loop state in `.release-loop/progress.md`.
 - Every parallel dispatch degrades: native parallel subagents → sequential passes → single-call fallback.
 - Plan documents follow a single schema (frontmatter + stable U-IDs + categorized test scenarios) shared by `planning`, `implementing`, and `reviewing`. See `schemas/`.
+
+## Python compatibility gate
+
+The supported interpreter boundary is declared once in
+[`schemas/python-support.json`](schemas/python-support.json). Maintainers can run
+`bash scripts/test-python-compatibility.sh all` for the operational gate or
+`bash scripts/test-python-compatibility.sh fixtures` for its disposable fixture
+suite. The gate fails closed when either endpoint is unavailable or does not
+match the declared implementation and minor version. When command discovery is
+not suitable, `PYTHON_OLDEST` and `PYTHON_NEWEST` accept absolute interpreter
+paths.
+
+The registry in `scripts/test-python-compatibility.sh` has two explicit classes:
+committed Python entry points and Python generated for later execution. Add new
+artifacts to that registry rather than copying endpoint policy into another
+file. Direct heredocs that execute immediately remain outside this boundary.
