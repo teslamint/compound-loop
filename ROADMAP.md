@@ -24,7 +24,7 @@ fires, not before (`enforces: P6`).
 
 | Item | Release | Evidence | Follow-up boundary |
 |---|---|---|---|
-| `release` skill (13th): local post-merge CHANGELOG, synchronized manifests, first-hand gate, annotated tag, and prepare-only headless handoff | `v0.2.0` | Release commit `c3cbf01`; tag `v0.2.0`; [GitHub release](https://github.com/teslamint/compound-loop/releases/tag/v0.2.0) reported published from the CHANGELOG section | Manual `v0.2.0` publication is complete; gated outward automation shipped at `596c8ea`, normal republish of protected `v0.2.0` remains forbidden, and the first future live smoke is tracked below |
+| `release` skill (13th): local post-merge CHANGELOG, synchronized manifests, first-hand release/publication gates, annotated tags, prepare-only headless handoff, and resumable outward publication | `v0.3.0` | Release commit `22b4d85`; tag `v0.3.0`; [GitHub release](https://github.com/teslamint/compound-loop/releases/tag/v0.3.0); first live smoke classified matching branch/tag, executed only `page-create`, then independently verified `noop/fully-matching` with a byte-exact CHANGELOG body | Local ceremony originally shipped at `v0.2.0` (`c3cbf01`); protected `v0.2.0` remains non-republishable through normal publication; future versions reuse the same separate-consent, missing-suffix, fail-closed boundary |
 
 ## Carry-forward from retros
 
@@ -36,7 +36,6 @@ Open items registered by retro docs (`docs/retros/`), pushed here per `retrospec
 | Clean-environment Codex install check: plugin-native skill discovery (`.codex-plugin/plugin.json`) has never been isolated from the dev machine's `~/.agents/skills/` symlinks | 2026-07-16 v0.1 release retro | P3 | First external or clean-machine Codex install |
 | Automated numbered-reference validation for planning and plan schema: prove contiguous heading/list numbering and resolve planning-step references across `skills/planning/SKILL.md`, `skills/planning/references/*.md`, and `schemas/plan-schema.md` | 2026-07-18 process-guidance carry-forward retro | P3 | Before the next numbered planning-step or plan-schema hard-floor insertion, add the check to structural validation |
 | Pin the tracked Python support contract in every non-fixture compatibility consumer, including the publication harness delegation | 2026-07-19 Python compatibility gate retro | P3 | Before the next publication-harness or compatibility-consumer edit, set `PYTHON_SUPPORT_FILE` explicitly at the delegation boundary |
-| First real gated-publication smoke on a disposable or intentionally publishable future repository/version; never use normal publication to republish protected `v0.2.0` | 2026-07-19 gated outward publication retro | P2 | Next intended live publication, only after a new first-hand approval names the target and version |
 
 ## Non-goals (re-affirmed)
 
