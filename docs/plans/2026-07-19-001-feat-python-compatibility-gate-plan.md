@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Declared Python Compatibility and Generated-Code Warning Gate
 type: feat
-status: draft
+status: approved
 date: 2026-07-19
 execution: code
 origin: docs/specs/2026-07-19-python-compatibility-generated-code-warning-gate-design.md
