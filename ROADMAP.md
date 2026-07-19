@@ -24,7 +24,7 @@ fires, not before (`enforces: P6`).
 
 | Item | Release | Evidence | Follow-up boundary |
 |---|---|---|---|
-| `release` skill (13th): local post-merge CHANGELOG, synchronized manifests, first-hand gate, annotated tag, and prepare-only headless handoff | `v0.2.0` | Release commit `c3cbf01`; tag `v0.2.0`; [GitHub release](https://github.com/teslamint/compound-loop/releases/tag/v0.2.0) reported published from the CHANGELOG section | Manual `v0.2.0` publication is complete; outward-publication automation for future releases is tracked below |
+| `release` skill (13th): local post-merge CHANGELOG, synchronized manifests, first-hand gate, annotated tag, and prepare-only headless handoff | `v0.2.0` | Release commit `c3cbf01`; tag `v0.2.0`; [GitHub release](https://github.com/teslamint/compound-loop/releases/tag/v0.2.0) reported published from the CHANGELOG section | Manual `v0.2.0` publication is complete; gated outward automation shipped at `596c8ea`, normal republish of protected `v0.2.0` remains forbidden, and the first future live smoke is tracked below |
 
 ## Carry-forward from retros
 
@@ -32,11 +32,11 @@ Open items registered by retro docs (`docs/retros/`), pushed here per `retrospec
 
 | Item | Origin | Priority | Trigger / next step |
 |---|---|---|---|
-| Second pilot on a larger feature (5+ units, or 2+ conditional review lanes) to exercise the multi-agent dispatch tiers (Tier 1/2, parallel review lanes, per-unit reviewers) that the first pilot's single-agent floor never touched | 2026-07-16 signal-drift-check retro | P2 | Next feature big enough to qualify |
 | Diff-size metric reconciliation: one named metric per cross-phase citation (total diff vs. per-file non-test lines), so lane-trigger decisions never mix figures silently | 2026-07-16 signal-drift-check retro | P3 | Next release-loop run that cites diff size across phases |
 | Clean-environment Codex install check: plugin-native skill discovery (`.codex-plugin/plugin.json`) has never been isolated from the dev machine's `~/.agents/skills/` symlinks | 2026-07-16 v0.1 release retro | P3 | First external or clean-machine Codex install |
-| Gated outward publication automation for `release`: remote/auth capability checks, a separate first-hand publication gate, exact CHANGELOG-section body reuse, idempotency, and partial-failure recovery; never republish `v0.2.0` except through an explicit repair path | 2026-07-16 release-skill v0.2.0 retro | P2 | Start a new designing cycle for future releases; the remote trigger fired and manual `v0.2.0` publication is already complete |
 | Automated numbered-reference validation for planning and plan schema: prove contiguous heading/list numbering and resolve planning-step references across `skills/planning/SKILL.md`, `skills/planning/references/*.md`, and `schemas/plan-schema.md` | 2026-07-18 process-guidance carry-forward retro | P3 | Before the next numbered planning-step or plan-schema hard-floor insertion, add the check to structural validation |
+| Declared Python compatibility and generated-code warning gate: define the supported Python range and compile extracted generated Python with `-W error::SyntaxWarning` on the oldest and newest supported interpreters | 2026-07-19 gated outward publication retro | P2 | Before the next generated/embedded Python change or interpreter-support decision, establish the range and cross-version check |
+| First real gated-publication smoke on a disposable or intentionally publishable future repository/version; never use normal publication to republish protected `v0.2.0` | 2026-07-19 gated outward publication retro | P2 | Next intended live publication, only after a new first-hand approval names the target and version |
 
 ## Non-goals (re-affirmed)
 
