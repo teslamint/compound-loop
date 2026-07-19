@@ -138,13 +138,13 @@ resolve_endpoint() {
     return 1
   fi
 
-  version_text="$($resolved --version 2>&1)"; rc=$?
+  version_text="$("$resolved" --version 2>&1)"; rc=$?
   version_text="${version_text//$'\n'/ }"
   if [[ $rc -ne 0 ]]; then
     fail "endpoint role=$role expected=$expected path=$resolved reason=--version failed output=${version_text:0:120}"
     return 1
   fi
-  identity="$($resolved -c 'import platform,sys; print(platform.python_implementation()+"\t"+platform.python_version())' 2>&1)"; rc=$?
+  identity="$("$resolved" -c 'import platform,sys; print(platform.python_implementation()+"\t"+platform.python_version())' 2>&1)"; rc=$?
   identity="${identity//$'\n'/ }"
   if [[ $rc -ne 0 || "$identity" != *$'\t'* ]]; then
     fail "endpoint role=$role expected=$expected path=$resolved reason=identity probe failed output=${identity:0:120}"
@@ -303,6 +303,21 @@ case_future_patch() {
   [[ $rc -eq 0 ]] && assert_contains "$out" "Python 3.9.99" "future oldest patch" && assert_contains "$out" "Python 3.14.99" "future newest patch"
 }
 
+case_endpoint_paths_with_spaces() {
+  local d="$TMP_ROOT/endpoint paths with spaces" old new out rc result=0
+  mkdir -p "$d/tmp" "$d/bin with spaces"
+  write_contract "$d/support.json" 1 CPython 3.9 3.14
+  old="$d/bin with spaces/python oldest"
+  new="$d/bin with spaces/python newest"
+  write_fake "$old" CPython 3.9.25
+  write_fake "$new" CPython 3.14.6
+  out="$(invoke_inner endpoints "$d/support.json" "$old" "$new" "$d/tmp")"; rc=$?
+  [[ $rc -eq 0 ]] || return 1
+  assert_contains "$out" "path=$(resolve_absolute "$old") version=Python 3.9.25" "oldest resolved path with spaces" || result=1
+  assert_contains "$out" "path=$(resolve_absolute "$new") version=Python 3.14.6" "newest resolved path with spaces" || result=1
+  return "$result"
+}
+
 case_endpoint_failures() {
   local d="$TMP_ROOT/endpoint-failures" out rc result=0 long_output long_run
   mkdir -p "$d/tmp"
@@ -347,6 +362,7 @@ run_fixtures() {
   record_case contract_invalids case_contract_invalids
   record_case endpoints_valid case_endpoints_valid
   record_case endpoint_future_patch case_future_patch
+  record_case endpoint_paths_with_spaces case_endpoint_paths_with_spaces
   record_case validate_missing_oldest_endpoint_and_failures case_endpoint_failures
   if [[ $FAIL_COUNT -eq 0 ]]; then
     printf 'All python compatibility fixture cases passed.\n'
