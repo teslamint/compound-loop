@@ -277,6 +277,108 @@ if ! PYTHON_SUPPORT_FILE="$ROOT/schemas/python-support.json" \
   FAIL=1
 fi
 
+# 9. Retro interview format: template vocabulary matches skill prose
+python3 - "$ROOT" <<'PY' || FAIL=1
+import re, sys, pathlib
+
+root = pathlib.Path(sys.argv[1])
+TAG = "[retro-format]"
+TEMPLATE = "schemas/retro-template.md"
+SKILL = "skills/retrospective/SKILL.md"
+PROBES = "skills/retrospective/references/interview-probes.md"
+failures = []
+
+def fail(msg):
+    failures.append(f"FAIL: {TAG} {msg}")
+
+def finish():
+    if failures:
+        print("\n".join(failures))
+        sys.exit(1)
+    print("ok:   retro interview format: template and skill prose agree")
+    sys.exit(0)
+
+def boundary_search(value, text):
+    # Boundary-aware: a naive substring check would let a template value that
+    # is a prefix of the consumer's word (e.g. 'self-check' vs 'self-checklist')
+    # pass silently.
+    pattern = r"(?<![\w-])" + re.escape(value) + r"(?![\w-])"
+    return re.search(pattern, text) is not None
+
+try:
+    template_text = (root / TEMPLATE).read_text(encoding="utf-8")
+except OSError:
+    fail(f"{TEMPLATE} missing or unreadable")
+    finish()
+
+if "## Interview Transcript" not in template_text:
+    fail(f"{TEMPLATE}: '## Interview Transcript' heading missing")
+    finish()
+
+lines = template_text.split("\n")
+
+LEVEL_PREFIX = "- Independence level:"
+level_lines = [l for l in lines if l.startswith(LEVEL_PREFIX)]
+levels = []
+if len(level_lines) != 1:
+    fail(f"{TEMPLATE}: expected exactly one '{LEVEL_PREFIX}' line, found {len(level_lines)}")
+else:
+    levels = [v.strip() for v in level_lines[0][len(LEVEL_PREFIX):].split("|")]
+    levels = [v for v in levels if v]
+    if len(set(levels)) != 4:
+        fail(
+            f"{TEMPLATE}: expected 4 distinct independence levels on the "
+            f"'{LEVEL_PREFIX}' line, found {len(set(levels))}: {levels!r}"
+        )
+        levels = []
+
+VERDICT_PREFIX = "Verdict cell values:"
+verdict_lines = [l for l in lines if l.startswith(VERDICT_PREFIX)]
+verdicts = []
+if len(verdict_lines) != 1:
+    fail(f"{TEMPLATE}: expected exactly one '{VERDICT_PREFIX}' line, found {len(verdict_lines)}")
+else:
+    verdicts = re.findall(r"`([^`]+)`", verdict_lines[0])
+    if len(set(verdicts)) != 3:
+        fail(
+            f"{TEMPLATE}: expected 3 distinct backticked verdict forms on the "
+            f"'{VERDICT_PREFIX}' line, found {len(set(verdicts))}: {verdicts!r}"
+        )
+        verdicts = []
+
+consumers = {}
+for rel in (SKILL, PROBES):
+    try:
+        consumers[rel] = (root / rel).read_text(encoding="utf-8")
+    except OSError:
+        fail(f"{rel} missing or unreadable")
+
+skill_text = consumers.get(SKILL)
+if skill_text is not None:
+    for level in levels:
+        if not boundary_search(level, skill_text):
+            fail(f"independence level '{level}' from {TEMPLATE} not found in {SKILL}")
+
+# The stable vocabulary anchor of a verdict form is its text before any
+# parenthetical (e.g. 'no evidenced answer (3 rejections): <verbatim>'
+# anchors on 'no evidenced answer'). Each anchor must appear in both the
+# skill prose and the probes contract.
+anchors = []
+for form in verdicts:
+    anchor = form.split("(")[0].strip().rstrip(":").strip()
+    if anchor and anchor not in anchors:
+        anchors.append(anchor)
+for rel in (SKILL, PROBES):
+    text = consumers.get(rel)
+    if text is None:
+        continue
+    for anchor in anchors:
+        if not boundary_search(anchor, text):
+            fail(f"verdict vocabulary '{anchor}' from {TEMPLATE} not found in {rel}")
+
+finish()
+PY
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"
