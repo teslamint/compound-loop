@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Retro Interview Protocol Enforcement
 type: feat
-status: draft
+status: approved
 date: 2026-07-20
 execution: code
 origin: docs/specs/2026-07-20-retro-interview-enforcement-design.md
