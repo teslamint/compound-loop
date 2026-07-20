@@ -89,5 +89,4 @@ End every invocation with the exact terminal signal line from `schemas/headless-
 
 ## Out of Scope (v0.2 hook points — documented, not implemented)
 
-- **EntireContext hooks**: `ec_decision_create` to record architecture decisions surfaced in findings; `ec_lessons` to check for duplicate lessons before writing new ones. Feature-detected, never a hard dependency, never implemented in v0.1.
 - **Session-history search integration**: Phase 2 names it as pluggable; the concrete search tool and dispatch payload discipline are deferred to v0.2.
