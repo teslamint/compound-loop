@@ -239,3 +239,27 @@ The committed resolution state contains no uncited finding.
   artifact uncommitted". The verdict texts are recorded verbatim in run 1's
   transcript. The round-trip materially changed the doc's content, which is the
   property the protocol exists to provide.
+
+## Errata and observations from task review
+
+The embedded documents above are unedited records of the dry runs; the task
+review of this evidence found two defects in their *content*, preserved here as
+errata rather than rewritten, because they are themselves evidence about the
+protocol's residual limits:
+
+1. **Minor-finding count is wrong in the record: 12, not 10.** The respondent's
+   artifact pack stated "10 MinorFindings" and T1's facilitator verdict repeated
+   "all 10 minors" while correctly citing the ledger — which actually itemizes
+   12 IDs (U2-m1/m2, U3-m1/m2, U4-m1/m2/m3, U5-m1..m5). The facilitator
+   verified the structure of the deferral (stable IDs, dated entries, rule
+   citation) but not the arithmetic, and an unverified count survived inside an
+   `accepted` verdict. This is a live demonstration that facilitator acceptance
+   narrows, but does not eliminate, respondent-sourced error — the known limit
+   the skill text states. Disposition: final branch review enumerates all 12.
+2. **T3 is tagged Phase 3, which the Interview Protocol excludes from
+   interviewing.** The probe targeted a rubric-measured criterion (SC2), where
+   the measurement *is* a narrative, so probing was the only available lever —
+   but the skill's "Phase 3 is never interviewed" wording does not carve out
+   rubric-measured criteria. Genuine protocol tension surfaced by the dry run;
+   routed to the enclosing arc's retrospective as finding material, not patched
+   here (a skill-text change is observable behavior beyond the approved spec).
