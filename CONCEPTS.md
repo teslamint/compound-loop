@@ -23,3 +23,7 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Supported Python range** — the inclusive interval of CPython minor versions that repo-owned Python entry points and generated Python artifacts are expected to support.
 - **Boundary interpreter** — the oldest or newest minor in the supported Python range, used as an explicit endpoint for compatibility evidence.
 - **Generated Python artifact** — Python source rendered by another program and executed later; distinct from Python source executed directly by its containing shell command.
+
+## Metrics
+
+- **Changed non-test lines** — The count of modified lines excluding tests, generated files, and lockfiles, used as the canonical diff-size metric across all phases (e.g. lane triggers).
