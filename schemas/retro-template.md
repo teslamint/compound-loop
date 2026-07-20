@@ -39,7 +39,27 @@ during the retro (enforces: P3) — a prior claim in a commit message or PR body
 |---|---|---|
 | <previous item> | Done / In progress / Not started | <commit / PR / file> |
 
-(Every item from the previous retro appears here — silent drops are a defect.)
+(Every item from the previous retro appears here — silent drops are a defect.
+Rows probed during the interview append `(T<n>)` to their Evidence cell.)
+
+- Previous doc shape: conformant | violations recorded as findings | pre-schema, exempt
+
+(the backward check's result on the previous retro doc)
+
+## Interview Transcript
+
+- Independence level: heterogeneous | same-model fresh-context | in-thread (approximated independence) | self-checklist
+- Rounds used: N (max 5)
+
+| ID | Round | Phase | Probe | Answer | Evidence | Verdict (verbatim) |
+|---|---|---|---|---|---|---|
+| T1 | 1 | 5 | <probe> | <answer> | <commit/file/measurement> | accepted |
+| T2 | 3 | 4 | <probe> | <final answer> | — | no evidenced answer (3 rejections): <facilitator's final rejection, verbatim> |
+
+Verdict cell values: `accepted` | `no evidenced answer (3 rejections): <verbatim>` | `self-attested`
+
+(`self-attested` is for degraded modes only; in `self-checklist` mode the rows are the
+checklist answers; a zero-row table under a valid header is valid.)
 
 ## Findings
 
@@ -47,9 +67,11 @@ during the retro (enforces: P3) — a prior claim in a commit message or PR body
 - **What happened**: <specific event, cited to PR comment / CI run / review round>
   **Why**: <cause>
   **How to apply**: <forward-looking action>
+  **Cites**: T<n> / Phase 2–3 data
 
 ### What to improve
-- (same three-part structure; findings must cite specifics — vague findings are rejected;
+- (same structure including the **Cites** line; findings must cite specifics — vague findings
+  are rejected, and a finding with no **Cites** line is rejected as uncited;
   never frame resolved review findings as "noise")
 
 ### Process observations
