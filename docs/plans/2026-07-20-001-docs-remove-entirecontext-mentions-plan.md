@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Remove EntireContext mentions from shipped skill surface and roadmap
 type: docs
-status: draft
+status: approved
 date: 2026-07-20
 execution: non-code
 ---
