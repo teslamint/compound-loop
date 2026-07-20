@@ -39,7 +39,7 @@ A respondent drafts a Phase 5 finding that cites no transcript triple and no Pha
 
 ### In
 
-- `skills/retrospective/SKILL.md`: Interview Protocol rewrite (facilitator verdict authority, re-dispatch round contract, 5-dispatch global cap), end-of-interview structural checks (carry-forward, findings) and the Phase 8 pre-commit check.
+- `skills/retrospective/SKILL.md`: Interview Protocol rewrite (facilitator verdict authority, re-dispatch round contract, 5-dispatch global cap), end-of-interview structural checks (carry-forward, findings), the Phase 8 pre-commit check, and the Phase 4 next-retro backward check.
 - `schemas/retro-template.md`: new `## Interview Transcript` section (independence level + triples table with stable T-IDs); citation column/line added to Carry-forward and Findings shapes.
 - `skills/retrospective/references/interview-probes.md`: output contract updated to include T-IDs and the verbatim-verdict rule.
 
@@ -92,8 +92,9 @@ Because rounds may span Phases 4 and 5, the two content checks run **at end-of-i
 - **Carry-forward check**: every row of the `Carry-forward from previous retro` table cites artifact evidence (commit/PR/file — existing rule); any row the facilitator probed also cites its T-ID in the Evidence cell.
 - **Findings check**: every finding — the unit is the `**What happened**:` list item, not the three fixed `###` buckets — cites at least one transcript T-ID or Phase 2–3 data. An uncited finding blocks progression — back to the interview (if dispatches remain under the cap) or dropped.
 - **Phase 8 pre-commit**: the doc contains an Interview Transcript section with a valid independence level and a rounds-used count; in `self-checklist` mode the rows are the checklist answers. A zero-row table under a valid header is valid (nothing warranted probing). A missing section blocks the commit.
+- **Next-retro backward check (Phase 4)**: when Phase 4 reads the previous retro doc, it also verifies that doc's shape — an Interview Transcript section with a valid independence level, and no uncited findings. A violation is recorded as a finding in the current retro, not silently repaired. A previous doc predating this schema is marked `pre-schema, exempt` and skipped. This check runs in a different execution than the one that wrote the doc, so it does not share the in-run checks' weakness (the same agent skipping its own instructions); it catches violations one cycle late but reliably, since Phase 4 reads the previous doc every cycle by existing rule.
 
-Checks are executed by the skill (self-checks within the run), scoped to the doc being written — existing retro docs are unaffected.
+The first three checks are executed by the skill within the writing run, scoped to the doc being written; the backward check audits the previous cycle's doc. Existing retro docs are unaffected except as `pre-schema, exempt` backward-check subjects.
 
 ## Data Model
 
@@ -117,7 +118,7 @@ Verdict cell values: `accepted` | `no evidenced answer (3 rejections): <verbatim
 
 Skill-doc change — verification is by dry run, not unit tests:
 
-1. **Positive dry run (Tier 1)**: run a retro on a real merged change with a dispatched facilitator; verify the produced doc passes all three structural checks and every finding cites a T-ID.
+1. **Positive dry run (Tier 1)**: run a retro on a real merged change with a dispatched facilitator; verify the produced doc passes the three in-run structural checks and every finding cites a T-ID. The backward check fires on the previous retro doc and marks it `pre-schema, exempt`.
 2. **Degraded dry run (self-checklist)**: run a headless retro; verify the transcript section exists with `self-checklist` level and the doc still passes checks.
 3. **Negative injection**: during a dry run, deliberately draft one finding with no citation; verify the end-of-interview findings check blocks it before Phase 8.
 4. **Regression**: `bash scripts/validate.sh` still passes (frontmatter, signal lines, template presence).
@@ -132,7 +133,7 @@ Skill-doc change — verification is by dry run, not unit tests:
 
 1. `schemas/retro-template.md` defines the Interview Transcript section with independence level, rounds-used, and a T-ID triples table.
    - **Measured by**: `grep -c "Interview Transcript" schemas/retro-template.md` returns ≥1 and the section contains `Independence level` and a `| ID |` table header.
-2. `skills/retrospective/SKILL.md` defines the round contract (stateless dispatch, ≤5 dispatches, verbatim verdicts) and all three structural checks.
+2. `skills/retrospective/SKILL.md` defines the round contract (stateless dispatch, ≤5 dispatches, verbatim verdicts) and all four structural checks (carry-forward, findings, pre-commit, next-retro backward).
    - **Measured by**: reviewer rubric — each of R1–R5 is locatable in the skill text by section; no rung of the degradation ladder is named by tool.
 3. A Tier 1 dry-run retro produces a doc where every finding cites a T-ID or Phase 2–3 data.
    - **Measured by**: on the produced doc, every `**What happened**:` finding block under the Findings buckets contains a `**Cites**:` line; zero uncited findings.
@@ -145,6 +146,6 @@ Skill-doc change — verification is by dry run, not unit tests:
 
 ## Open Decisions
 
-- **Repo-wide `scripts/validate.sh` check for new retro docs**: a date- or list-gated check (docs after this spec's adoption must contain the transcript section) would close the gap mechanically but adds grandfathering logic. Owner: user — decide at planning time or defer until the first violation slips past the in-skill checks.
+- **Repo-wide `scripts/validate.sh` check for new retro docs**: a date- or list-gated check (docs after this spec's adoption must contain the transcript section) would close the gap mechanically but adds grandfathering logic. Deferred: the next-retro backward check (R5) already audits every doc one cycle later from an independent execution. Owner: user — trigger is the first violation that slips past both the in-run checks and the backward check.
 - **Verbatim-verdict length bound**: whether very long facilitator outputs may be truncated with a marker, or must be carried in full. Owner: `planning`.
 - **Schema-drift grep check**: whether the P3 format-drift carry-forward item's targeted check (skill prose ↔ template field names) is implemented in this cycle or its own. Owner: user.
