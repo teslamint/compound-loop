@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.1] - 2026-07-20
+
+### Changed
+- Removed the EntireContext-specific future-hook references from the `retrospective` skill and the roadmap candidate table; third-party decision capture is left to user-level configuration, while the product-neutral session-history hook point remains.
+
 ## [0.3.0] - 2026-07-19
 
 ### Added
