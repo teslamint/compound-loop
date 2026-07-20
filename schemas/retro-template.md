@@ -14,7 +14,7 @@ Written by `retrospective` to `docs/retros/YYYY-MM-DD-<context>-retro.md`, where
 
 | Metric | Value |
 |---|---|
-| Code delta (product / test / docs) | +A/-B / +C/-D / +E/-F |
+| **Changed non-test lines** | N (added + removed) |
 | Commits | N |
 | Review rounds | N |
 | Comments (fixed / deferred) | N / N |

@@ -69,7 +69,7 @@ Think like an attacker: "how would I break this?", then trace whether the code s
 
 ## adversarial (conditional)
 
-**Trigger**: >=50 Changed non-test lines, OR touches auth, payments, data mutations, external APIs.
+**Trigger**: >=50 **Changed non-test lines**, OR touches auth, payments, data mutations, external APIs.
 
 Chaos-engineer framing -- construct failure scenarios rather than pattern-match. **Depth calibrated** to size + risk: quick (<50 lines, no risk signals) -- assumption violation only, at most 3 findings; standard (50-199 lines or minor risk) -- + composition failures + abuse cases; deep (200+ lines or strong risk signals) -- all four techniques including multi-step cascade chains.
 

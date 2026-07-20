@@ -29,7 +29,7 @@ Check for `mode:headless` in arguments. In headless mode: no blocking questions,
 
 Gather what's available; degrade gracefully rather than blocking on a missing source.
 
-- **Git/PR metrics** (PR-merge mode): Changed non-test lines, commit count, review rounds, comments fixed/deferred, CI failures, duration from first spec commit to merge, units planned vs. completed. Shape per `schemas/retro-template.md`'s Release data table.
+- **Git/PR metrics** (PR-merge mode): **Changed non-test lines**, commit count, review rounds, comments fixed/deferred, CI failures, duration from first spec commit to merge, units planned vs. completed. Shape per `schemas/retro-template.md`'s Release data table.
 - **Session-history search** (session-end mode, no PR): a pluggable capability, not a hard dependency — if a session-search tool is available, use it with a tight payload (topic, time window, one filter rule); if unavailable, skip and note the gap in the doc rather than blocking.
 - **Origin artifact**: read the plan's `origin:` frontmatter field (`schemas/plan-schema.md`) to locate the spec. If no plan exists, check for a spec path directly. Read that spec's `## Success Criteria` section verbatim (`skills/designing/references/spec-template.md` shape: statement + `Measured by`).
 

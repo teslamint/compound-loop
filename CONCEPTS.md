@@ -26,4 +26,4 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 
 ## Metrics
 
-- **Changed non-test lines** — The count of modified lines excluding tests, generated files, and lockfiles, used as the canonical diff-size metric across all phases (e.g. lane triggers).
+- **Changed non-test lines** — the count of modified lines (added + removed) excluding tests, generated files, and lockfiles, used as the canonical diff-size metric across all phases (e.g. lane triggers).
