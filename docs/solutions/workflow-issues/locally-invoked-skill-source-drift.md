@@ -2,19 +2,24 @@
 module: skill-loading
 date: "2026-07-20"
 problem_type: workflow_issue
-component: dot-agents-sync
+component: dotagents-install
 severity: medium
+symptoms:
+  - "a skill invocation acts on prose that was already removed or changed in the repo's tracked skills/<name>/SKILL.md"
+  - "~/.agents/agents.lock's resolved_commit for a skill is behind the repo's pushed HEAD"
+root_cause: dotagents pins each installed skill to a resolved GitHub commit in agents.lock at install time; nothing re-resolves it automatically after a later push, so a session that edits and pushes a skill file and then re-invokes that skill runs on the stale pinned copy
+resolution_type: operational_fix
 applies_when:
-  - "a session edits and commits a repo-tracked skills/<name>/SKILL.md file"
-  - "that same session later invokes the same skill again, in the same or a different tool"
-  - "the skill is installed through a symlinked, synced, or otherwise indirect path rather than a live view of the repo checkout"
+  - "a session edits and pushes a repo-tracked skills/<name>/SKILL.md file"
+  - "that same session, or a later one, invokes the same skill again before re-installing"
+  - "the skill is installed via dotagents' wildcard source resolution rather than a live symlink into the working checkout"
 related_components:
   - retrospective
-  - dot-agents
+  - dotagents
   - skill-loading
 tags:
-  - dot-agents
-  - skill-sync
+  - dotagents
+  - agents-lock
   - stale-instructions
   - self-referential-drift
 ---
@@ -23,21 +28,27 @@ tags:
 
 ## Context
 
-`~/.claude/skills` resolves via symlink to `~/.agents/skills`, a dot-agents
-cross-tool skill-sync directory. That directory holds a point-in-time
-snapshot copy of each skill's `SKILL.md`, not a live view into any repo
-checkout.
+`~/.claude/skills` resolves via symlink to `~/.agents/skills`, populated by
+`dotagents` (`npx @sentry/dotagents`, config in `~/.agents/agents.toml`).
+`compound-loop` is declared there as a wildcard skill source
+(`[[skills]] name = "*" source = "teslamint/compound-loop"`). Each installed
+skill is pinned to an exact upstream commit in `~/.agents/agents.lock`
+(`resolved_commit = "<sha>"`) — **not** a live view into any local working
+checkout, and not even a "latest on the default branch" reference. It is a
+resolved GitHub download, frozen until something explicitly re-resolves it.
 
 In this session, `compound-loop/skills/retrospective/SKILL.md` was edited and
-committed twice (`b37675f` at 11:43, removing an `EntireContext hooks`
-bullet; further edits at 13:29, changing Phase 2's metric wording). When the
-`retrospective` skill was invoked again later in the same session, the
-harness loaded its body from `~/.agents/skills/retrospective/SKILL.md` — a
-copy last synced at `2026-07-20T11:06:47+09:00`, before either edit. The
-loaded text still contained the already-removed `EntireContext hooks` bullet
-and the already-fixed, stale Phase 2 wording (`code delta split
+pushed to `origin/main` twice (`b37675f`, removing an `EntireContext hooks`
+bullet; a later commit changing Phase 2's metric wording). `~/.agents/agents.lock`
+still pinned `retrospective` to `resolved_commit = aabfefa38f...` — the commit
+that was `HEAD` when this project's skills were last installed, several
+commits behind. When the `retrospective` skill was invoked again later in the
+same session, the harness loaded the pinned copy from `~/.agents/skills/retrospective/SKILL.md`,
+which still contained the already-removed `EntireContext hooks` bullet and
+the already-fixed, stale Phase 2 wording (`code delta split
 product/test/docs by path` instead of the corrected `Changed non-test
-lines`).
+lines`) — because nothing had re-run the install step since those commits
+were pushed, not because of a cache-invalidation bug.
 
 The session's own output was not corrupted only because the acting agent
 already knew, from earlier in the same conversation, what the repo's true
@@ -49,29 +60,40 @@ divergence had occurred.
 
 ## Guidance
 
-Treat a locally-invoked skill's loaded body as a *cached copy*, not as
-equivalent to the repo's tracked source, whenever both of these hold: the
-skill was edited in the current session, and the install path is anything
-other than a live symlink directly into the working checkout (a synced
-snapshot, a plugin cache, a packaged install).
+Treat a dotagents-installed skill's loaded body as a *pinned download*, not
+as equivalent to the repo's tracked source, whenever a session pushes a
+commit touching `skills/<name>/SKILL.md` and later re-invokes that same
+skill — in the same session or a later one — before re-installing.
 
-Before trusting a skill invocation's loaded instructions in that situation:
+The fix is a normal `dotagents` operation, not an ad hoc diff-and-repair:
 
 ```sh
-diff <(sed -n '1,40p' ~/.agents/skills/<name>/SKILL.md) \
-     <(sed -n '1,40p' <repo>/skills/<name>/SKILL.md)
+npx @sentry/dotagents install --user   # or without --user, at project scope
 ```
 
-If they differ, follow the repo's tracked file — it is the authoritative,
-committed source — and note the divergence rather than silently reconciling
-it in the invocation's output.
+This re-resolves every wildcard-sourced skill in `agents.toml` to its
+source's current commit and rewrites `agents.lock` accordingly. Confirm it
+took effect:
+
+```sh
+grep -A4 '^\[skills\.<name>\]' ~/.agents/agents.lock   # resolved_commit should match `git rev-parse HEAD` on origin
+diff <(grep -n '<marker text>' ~/.agents/skills/<name>/SKILL.md) \
+     <(grep -n '<marker text>' <repo>/skills/<name>/SKILL.md)   # empty output
+```
+
+If a skill was just edited and pushed in the *current* session and there has
+been no intervening `dotagents install`, assume the installed copy is stale
+and either re-install first or follow the repo's tracked file directly
+rather than trusting the loaded invocation.
 
 This is a narrower, more urgent instance of the general risk the
 `ROADMAP.md` "Clean-environment Codex install check" item already names for
 Codex's `.codex-plugin/plugin.json` discovery: that item is scoped to a
 fresh external or clean-machine install. This finding shows the same class
-of drift on the *same* dev machine, mid-session, immediately after an edit —
-no clean install is required to trigger it.
+of drift on the *same* dev machine, mid-session, immediately after a push —
+no clean install is required to trigger it, and no `dotagents` command
+detects or warns about the staleness on its own; `install` must be run
+proactively.
 
 ## Why This Matters
 
@@ -95,13 +117,12 @@ memory.
 
 ## Examples
 
-Detecting the drift observed this session:
+Detecting and fixing the drift observed this session:
 
 ```sh
-$ stat -f '%Sm %N' ~/.agents/skills/retrospective/SKILL.md
-Jul 20 11:06:47 2026 /Users/teslamint/.agents/skills/retrospective/SKILL.md
-$ stat -f '%Sm %N' compound-loop/skills/retrospective/SKILL.md
-Jul 20 13:29:45 2026 compound-loop/skills/retrospective/SKILL.md
+$ grep -A4 '^\[skills\.retrospective\]' ~/.agents/agents.lock
+resolved_commit = "aabfefa38f7d1d10b824d85b9485b25377599f9"   # 5 commits behind pushed HEAD
+
 $ diff <(grep -n "EntireContext\|Changed non-test lines" ~/.agents/skills/retrospective/SKILL.md) \
        <(grep -n "EntireContext\|Changed non-test lines" compound-loop/skills/retrospective/SKILL.md)
 1,2c1
@@ -109,8 +130,20 @@ $ diff <(grep -n "EntireContext\|Changed non-test lines" ~/.agents/skills/retros
 < 92:- **EntireContext hooks**: `ec_decision_create` to record architecture decisions ...
 ---
 > 32:- **Git/PR metrics** (PR-merge mode): **Changed non-test lines**, commit count, ...
+
+$ npx @sentry/dotagents install --user
+Installed 17 skill(s): dotagents, find-bugs, code-review, commit, compound, ...
+
+$ grep -A4 '^\[skills\.retrospective\]' ~/.agents/agents.lock
+resolved_commit = "927291059c31ce9672f2e2febc2f8eb1dde7f48"   # now matches pushed HEAD
+
+$ diff <(grep -n "EntireContext\|Changed non-test lines" ~/.agents/skills/retrospective/SKILL.md) \
+       <(grep -n "EntireContext\|Changed non-test lines" compound-loop/skills/retrospective/SKILL.md)
+$ echo $?
+0   # empty diff — resolved
 ```
 
-Tracked follow-up: `ROADMAP.md` "Carry-forward from retros" — a P2 row to
-either diff the loaded skill against the tracked source before trusting it,
-or fix dot-agents sync to resolve live against a working checkout.
+Tracked follow-up: `ROADMAP.md` "Carry-forward from retros" — a P2 row for
+building a proactive reminder or check (nothing today prompts a re-install
+after a skill-touching push), since `npx @sentry/dotagents install` fully
+resolves the drift once run but nothing runs it automatically.
