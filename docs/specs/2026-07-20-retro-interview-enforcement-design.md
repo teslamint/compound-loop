@@ -1,6 +1,6 @@
 ---
 title: Retro Interview Protocol Enforcement
-status: draft
+status: approved
 date: 2026-07-20
 schema: spec/v1
 ---
