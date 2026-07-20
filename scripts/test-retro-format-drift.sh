@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fixture harness for the retro interview format-drift check
-# (scripts/validate.sh check 9 — pending; this harness is red until that
-# check lands). Each case copies the current worktree into a disposable
+# (scripts/validate.sh check 9; committed red before that check landed —
+# see plan U4/U5). Each case copies the current worktree into a disposable
 # mktemp -d directory, applies one mutation (or none), runs
 # `bash scripts/validate.sh` from the copy, and asserts on exit code and
 # output. Never mutates the real skills/ or schemas/ files.
@@ -192,11 +192,27 @@ PY
   return $result
 }
 
+# Case F: consumer file missing entirely -- check 9 must emit a named FAIL
+# ("missing or unreadable"), never a traceback (plan U5 error scenario).
+case_f() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  rm "$dir/skills/retrospective/references/interview-probes.md" || { echo "  harness error: fixture deletion failed"; rm -rf "$dir"; return 1; }
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "skills/retrospective/references/interview-probes.md" "FAIL line names the missing probes file" || result=1
+  assert_not_contains "$out" "Traceback" "no Python traceback" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
 run_case D case_d
 run_case E case_e
+run_case F case_f
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then

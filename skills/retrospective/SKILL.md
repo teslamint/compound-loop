@@ -47,7 +47,7 @@ One row per criterion — vague summarization across criteria is banned. **If no
 
 Read the previous retro doc (most recent under `docs/retros/`), if any. For every item it registered, verify status now — Done / In progress / Not started — citing the commit, PR, or file that proves it. An item from the previous retro that goes unmentioned here is a silent drop, which is itself a defect to report.
 
-**Backward check**: while reading the previous retro doc, verify its shape — an Interview Transcript section with a valid independence level, and no uncited findings. Record the result as this doc's `Previous doc shape` bullet: `conformant`, `violations recorded as findings`, or `pre-schema, exempt`. A violation becomes a finding in the current retro, never a silent repair; a previous doc predating the transcript schema is marked `pre-schema, exempt` and skipped. Running in a different execution than the one that wrote the doc, this check catches violations one cycle late but reliably.
+**Backward check** (`enforces: P3`): while reading the previous retro doc, verify its shape — an Interview Transcript section with a valid independence level, and no uncited findings. Record the result as this doc's `Previous doc shape` bullet: `conformant`, `violations recorded as findings`, or `pre-schema, exempt`. A violation becomes a finding in the current retro, never a silent repair; a previous doc predating the transcript schema is marked `pre-schema, exempt` and skipped. Running in a different execution than the one that wrote the doc, this check catches violations one cycle late but reliably.
 
 Register this cycle's new carry-forward items: type (architecture / performance / feature / edge-case / process) × priority (P1–P4). Push every item to a durable tracker (ROADMAP, issue tracker, or equivalent) — **never PR comments alone**, which are lost after merge.
 
@@ -70,7 +70,7 @@ The narrative half of a retro is where self-assessment bias lives: the agent tha
 
 The dispatch cap is the only exchange limit — when the fifth dispatch returns, the interview is over. Phase 5's raw material is transcript rows, cited by T-ID, never the working conversation's memory of what was said. Data collection (Phase 2) and measurement (Phase 3) are never interviewed — they are commands, not narratives (`enforces: P4`).
 
-**End-of-interview checks** — run after the last dispatch, before Phase 6's doc write is finalized:
+**End-of-interview checks** (`enforces: P3`) — run after the last dispatch, before Phase 6's doc write is finalized:
 
 - **Carry-forward check**: every row of the `Carry-forward from previous retro` table cites artifact evidence (commit, PR, or file); any row the facilitator probed also cites its T-ID in the Evidence cell.
 - **Findings check**: every finding — the `**What happened**:` list item, not the bucket heading — cites at least one transcript T-ID or Phase 2–3 data. An uncited finding goes back to the interview if dispatches remain under the cap; otherwise it is dropped.
@@ -95,7 +95,7 @@ When invoked, pass the qualifying finding as context and expect `compound`'s exa
 
 ## Phase 8: Commit & Report
 
-**Pre-commit check**: the doc contains an Interview Transcript section with a valid independence level and a rounds-used count; in `self-checklist` mode the rows are the checklist answers. A zero-row table under a valid header is valid — nothing warranted probing. A missing section blocks the commit.
+**Pre-commit check** (`enforces: P8`): the doc contains an Interview Transcript section with a valid independence level and a rounds-used count; in `self-checklist` mode the rows are the checklist answers. A zero-row table under a valid header is valid — nothing warranted probing. A missing section blocks the commit.
 
 Commit the retro doc (and any durable-tracker updates from Phase 4) as its own commit, separate from other work in flight. Report what was measured, what carried forward, and what — if anything — was compounded.
 

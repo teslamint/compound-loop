@@ -3,7 +3,8 @@
 Committed evidence for spec Success Criteria 3–5 (plan U6, origin spec
 `docs/specs/2026-07-20-retro-interview-enforcement-design.md`). Three dry runs
 of the rewritten `retrospective` interview protocol were executed against this
-feature's own implementation arc (branch commits `2491c62..707e86f`). Retro
+feature's own implementation arc (branch commits `2491c62` through `707e86f`
+inclusive — diff range `5872802..707e86f`). Retro
 documents were written to the session scratch directory, never `docs/retros/`;
 they are embedded here sanitized (no secrets, no personal data). The facilitator
 for run 1 was a fresh-context Claude-family subagent dispatched with artifacts
@@ -263,3 +264,17 @@ protocol's residual limits:
    rubric-measured criteria. Genuine protocol tension surfaced by the dry run;
    routed to the enclosing arc's retrospective as finding material, not patched
    here (a skill-text change is observable behavior beyond the approved spec).
+3. **"8 commits behind" is wrong: the doc's own endpoints give 7.** The phrase
+   appears three times in the embedded records (run 1 findings, run 2 T2 row
+   and findings); `git rev-list --count d79aafc..5872802` returns 7. Found by
+   the reviewing phase's correctness lane — a second instance of erratum 1's
+   defect class (a respondent-sourced number surviving into the record
+   unverified), caught this time by a review lane with no prior knowledge of
+   the class.
+4. **Run 2's probed carry-forward row omits its `(T1)` citation, and no run's
+   executed-checks record names the carry-forward check.** The template
+   requires probed rows to append `(T<n>)` to their Evidence cell; run 2's T1
+   probes exactly that row. Both gaps were logged in the working ledger
+   (U6-m1) but the ledger is untracked — this erratum puts the acknowledgment
+   in the committed record. The embedded transcripts stay unedited per this
+   section's convention.
