@@ -13,7 +13,7 @@ The contract between `planning` (producer) and `implementing` / `reviewing` (con
 schema: plan/v1                   # contract version; consumers reject unknown versions
 title: Human-readable plan title
 type: feat | fix | refactor | chore | docs
-status: draft | approved | in-progress | done | abandoned
+status: draft | approved | in-progress | done | abandoned  # draft commits first; approved is a separate commit after the USER gate (skills/planning/SKILL.md)
 date: YYYY-MM-DD
 execution: code | non-code        # selects the unit template
 origin: <path to spec>            # optional; enables retro's measured-vs-declared pass

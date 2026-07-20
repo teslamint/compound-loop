@@ -7,6 +7,12 @@ description: Turn an approved spec into an implementation plan an engineer or ag
 
 Turns an approved spec into the plan that `implementing` and `reviewing` consume — a decision artifact, never an execution script. `schemas/plan-schema.md` is the frontmatter and unit contract; this skill produces documents that satisfy it and never restates its content.
 
+## Entry / Exit / Gate
+
+- **Entry**: an approved spec (`designing`'s output), or a direct user request to plan a change with no spec.
+- **Exit**: an approved plan doc committed to `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md`, or a documented skip to `implementing` per step 1.
+- **Gate**: USER. Commit the plan as `status: draft` first. Flip to `status: approved` only after the user confirms the drafted plan, in a separate commit — never combine both in one commit. Downstream consumers (`implementing`, `reviewing`, `release-loop`'s pipeline gating) depend on finding this exact draft-then-approved record.
+
 ## 1. Entry check — is a plan doc warranted?
 
 Bias toward writing one: a thin plan for small work is mild ceremony, but skipping a warranted plan costs the implementer real time. Skip the plan doc only when **all** hold:
@@ -142,7 +148,7 @@ Classify every open question as planning-owned (resolvable from repo context, do
 
 ## 17. Commit the plan
 
-Write to `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md` per the naming rule in `schemas/plan-schema.md`, then `git add` and commit following the repo's commit protocol. From this point the plan is a decision artifact — `implementing` never edits its body.
+Write to `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md` per the naming rule in `schemas/plan-schema.md`, then `git add` and commit with `status: draft`, following the repo's commit protocol. Present the drafted plan to the user; only after they approve it, commit again — same file, `status: approved` only — per this skill's Gate. Never commit a plan directly as `approved`; the draft commit is what a reviewer or a later session diffs against. From this point the plan is a decision artifact — `implementing` never edits its body.
 
 Do not finalize or commit a plan whose Assumption Recheck contains a
 contradiction unless the separate addendum commit already exists.

@@ -7,10 +7,9 @@
   Gemini 3.1 Pro and Antigravity) — this file is self-contained; it assumes
   no memory of any prior conversation.
 - **Status: closed.** P1/P2/P3 were fixed in `aa4a94c` ("fix: align retro
-  template and citation style for diff-size metric"), re-verified fresh
-  against `HEAD`. P4 was left open by design (process note, no code impact).
-  Findings below are kept verbatim as the original record; see the Outcome
-  column and Resolution section for current status.
+  template and citation style for diff-size metric"). P4 was fixed
+  separately, as a genuine skill-design gap rather than a retroactive
+  history edit — see the Outcome column and Resolution section.
 
 ## Context
 
@@ -39,7 +38,7 @@ prose consistency.
 | P3 | commit `314fe25` subject | Subject reads "Standardize diff-size metric tracking across review and retro phases," but the commit's entire diff is one new plan file (`docs/plans/2026-07-20-001-chore-diff-size-metric-plan.md`, 53 lines) — no standardization actually happened in this commit. The standardization work landed two commits later in `7f4fd37`. This is a minor but real mismatch between commit subject and diff scope; a git-log-driven release draft (see `skills/release/SKILL.md` Phase 2, which collects meaningful subjects) would misdescribe this commit's actual content if read from the subject alone. | `git show 314fe25 --stat` → only the plan file. | **Won't fix** — the commit is already in history; not amendable without rewriting shared history. Noted for future commit-message discipline only. |
 | P3 | `skills/reviewing/references/lanes.md:72`, `skills/retrospective/SKILL.md:32` | The new term `Changed non-test lines` is cited in plain capitalized prose (`>=50 Changed non-test lines`, `Changed non-test lines, commit count, ...`) rather than the bold-citation convention this repo already uses for `CONCEPTS.md` terms elsewhere (`**Source inventory**`, `**Drop-list**`, `**Four-way version agreement**` — see `skills/release/SKILL.md` for examples). Minor style inconsistency, not a correctness issue. | `rg -n "Source inventory\|Drop-list" skills/release/SKILL.md` shows the bold convention; `grep -n "Changed non-test lines" skills/reviewing/references/lanes.md skills/retrospective/SKILL.md` shows the new citations are unbolded. | **Fixed** in `aa4a94c` — both citations now read `**Changed non-test lines**`. |
 | P3 | `CONCEPTS.md:29` | `CONCEPTS.md`'s own preamble (line 3) says "definitions stay conceptual." Every other entry in the file begins its definition in lowercase immediately after the em-dash (`— the enumerable list...`, `— the post-merge process...`). The new entry breaks that pattern: `— The count of modified lines...` (capital T). Also underspecified relative to the file's own conceptual-but-precise style: it doesn't say whether "modified lines" means net or gross (added+removed), which is exactly the kind of ambiguity a "canonical diff-size metric" definition exists to remove. | `sed -n '1,29p' CONCEPTS.md` — direct comparison of casing across all seven entries. | **Fixed** in `aa4a94c` — lowercase `— the count of modified lines (added + removed) ...` now states the net-vs-gross rule explicitly. |
-| P4 | plan process | `docs/plans/2026-07-20-001-chore-diff-size-metric-plan.md` was committed directly with `status: approved` in its only commit — no separate draft commit reviewed before approval. Other plans in this repo's history (e.g. `docs/plans/2026-07-20-001-docs-remove-entirecontext-mentions-plan.md`, committed the same day) used a two-commit draft→approved gate. Not a schema violation (`schemas/plan-schema.md` only requires a `status` field), but a process inconsistency worth normalizing if this workflow continues authoring plans in this repo. | `git log --oneline -- docs/plans/2026-07-20-001-chore-diff-size-metric-plan.md` shows one commit only, already `approved`. | **Open** — left as a process note for future plans by this workflow; no code or doc change applies retroactively. |
+| P4 | plan process | `docs/plans/2026-07-20-001-chore-diff-size-metric-plan.md` was committed directly with `status: approved` in its only commit — no separate draft commit reviewed before approval. Other plans in this repo's history (e.g. `docs/plans/2026-07-20-001-docs-remove-entirecontext-mentions-plan.md`, committed the same day) used a two-commit draft→approved gate. Not a schema violation as originally written (`schemas/plan-schema.md` only listed a `status` enum with no ordering rule) — but investigation found `planning` was the only lifecycle skill with no `## Entry / Exit / Gate` block at all (`designing`, `release`, `retrospective` all have one; `designing`'s explicitly says spec approval is always human and `status: draft` flips to `approved` only after the human gate). `planning` had no equivalent, so nothing was actually being violated. | `git log --oneline -- docs/plans/2026-07-20-001-chore-diff-size-metric-plan.md` shows one commit only, already `approved`. `grep -n "Entry / Exit / Gate" skills/*/SKILL.md` showed the section present in `designing`, `release`, `retrospective` and absent from `planning`. | **Fixed** — added `## Entry / Exit / Gate` to `skills/planning/SKILL.md` (USER gate, draft-then-approved-as-separate-commits), reinforced it in step 17 "Commit the plan", and annotated the `status` field in `schemas/plan-schema.md` with the same rule. This documents the missing rule going forward; it does not rewrite the already-committed plan commit, which stays as historical record. |
 
 ## Actionable Findings (original, kept for record)
 
@@ -93,9 +92,17 @@ ALL CHECKS PASSED
 ```
 
 P2 required no separate fix — it was a consequence finding, and closing P1
-made the already-removed ROADMAP row's claim true. P4 (plan draft/approve
-gate) was left open by design; it is a process note about how future plans
-get authored, not a defect in anything currently committed.
+made the already-removed ROADMAP row's claim true.
+
+P4 was fixed in a follow-up commit that added `## Entry / Exit / Gate` to
+`skills/planning/SKILL.md` (mirroring `designing`/`release`/`retrospective`,
+which all already had one), stating the plan-approval USER gate and the
+draft-then-approved-as-two-commits rule explicitly; reinforced the same rule
+in step 17 "Commit the plan"; and annotated `schemas/plan-schema.md`'s
+`status` field with a one-line pointer to the rule. The already-committed
+`docs/plans/2026-07-20-001-chore-diff-size-metric-plan.md` commit is
+unchanged — this fix is forward-looking documentation, not a history
+rewrite.
 
 ## Non-findings (verified correct, not raised as noise)
 
