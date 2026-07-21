@@ -46,7 +46,10 @@ progress schema.
 - **Standalone shipping handoff location** (spec Open Decision, resolved
   here): `"$(git rev-parse --git-dir)/shipping-final-action.md"` — inside
   the git dir, inherently untracked in any host repo; a gitignore assumption
-  is unavailable because host repos don't know the path.
+  is unavailable because host repos don't know the path. In a worktree this
+  resolves under `.git/worktrees/<name>` and shares the worktree's lifetime —
+  intended: the protection window is gate death before cleanup, and cleanup
+  removing the record with the worktree is correct disposal.
 - **Resume surfacing** (spec Open Decision, resolved here): the resume
   report includes one line stating the final-action record's status and, when
   `determined`, its command.
@@ -86,7 +89,7 @@ Origin spec retains three live assumptions; all rerun fresh at
 | S3 session dies at merge gate | U2 → U3 | gate-death drill: reader with only the state file reproduces the exact command byte-for-byte and names first-hand consent as missing (transcript in retro) |
 | S4 interactive release survives gate death | U4 | rubric: Phase 5 draft write is unconditional and precedes packet presentation; rewrite precedes every re-presentation |
 | S5 successor doesn't over-read | U1 → U2 | rubric: Resuming step verifies live state and treats the record as preparation only; schema states the non-authorization rule (grep `not.*authorization\|never.*approval`) |
-| S6 determined invalidated | U1 → U2 | grep: `determined → predicted` transition with same-edit logged reason documented in schema and SKILL |
+| S6 determined invalidated | U1 → U2 | grep: literal `determined → predicted` transition in progress-schema.md; rubric: release-loop SKILL "State updates" documents the invalidation flip back to `predicted` with a same-edit logged reason |
 
 ## Implementation Units
 
@@ -114,14 +117,14 @@ Steps:
   4. In "Resuming" item 2, extend artifact verification: a `determined` record is verified against live state (PR open, head unchanged) before being trusted; a failed check flips it to `predicted` with the reason logged. The resume report includes one line stating the record's status and, when `determined`, its command (Covers S5).
   5. Self-review against spec R1–R4, R8; confirm no existing numbered items were renumbered.
   6. Commit: "feat(release-loop): Declare and maintain the final-action record"
-Acceptance: `grep -n "final_action" skills/release-loop/SKILL.md` matches in both "Starting a new loop" and "Gate handling" sections (reviewer confirms placement); `bash scripts/validate.sh` → ALL CHECKS PASSED.
+Acceptance: `grep -n "final_action" skills/release-loop/SKILL.md` matches in both "Starting a new loop" and "Gate handling" sections (reviewer confirms placement); reviewer confirms the Resuming text requires the resume report's one-line record status (plus command when `determined`); `bash scripts/validate.sh` → ALL CHECKS PASSED.
 
 ## U3: Shipping persists the merge command before the gate resolves
 
 Files:
   Create/Modify: skills/shipping/SKILL.md
 Steps:
-  1. In "Step 7: Merge Gate", before the existing blocking-question instruction, add: persist the exact merge command (the `gh pr merge <number> --squash --delete-branch` line with literal values) plus a non-authorization marker ("preparation evidence — first-hand consent still required") to the durable record before the gate resolves, on every path — interactive, `--auto`, worker, and preparation-only alike. Re-persist whenever the command changes (e.g. merge strategy overridden by repo convention).
+  1. In "Step 7: Merge Gate", before the existing blocking-question instruction, add: persist the exact merge command (the `gh pr merge <number> --squash --delete-branch` line with literal values) plus a non-authorization marker ("preparation evidence — first-hand consent still required") to the durable record before the gate resolves, on every path that reaches Step 7 — interactive, `--auto`, and worker. Preparation-only terminates at Step 0 with its existing manual-command file handoff and never reaches this step. Re-persist whenever the command changes (e.g. merge strategy overridden by repo convention).
   2. In the same step, name the sinks: dispatched worker → the hand-up packet, whose content is byte-for-byte what the orchestrator writes to `.release-loop/progress.md`'s `final_action` record; standalone invocation → `"$(git rev-parse --git-dir)/shipping-final-action.md"`, inherently untracked in any host repo (never a gitignore assumption).
   3. Confirm the existing Step 7/Step 8 numbering and the "Who executes the merge" paragraph are untouched.
   4. Self-review against spec R6 and scenarios S2, S3.
