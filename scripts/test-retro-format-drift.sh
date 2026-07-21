@@ -207,12 +207,42 @@ case_f() {
   return $result
 }
 
+# --- Case G: template+SKILL co-rename of the degraded rung ---
+# Renames `self-checklist` to `solo-checklist` in both schemas/retro-template.md
+# and skills/retrospective/SKILL.md, leaving interview-probes.md on the stale
+# name — the co-drift class deviation addendum 003 covers. Red until check 9
+# validates the list-final level against the probes contract: the co-renamed
+# copy passes validate.sh because level assertions stop at SKILL.md.
+case_g() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
+import sys, pathlib
+root = pathlib.Path(sys.argv[1])
+for rel in ("schemas/retro-template.md", "skills/retrospective/SKILL.md"):
+    path = root / rel
+    text = path.read_text(encoding="utf-8")
+    assert "self-checklist" in text, f"fixture assumption broken: self-checklist not found in {rel}"
+    path.write_text(text.replace("self-checklist", "solo-checklist"), encoding="utf-8")
+probes = (root / "skills/retrospective/references/interview-probes.md").read_text(encoding="utf-8")
+assert "self-checklist" in probes, "fixture assumption broken: self-checklist not found in probes contract"
+PY
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "skills/retrospective/references/interview-probes.md" "FAIL line names the probes file" || result=1
+  assert_fail_naming "$out" "solo-checklist" "FAIL line names the missing level value" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
 run_case D case_d
 run_case E case_e
 run_case F case_f
+run_case G case_g
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
