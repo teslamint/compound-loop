@@ -359,6 +359,16 @@ if skill_text is not None:
         if not boundary_search(level, skill_text):
             fail(f"independence level '{level}' from {TEMPLATE} not found in {SKILL}")
 
+# The probes contract cites exactly one rung — the degraded self-checklist
+# mode, the list-final value. A template+SKILL co-rename of that rung would
+# otherwise pass while the probes contract keeps the stale name
+# (docs/deviations/2026-07-21-check9-probes-level-scope-003.md).
+probes_text = consumers.get(PROBES)
+if probes_text is not None and levels:
+    degraded = levels[-1]
+    if not boundary_search(degraded, probes_text):
+        fail(f"independence level '{degraded}' from {TEMPLATE} not found in {PROBES}")
+
 # The stable vocabulary anchor of a verdict form is its text before any
 # parenthetical (e.g. 'no evidenced answer (3 rejections): <verbatim>'
 # anchors on 'no evidenced answer'). Each anchor must appear in both the
