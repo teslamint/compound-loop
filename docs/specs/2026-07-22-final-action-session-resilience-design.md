@@ -73,9 +73,8 @@ is not approval. `ship_approved` remains the only approval evidence field.
 ### S6: Determined command is invalidated
 
 After determination, new review commits land (or the PR is closed). The
-refinement point that observes this flips the record back to `predicted`
-(or `superseded` with a pointer to the replacement) and logs why — a stale
-exact command is worse than none.
+refinement point that observes this flips the record back to `predicted` and
+logs why in the same edit — a stale exact command is worse than none.
 
 ## Scope
 
@@ -114,7 +113,7 @@ exact command is worse than none.
 
 ## Architecture
 
-One new concept, one invariant, no new files.
+One new concept, one invariant, no new tracked files.
 
 **Final-action record** — a field in the loop's existing single state file
 (`.release-loop/progress.md`, P8) naming the loop's single irreversible/final
@@ -123,25 +122,30 @@ action:
 ```yaml
 final_action:
   kind: merge-to-base            # closed vocabulary; only value in this cycle
-  status: predicted              # predicted | determined | superseded | executed
+  status: predicted              # predicted | determined | executed
   command: null                  # exact command string once determined
   updated: <ISO-8601>
 ```
 
 Status transitions: `predicted → determined` (exact command knowable),
-`determined → predicted | superseded` (invalidation, S6),
-`determined → executed` (post-execution, with an evidence Log line, P3).
-Every transition writes a Log line at the moment it happens.
+`determined → predicted` (invalidation, S6, with the reason logged in the
+same edit), `determined → executed` (post-execution, with an evidence Log
+line, P3). Every transition writes a Log line at the moment it happens.
 
-**Prepare-before-gate invariant** — before any USER gate whose approval would
-authorize the final action blocks on its question, the exact command packet
-must already be persisted durably: `progress.md` for the loop, the
-skill-local handoff file for standalone `shipping`, `.release/draft.md` for
-`release`. Gate presentation order becomes: persist, then ask.
+**Prepare-before-gate invariant** — before the merge gate resolves — whether
+by blocking on a USER question or by evaluating `--auto` conditions — the
+exact command packet must already be persisted durably: `progress.md` for
+the loop, the skill-local handoff file for standalone `shipping`,
+`.release/draft.md` for `release`. Gate order becomes: persist, then
+resolve. On every re-presentation of a gate packet (e.g. after a revision
+loop), the persisted copy is rewritten first so disk never trails the
+conversation.
 
-**Non-authorization marker** — the record (and its schema documentation)
-states explicitly that it is preparation evidence, never approval. Approval
-evidence lives only in the existing `ship_approved` / first-hand gate fields.
+**Non-authorization marker** — every persisted command packet (the
+`progress.md` record, the standalone `shipping` handoff file, and
+`.release/draft.md`) states explicitly that it is preparation evidence,
+never approval. Approval evidence lives only in the existing
+`ship_approved` / first-hand gate fields.
 This extends the pilot-proven "gate approval is not execution authorization"
 rule to its file-shaped counterpart: possession of the command is not
 permission to run it. `enforces: P7`
@@ -158,40 +162,51 @@ Grouped by owner. R-IDs are stable.
   `status: predicted`) with a Log line.
 - R2: State updates refine the record at each determination or invalidation
   point (PR created → `determined` + exact command; PR closed or new commits
-  after determination → `predicted`/`superseded`), at the moment of the
-  event.
+  after determination → `predicted` with the reason logged), at the moment
+  of the event.
 - R3: Gate handling states the prepare-before-gate invariant: the orchestrator
-  verifies the record is `determined` and persisted before the ship USER gate
-  question fires.
+  verifies the record is `determined` and persisted before the ship gate
+  resolves (USER question or `--auto` condition evaluation).
 - R4: After execution, the record flips to `executed` in the same edit as the
   evidence Log line.
+- R8: Resume verifies a `determined` record against live state (PR open,
+  head unchanged) before trusting it — alongside the existing artifact-pointer
+  verification in the Resuming step; a failed check flips the record to
+  `predicted` with the reason logged.
 
 **progress-schema**
 - R5: `final_action` documented as an additive `release-loop/v1` field with
   the closed status vocabulary, the non-authorization rule, and the
   no-secrets rule. Consumers reject unknown `schema:` versions, not unknown
-  fields; absence of the field (older files) stays valid.
+  fields; absence of the field (older files) stays valid. Consistency rule:
+  the `executed` transition and `merged: true` happen in the same edit —
+  the two fields never disagree across a write.
 
 **shipping**
-- R6: The merge-gate step persists the exact merge command to its durable
-  record before the blocking question, on the normal interactive path — not
-  only in preparation-only or worker modes. Orchestrated: the worker's
-  hand-up packet is the same content the orchestrator writes to
-  `progress.md`. Standalone: a gitignored local handoff file (exact path
-  chosen by `planning`).
+- R6: The merge-gate step persists the exact merge command (with the
+  non-authorization marker) to its durable record before the gate resolves,
+  on the normal interactive path — not only in preparation-only or worker
+  modes. Orchestrated: the worker's hand-up packet is the same content the
+  orchestrator writes to `progress.md`. Standalone: a handoff file in an
+  inherently untracked location (e.g. inside the git dir) — never a
+  gitignore assumption, since host repos don't know the path; exact path
+  chosen by `planning`.
 
 **release**
 - R7: The interactive path writes `.release/draft.md` (identical content
   contract to the headless path, including the single fenced exact-command
-  program) before Phase 5 presents the gate packet.
+  program, plus the non-authorization marker) before Phase 5 presents the
+  gate packet — and rewrites it before every re-presentation after a
+  revision loop or a Phase 6 newly-derived packet, so the persisted copy
+  always matches the packet being shown.
 
 ## Testing
 
-No new automated harness this cycle. Verification is grep-based structural
-checks plus one drill:
+No new automated harness this cycle. Verification is grep checks or judgment
+rubrics per success criterion, plus one drill:
 
-- Grep checks per success criterion (below) prove each skill document
-  contains the required ordering and vocabulary.
+- Grep checks and rubrics (below) prove each skill document contains the
+  required ordering and vocabulary.
 - **Gate-death drill**: construct a `progress.md` with a `determined`
   `final_action`, hand it to a reader with zero conversation context, and
   have them state (dry-run, not execute) the exact command and the consent
@@ -201,9 +216,8 @@ checks plus one drill:
 
 ## Risks
 
-- **Stale determined command** (S6): mitigated by R2 invalidation transitions
-  and the `updated` timestamp; a resume must re-verify the PR state before
-  trusting a `determined` record.
+- **Stale determined command** (S6): mitigated by R2 invalidation transitions,
+  the `updated` timestamp, and R8's resume-time live-state check.
 - **Record misread as authorization**: mitigated by R5's non-authorization
   rule in the schema, the marker in the record's documentation, and S5's
   resume behavior.
@@ -215,9 +229,9 @@ checks plus one drill:
 
 ## Success Criteria
 
-1. The progress schema documents `final_action` with all four status values
+1. The progress schema documents `final_action` with all three status values
    and the non-authorization rule.
-   - **Measured by**: `grep -n "final_action" skills/release-loop/references/progress-schema.md` shows the field; `grep -c "predicted\|determined\|superseded\|executed" skills/release-loop/references/progress-schema.md` ≥ 4; `grep -in "not.*authorization\|never.*approval" skills/release-loop/references/progress-schema.md` non-empty.
+   - **Measured by**: `grep -n "final_action" skills/release-loop/references/progress-schema.md` shows the field; `grep -oE "predicted|determined|executed" skills/release-loop/references/progress-schema.md | sort -u | wc -l` = 3; `grep -in "not.*authorization\|never.*approval" skills/release-loop/references/progress-schema.md` non-empty.
 2. release-loop declares the final action at startup and enforces
    prepare-before-gate in Gate handling.
    - **Measured by**: `grep -n "final_action" skills/release-loop/SKILL.md` matches in both the "Starting a new loop" and "Gate handling" sections (reviewer confirms section placement).
