@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.0] - 2026-07-21
+
+### Added
+- Added an enforced retrospective interview protocol: facilitator-only verdict authority, a stateless round contract capped at 5 dispatches, verbatim verdict recording under four closed independence levels, and an Interview Transcript section in the retro template that findings must cite by T-ID or measured data.
+- Added the interview's structural checks: end-of-interview carry-forward and findings-citation checks, a pre-commit transcript check, and a backward check that audits the previous retro doc from an independent later execution.
+- Added validate.sh check 9, a retro format-drift gate asserting the template's closed vocabularies agree with the retrospective skill prose and probes contract — including the co-rename blind spot closed by deviation addendum 003 — backed by a seven-case red-then-green fixture harness.
+
+### Changed
+- Standardized the diff-size metric as "Changed non-test lines" across the reviewing lanes, retro template, and concept glossary, and added the planning skill's missing Entry/Exit/Gate section with the draft-then-approve USER gate.
+
 ## [0.3.1] - 2026-07-20
 
 ### Changed
