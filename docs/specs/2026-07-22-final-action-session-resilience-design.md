@@ -1,6 +1,6 @@
 ---
 title: Final-Action Session Resilience
-status: draft
+status: approved
 date: 2026-07-22
 schema: spec/v1
 ---
