@@ -32,6 +32,12 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Self-attested** — a verdict authored by the same agent that produced the answer, in degraded modes with no independent facilitator; never to be read as acceptance.
 - **Backward check** — the audit a retro performs on the previous cycle's retro doc while reading it, from an execution independent of the one that wrote it; catches violations one cycle late but outside the writer's own discipline.
 
+## Session resilience
+
+- **Final-action record** — the durable record naming a workflow's single irreversible/final action: its kind, a closed status (predicted, determined, executed), and the exact command once determined. Preparation evidence only — possession of the command is never permission to run it.
+- **Prepare-before-gate** — the invariant that the exact command packet of a gated irreversible action is persisted durably before the gate resolves, whether the gate blocks on a human question or evaluates automatic conditions; disk never trails the conversation.
+- **Non-authorization marker** — the explicit statement carried by every persisted command packet that it is preparation evidence, never approval; the file-shaped counterpart of "gate approval is not execution authorization".
+
 ## Metrics
 
 - **Changed non-test lines** — the count of modified lines (added + removed) excluding tests, generated files, and lockfiles, used as the canonical diff-size metric across all phases (e.g. lane triggers).
