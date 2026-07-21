@@ -47,6 +47,8 @@ One row per criterion — vague summarization across criteria is banned. **If no
 
 Read the previous retro doc (most recent under `docs/retros/`), if any. For every item it registered, verify status now — Done / In progress / Not started — citing the commit, PR, or file that proves it. An item from the previous retro that goes unmentioned here is a silent drop, which is itself a defect to report.
 
+**Backward check** (`enforces: P3`): while reading the previous retro doc, verify its shape — an Interview Transcript section with a valid independence level, and no uncited findings. Record the result as this doc's `Previous doc shape` bullet: `conformant`, `violations recorded as findings`, or `pre-schema, exempt`. A violation becomes a finding in the current retro, never a silent repair; a previous doc predating the transcript schema is marked `pre-schema, exempt` and skipped. Running in a different execution than the one that wrote the doc, this check catches violations one cycle late but reliably.
+
 Register this cycle's new carry-forward items: type (architecture / performance / feature / edge-case / process) × priority (P1–P4). Push every item to a durable tracker (ROADMAP, issue tracker, or equivalent) — **never PR comments alone**, which are lost after merge.
 
 ## Interview Protocol (governs Phases 4–5)
@@ -54,11 +56,26 @@ Register this cycle's new carry-forward items: type (architecture / performance 
 The narrative half of a retro is where self-assessment bias lives: the agent that did the work grades its own work. Split the roles (`enforces: P3` — self-reports are not evidence):
 
 - **Facilitator** — an independent agent with fresh context. Receives only artifacts (spec, plan, progress ledger, PR data, Phase 2–3 outputs), never the working conversation. Asks evidence-demanding probes from `references/interview-probes.md` and **rejects vague answers** ("mostly fine", "went well") by re-asking for the commit, measurement, or concrete event — an unevidenced answer cannot become a finding.
-- **Respondent** — the agent that did the work (the main session, or in standalone runs whoever holds the context), answering from its record.
+- **Respondent** — the agent that did the work (the main session, or in standalone runs whoever holds the context), answering from its record. The respondent assembles the doc mechanically from transcript rows — it holds the pen but not the judgment.
 
-**Facilitator model selection**: fresh context is the minimum; a *heterogeneous* model is better when the environment offers one (from Claude Code, `codex exec` for a GPT-family facilitator; from Codex, a Claude subagent) — shared model biases produce shared blind spots, so heterogeneity adds a defense self-review cannot. Degrade per `references/dispatch-degradation.md` (plugin root): heterogeneous facilitator → same-model independent-context subagent → sequential passes (facilitator pass generates probes from artifacts, respondent pass answers, facilitator pass critiques the evidence) → headless/single-agent: skip the interview and run the probe list as a fixed self-checklist. `enforces: P9`
+**Verdict authority**: only the facilitator authors the Verdict cell of a transcript row (the Interview Transcript section of `schemas/retro-template.md`). Every probed exchange lands in the transcript — accepted triples and terminal rejections alike. A non-terminal `rejected: <reason>` is a round output that continues the loop, never a transcript verdict; after 3 consecutive rejections the exchange terminates and the row records `no evidenced answer (3 rejections)` with the facilitator's final rejection text verbatim. A finding may cite such a T-ID — an honest gap is itself finding material. T-IDs are stable and never renumbered (same discipline as the spec's S-IDs).
 
-Cap the exchange at 5 rounds; the facilitator's accepted answers become the raw material for Phase 5's findings. Data collection (Phase 2) and measurement (Phase 3) are never interviewed — they are commands, not narratives (`enforces: P4`).
+**Round contract**: one round is one stateless dispatch. Input: the artifacts above + the accumulated transcript + the respondent's new answers. Output: per-probe results — `accepted` / `rejected: <reason>` / re-probe text — expressible as structured text from a one-shot invocation. At most 5 dispatches globally across the whole interview; Phases 4 and 5 may share a round, and the cap is never per-phase.
+
+**Verbatim rule**: facilitator verdict text — acceptances and rejections both — is recorded verbatim, never summarized by the respondent. In degraded modes where one agent authors probe, answer, and verdict, the Verdict cell records `self-attested`, never `accepted` — a reader must never mistake self-attestation for facilitator acceptance.
+
+**Independence-level recording**: the transcript header carries exactly one of the four closed level values — `heterogeneous`, `same-model fresh-context`, `in-thread (approximated independence)`, `self-checklist`. Tool names are optional free text; the level vocabulary is closed.
+
+**Facilitator model selection**: fresh context is the minimum; a *heterogeneous* model is better when the environment offers one (from Claude Code, `codex exec` for a GPT-family facilitator; from Codex, a Claude subagent) — shared model biases produce shared blind spots, so heterogeneity adds a defense self-review cannot. Degrade per `references/dispatch-degradation.md` (plugin root): heterogeneous facilitator → same-model fresh-context subagent → sequential passes (facilitator pass generates probes from artifacts, respondent pass answers, facilitator pass critiques the evidence) → headless/single-agent: skip the interview and run the probe list as a fixed self-checklist. `enforces: P9`
+
+The dispatch cap is the only exchange limit — when the fifth dispatch returns, the interview is over. Phase 5's raw material is transcript rows, cited by T-ID, never the working conversation's memory of what was said. Data collection (Phase 2) and measurement (Phase 3) are never interviewed — they are commands, not narratives (`enforces: P4`).
+
+**End-of-interview checks** (`enforces: P3`) — run after the last dispatch, before Phase 6's doc write is finalized:
+
+- **Carry-forward check**: every row of the `Carry-forward from previous retro` table cites artifact evidence (commit, PR, or file); any row the facilitator probed also cites its T-ID in the Evidence cell.
+- **Findings check**: every finding — the `**What happened**:` list item, not the bucket heading — cites at least one transcript T-ID or Phase 2–3 data. An uncited finding goes back to the interview if dispatches remain under the cap; otherwise it is dropped.
+
+**Known limit**: this protocol is a procedural gate, not a hard barrier — a respondent could fabricate transcript rows, and full mechanical enforcement would require the facilitator to own the file write, which no current harness contract guarantees. The citation checks and Phase 4's backward check are the backstop.
 
 ## Phase 5: Findings & Lessons
 
@@ -77,6 +94,8 @@ After writing the doc, invoke `compound` in `mode:headless` **only when at least
 When invoked, pass the qualifying finding as context and expect `compound`'s exact terminal signal (`Documentation complete — <path>` / `Documentation skipped — <reason>` / `Documentation failed — <reason>`, per `schemas/headless-contract.md`). Surface whichever line `compound` returned in this retro's Compounding section — do not paraphrase it.
 
 ## Phase 8: Commit & Report
+
+**Pre-commit check** (`enforces: P8`): the doc contains an Interview Transcript section with a valid independence level and a rounds-used count; in `self-checklist` mode the rows are the checklist answers. A zero-row table under a valid header is valid — nothing warranted probing. A missing section blocks the commit.
 
 Commit the retro doc (and any durable-tracker updates from Phase 4) as its own commit, separate from other work in flight. Report what was measured, what carried forward, and what — if anything — was compounded.
 

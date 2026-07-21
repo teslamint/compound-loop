@@ -1,6 +1,6 @@
 # Retro Interview Probes
 
-The facilitator's question bank. Same grammar as `designing`'s rigor-gap probes: one gap = one open-ended probe, concrete enough to bite into, never a menu. Probes are starting points — follow the evidence, not the list. In headless/single-agent mode this file runs as a fixed self-checklist instead of a dialogue.
+The facilitator's question bank. Same grammar as `designing`'s rigor-gap probes: one gap = one open-ended probe, concrete enough to bite into, never a menu. Probes are starting points — follow the evidence, not the list. In headless/single-agent mode this file runs as a fixed self-checklist instead of a dialogue — transcript rows carry `self-attested` verdicts under the `self-checklist` independence level.
 
 ## Carry-forward probes (Phase 4)
 
@@ -28,8 +28,8 @@ The facilitator rejects and re-asks when an answer:
 - frames an acted-on review finding as "noise" or "trivial" — if it was worth fixing, it was legitimate;
 - restates the plan's intent as if it were the outcome (intent is not evidence — `enforces: P3`).
 
-Three consecutive rejections on the same probe → record "no evidenced answer" for that probe in the doc rather than accepting the vague version; an honest gap beats a polished rationalization.
+Three consecutive rejections on the same probe → the exchange terminates and its transcript row records the verdict `no evidenced answer (3 rejections): <verbatim>` — the facilitator's final rejection text in full — rather than accepting the vague version; an honest gap beats a polished rationalization.
 
 ## Output contract
 
-The facilitator returns accepted answers as (probe, answer, evidence) triples. Phase 5 findings may only cite evidence that appears in a triple or in Phase 2–3 data — nothing enters a finding on narrative authority alone.
+The facilitator returns every probed exchange as a (probe, answer, evidence) triple carrying a stable T-ID (T1, T2, … — never renumbered) and a facilitator-authored verdict, recorded verbatim in the transcript's Verdict cell: `accepted` for evidenced answers, `no evidenced answer (3 rejections): <verbatim>` for exchanges terminated by the rejection rule above, `self-attested` in self-checklist mode. Facilitator instruction: write each verdict in at most two sentences; whatever comes back is recorded in full, with no truncation. Phase 5 findings may only cite evidence that appears in a triple — by T-ID — or in Phase 2–3 data; nothing enters a finding on narrative authority alone.
