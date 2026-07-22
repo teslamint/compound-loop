@@ -104,6 +104,8 @@ If invoked from `release-loop`, update `.release-loop/progress.md` with review r
 
 ## Step 7: Merge Gate
 
+**Persist before the gate resolves**: before asking the blocking question or evaluating `--auto` conditions, write the exact merge command (the `gh pr merge <number> --squash --delete-branch` line with literal values) plus the non-authorization marker "preparation evidence -- first-hand consent still required" to the durable record. This holds on every path that reaches this step -- interactive, `--auto`, and dispatched worker; preparation-only never gets here, having terminated at Step 0 with its manual-command file. Re-persist whenever the command changes (e.g. the merge strategy is overridden by repo convention). Sink by mode: dispatched worker -> the hand-up packet, whose content is byte-for-byte what the orchestrator writes to `.release-loop/progress.md`'s `final_action` record -- single sink, no second wording; standalone invocation -> `"$(git rev-parse --git-dir)/shipping-final-action.md"`, inherently untracked in any host repo (never a gitignore assumption). `enforces: P7, P8`
+
 Default: present the PR (CI status, comments fixed/deferred, any deferred items) and ask for merge approval via the blocking question tool. `--auto`: merge only when CI is green and no P0 findings are open (P1s addressed or explicitly deferred with rationale) -- this is the sole auto-merge condition, never relaxed. Squash is the default merge strategy; honor a repo-documented alternative (e.g. CONTRIBUTING.md) when one exists. `enforces: P7`
 
 ```bash
