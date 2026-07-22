@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.0] - 2026-07-22
+
+### Added
+- Added the final-action record to the release-loop progress schema: `final_action` with kind `merge-to-base`, closed status vocabulary `predicted | determined | executed`, the exact command once determined, and an update timestamp — declared at loop start, refined at determination and invalidation points, and flipped to executed in the same edit as its evidence Log line and `merged: true`; always preparation evidence, never approval.
+- Added the prepare-before-gate rule across the lifecycle: release-loop verifies the record is determined and persisted before the Ship gate resolves; shipping persists the exact merge command plus a non-authorization marker before the merge gate on every path that reaches it, with a byte-identical hand-up packet for dispatched workers and an inherently untracked git-dir handoff file for standalone runs; release persists the interactive gate packet to `.release/draft.md` before Phase 5 presents it and rewrites it before every re-presentation.
+- Added session-resilience vocabulary to CONCEPTS.md (Final-action record, Prepare-before-gate, Non-authorization marker) and captured the universal-invariant scope-enumeration lesson under docs/solutions/workflow-issues/.
+
+### Changed
+- release-loop resume now verifies a determined final-action record against live state before trusting it, flips it back to predicted with a logged reason on failure, and surfaces the record's status in the resume report.
+
 ## [0.4.0] - 2026-07-21
 
 ### Added
