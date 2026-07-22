@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Final-Action Session Resilience
 type: feat
-status: draft
+status: approved
 date: 2026-07-22
 execution: non-code
 origin: docs/specs/2026-07-22-final-action-session-resilience-design.md
