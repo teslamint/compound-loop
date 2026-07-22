@@ -198,8 +198,9 @@ stable and no release-note work occurs for an invalid repository.
    If no prior release evidence exists, start the file with the current release
    only.
 
-Preflight reads state only. Apart from an ignored draft written for a headless
-normal-release or recovery handoff, no phase before Execute mutates the
+Preflight reads state only. Apart from the ignored `.release/draft.md` —
+written as a headless normal-release or recovery handoff, or persisted by
+Phase 5 before the interactive gate — no phase before Execute mutates the
 repository.
 
 ## Phase 2: Collect
@@ -299,8 +300,8 @@ Trace the source inventory explicitly:
   treat absence at `HEAD` as a reason to erase the inventory row.
 - Never silently omit an inventory spec. An empty drop-list is written as
   `None`.
-- Retain the mapping and drop-list in `.release/draft.md` for headless runs and
-  in the interactive gate presentation for interactive runs.
+- Retain the mapping and drop-list in `.release/draft.md` on both the headless
+  and interactive paths, and in the gate presentation for interactive runs.
 
 The full draft consists of provenance, source inventory, retros consulted,
 git-log supplement, traceability mapping, drop-list, proposed version and
@@ -358,6 +359,16 @@ Release skipped — headless: ceremony requires first-hand consent; draft prepar
 
 ## Phase 5: Gate
 
+Persist the packet before presenting it: create `.release/` on demand and
+write `.release/draft.md` with the identical content contract the Headless
+boundary defines — every draft component named in Phase 3, ending with a final
+`## Exact commands` section that holds the single fenced `bash` program — plus
+an explicit marker that the persisted draft is preparation evidence, never
+approval; execution is authorized only by first-hand consent at this gate.
+This write runs on the interactive path, not only in `mode:headless`, so a
+session lost at the gate leaves the complete packet on disk rather than only
+in the conversation.
+
 Present one review packet before asking anything:
 
 1. release range and provenance;
@@ -373,9 +384,11 @@ Use the harness's blocking question tool per
 `references/question-tools.md`. Ask one single-select question with these
 distinct outcomes: **Approve this exact release** (recommended), **Revise the
 draft or version**, and **Cancel the release**. A revision returns to Draft or
-Version and presents a new complete packet. Cancellation exits without tracked
-changes. If the blocking tool is unavailable or errors, show the same numbered
-options in chat and wait; never treat silence or relayed approval as consent.
+Version and presents a new complete packet; rewrite `.release/draft.md` before
+every such re-presentation, so the persisted copy always matches the packet
+shown. Cancellation exits without tracked changes. If the blocking tool is
+unavailable or errors, show the same numbered options in chat and wait; never
+treat silence or relayed approval as consent.
 
 The exact command packet must be a single fenced `bash` program whose first
 command is `set -euo pipefail`. All commands below occur in that one program, in
@@ -426,8 +439,8 @@ terminates the packet before every later commit or tag command.
 
 1. Recheck the clean worktree, current/default branch equality, manifest
    agreement, range, and absence of the proposed tag. If state changed since
-   the gate, stop and present a newly derived packet; do not execute stale
-   commands.
+   the gate, stop, persist the newly derived packet to `.release/draft.md`,
+   and present it; do not execute stale commands.
 2. Write the approved `CHANGELOG.md` exactly.
 3. Surgically replace the version value in both manifest files. Parse both
    files again and confirm the only intended manifest change is the version
