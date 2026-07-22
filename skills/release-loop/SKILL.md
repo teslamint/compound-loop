@@ -36,25 +36,28 @@ Ship without Retro is an incomplete release: after merge, the loop always enters
 2. Detect base branch: `git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||' || echo main`
 3. If `.release-loop/progress.md` exists, stop and ask: resume it or archive it. Never silently overwrite a live loop.
 4. Create a feature branch from HEAD (via `worktree-isolation` when isolation is wanted), unless `--skip-*` resumes an existing branch.
-5. Write initial `references/progress-schema.md`-conformant state.
+5. Write initial `references/progress-schema.md`-conformant state, including `final_action` (`kind: merge-to-base`, `status: predicted`) with a Log line declaring it.
 6. Enter the first applicable phase.
 
 ## Resuming (`resume` argument)
 
 1. Read `.release-loop/progress.md`; reject unknown `schema:` versions rather than guessing.
-2. Verify the recorded branch exists and is checked out; verify recorded artifact pointers (spec/plan paths) still exist. On mismatch, corruption, **or a progress.md that is absent entirely** (a predecessor died before writing one — treat identically), rebuild state from git evidence — **the progress file and `git log` always outrank conversation memory**. `enforces: P8`
+2. Verify the recorded branch exists and is checked out; verify recorded artifact pointers (spec/plan paths) still exist. On mismatch, corruption, **or a progress.md that is absent entirely** (a predecessor died before writing one — treat identically), rebuild state from git evidence — **the progress file and `git log` always outrank conversation memory**. `enforces: P8` A `determined` `final_action` is likewise verified against live state (PR open, head unchanged) before being trusted; a failed check flips it to `predicted` with the reason logged. The resume report includes one line stating the record's status and, when `determined`, its command.
 3. Resume at the recorded phase and unit.
 
 ## Gate handling
 
 - USER gates use the harness's blocking question tool per `references/question-tools.md` (plugin root). Record the approval in progress.md (`approved_by: user`, timestamp) — this is the evidence `--skip-design` later relies on.
 - **Gate approval is not execution authorization** (pilot-proven, `enforces: P7`): a relayed "the human approved" message lets the loop *advance*, but protected or outward executions (merging to the default branch, pushing) are performed by whoever holds first-hand consent — the human, or the session that received the approval directly. A phase worker acting on relay will be (correctly) refused by harness permission systems; it prepares the exact command and hands it up instead of executing.
+- **Prepare before the gate resolves** (`enforces: P8`): before the Ship gate resolves — USER question or `--auto` condition evaluation — the orchestrator verifies `final_action` is `determined` and persisted; a gate must not resolve while the command packet exists only in conversation. After execution, flip the record to `executed` in the same edit as the evidence Log line. The record is preparation evidence, never approval (`enforces: P7`).
 - Workers/phase skills never ask the user directly in `--auto` mode; they return structured results and this orchestrator decides (see `references/dispatch-degradation.md`, worker protocol).
 - On any gate failure or cap exhaustion escalated by a phase skill: pause the loop, record the blocked state + reason in progress.md, and surface it to the user. Never loop past an escalation.
 
 ## State updates
 
 Update `.release-loop/progress.md` after every phase transition, unit completion, CI attempt, and review round — at the moment it happens, not batched at phase end. Schema: `references/progress-schema.md`.
+
+The `final_action` record is refined at each determination or invalidation point, at the moment of the event like every update above: PR created → `determined` plus the exact merge command; PR closed or new commits after determination → back to `predicted` with the reason logged in the same edit.
 
 ## Worker liveness
 
