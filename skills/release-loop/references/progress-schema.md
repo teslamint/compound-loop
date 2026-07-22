@@ -24,6 +24,13 @@ retro: docs/retros/YYYY-MM-DD-<context>-retro.md
 design_approved: {by: user, at: <timestamp>}
 ship_approved: {by: user | auto, at: <timestamp>, conditions: "CI green, no open P0"}
 
+# Final-action record (preparation evidence, never approval — see Rules)
+final_action:
+  kind: merge-to-base                   # closed vocabulary; sole value
+  status: predicted                     # predicted | determined | executed
+  command: null                         # exact command string once determined; no secrets — ambient auth only
+  updated: <ISO-8601 timestamp>
+
 # Phase counters
 current_unit: U3                        # implement phase
 ci_attempts: 0                          # cap 3
@@ -52,3 +59,6 @@ blocked_reason: null                    # set when phase_status: blocked
 - **Status flips are atomic with their evidence**: changing `phase`/`phase_status` and writing the explaining Log line (plus `blocked_reason` when the status is blocked) happen in the same edit — a bare `blocked` with `blocked_reason: null` is a schema violation, not a placeholder.
 - Corrupt/unparsable file on resume → rebuild frontmatter from git evidence (branch, committed artifacts, PR state via `gh pr view`), keep the old file as `progress.md.corrupt-<timestamp>`, and note the rebuild in the Log.
 - `.release-loop/` (briefs/, reports/, reviews/, progress.md) is local working state: gitignore it by default; the durable artifacts are the committed spec/plan/retro docs.
+- `final_action` is additive and optional on `release-loop/v1`: absence stays valid — consumers reject unknown `schema:` versions, never unknown fields.
+- `final_action.status` has exactly three transitions: `predicted → determined` when the exact command becomes knowable; `determined → predicted` on invalidation (PR closed, new commits on the branch) with the reason logged in the same edit; `determined → executed` in the same edit as the evidence Log line and `merged: true` — the two fields never disagree across a write.
+- **The `final_action` record is preparation evidence, never approval**: possession of the command is not authorization to run it. Approval evidence lives only in `ship_approved`. `enforces: P7`
