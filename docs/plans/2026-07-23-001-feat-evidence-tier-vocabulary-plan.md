@@ -21,10 +21,13 @@ requirement's layer can no longer pass review, ship, or retro unlabeled.
 ## Architecture notes
 
 - **Definitions in one place, rules in consumers** (approved dialogue
-  decision). `CONCEPTS.md` carries the five definitions; each consumer carries
-  only normative sentences that use the terms by canonical name. No consumer
-  restates a definition — a reader needing the meaning follows the term to
-  `CONCEPTS.md` (P5).
+  decision). `CONCEPTS.md` carries the five term *definitions*; each consumer
+  carries only normative sentences that use the terms by canonical name.
+  One R5-mandated carve-out: `skills/shipping/references/verification.md`
+  reproduces the ladder's *order* as operational rule content — the skills
+  ship as a plugin without this repo's `CONCEPTS.md`, so the shipped rule must
+  execute standalone; the definitional bullet form of the five terms still
+  lives only in `CONCEPTS.md` (P5).
 - **Rule placement mirrors existing structures.** The reviewing rule lands in
   Step 8 (Output) beside the Requirements Completeness rule, in its normative
   shape ("the finding stays actionable and the verdict cannot be `clean`").
@@ -40,7 +43,7 @@ requirement's layer can no longer pass review, ship, or retro unlabeled.
   reported claim→evidence rows, retro Measured result cells — and U2–U4 each
   state the form does not bind surrounding prose.
 - **No skill-file renumbering.** All edits land inside existing sections;
-  existing step/phase numbers in all four files stay untouched.
+  existing step/phase numbers in all edited files stay untouched.
 - **Known Pattern**: `docs/solutions/workflow-issues/universal-invariant-scope-enumeration-gap.md`
   — R7's "structured outputs only" is a scoped invariant; each unit enumerates
   the surfaces it binds rather than stating a universal.
@@ -64,7 +67,7 @@ Origin spec retains five live assumptions; all rerun fresh at
 | `verification.md` has no tier ladder or binary form | `rg -n -e "tier" -e "ladder" -e "verified:" skills/shipping/references/verification.md` → no matches (exit 1) | match |
 | `reviewing` has no completion-evidence vocabulary; sole ladder/tier hits are dispatch/model concerns | `rg -n -i -e "evidence tier" -e "ladder" -e "layer" skills/reviewing/SKILL.md` → one match, line 65 (Degradation ladder / Model tiering) | match |
 | `retrospective` Phase 3 has no binary form | `rg -n "verified" skills/retrospective/SKILL.md` → no matches (exit 1) | match |
-| validate.sh check 9 parses only interview-transcript vocabulary of `schemas/retro-template.md` | `sed -n '286,300p' scripts/validate.sh` → TEMPLATE/SKILL/PROBES targets, transcript-line parsing only | match |
+| validate.sh check 9 parses only interview-transcript vocabulary of `schemas/retro-template.md` | full check 9 body (lines 280–398, end of file) reread at 2026-07-23T13:33:33+0900: `awk '/^# 9\./,0' scripts/validate.sh \| rg -n "measured"` → no matches (exit 1); 7 interview-vocabulary references (`Interview Transcript`, `Independence level`, `Verdict cell`) | match |
 
 ## File structure
 
@@ -82,7 +85,7 @@ Origin spec retains five live assumptions; all rerun fresh at
 | S1 reviewer catches layer-mismatch | U1 → U2 | rubric: a reader of Step 8 alone determines that a typecheck-backed end-to-end claim yields an actionable finding and blocks `clean`; `rg -n "layer-mismatch" skills/reviewing/SKILL.md` non-empty |
 | S2 shipping gate reports in binary form | U1 → U3 | rubric: a reader of verification.md alone produces `verified:`/`unverified:` report lines with a tier name for the Step 1 gate; `rg -n "verified:" skills/shipping/references/verification.md` non-empty |
 | S3 retro measures and names the tier | U1 → U4 | rubric: a reader of Phase 3 + the template example row alone fills a Measured result cell in binary form, tier-free where no tier applies; `rg -n "verified:" schemas/retro-template.md` non-empty |
-| S4 canonical meaning resolves from CONCEPTS.md | U1 → U2 → U3 → U4 | rubric: each consumer edit uses the five terms without defining them; `rg -c` finds each term's definition exactly once, in CONCEPTS.md |
+| S4 canonical meaning resolves from CONCEPTS.md | U1 → U2 → U3 → U4 | `rg -l -e '\*\*Evidence tier\*\* —' -e '\*\*Evidence-tier ladder\*\* —' -e '\*\*Claim layer\*\* —' -e '\*\*Layer-mismatch\*\* —' -e '\*\*Binary completion report\*\* —' CONCEPTS.md skills/ schemas/` → exactly `CONCEPTS.md` (the definitional bullet form appears nowhere else; U3's ladder-order reproduction is rule content per the Architecture-notes carve-out, not the bullet form) |
 | S5 unit evidence closes only unit claim | U1 → U2 | rubric: CONCEPTS.md layer-mismatch definition states unit-level evidence closes only a unit-level claim; Step 8 rule covers the S5 gap as S1's finding class |
 
 ## Implementation Units
@@ -134,9 +137,11 @@ Files:
 Steps:
   1. In `skills/retrospective/SKILL.md` Phase 3, extend numbered item 3 (record the measured result): the Measured result cell uses the binary completion report form — `verified: <observation>` (naming the evidence tier where one applies; tier-free otherwise) or `unverified: <why the measurement could not run>`. For rubric-measured criteria the form reports evidence acquisition (`verified: <rubric applied, reading cited>`), never the judgment: the Verdict cell keeps Met / Partially met / Not met, and a `verified:` result can still carry Partially met or Not met; `unverified:` is never recorded as Met. The form binds Measured result cells only, not the doc's narrative prose.
   2. In `schemas/retro-template.md`, change the measured-vs-declared example row's Measured result cell from `<output summary>` to `verified: <observation> / unverified: <blocker>` and add one lead-in sentence naming the binary form and the rubric-measured meaning. Column count and headers stay unchanged; the `## Interview Transcript` section is untouched.
-  3. Self-review against spec R6/R7 and S3: tri-state Verdict preserved; table shape unchanged; transcript vocabulary untouched.
-  4. Commit: "feat(retrospective): Record measured results in binary completion form"
-Acceptance: `rg -n "verified:" skills/retrospective/SKILL.md` matches in Phase 3; `rg -n "verified:" schemas/retro-template.md` matches in the measured-vs-declared section; `rg -c "Met / Partially met / Not met" schemas/retro-template.md` ≥ 1 (tri-state preserved); `bash scripts/validate.sh` → ALL CHECKS PASSED (check 9 guards the transcript section).
+  3. Preserve each file's existing tri-state casing exactly as found (the skill file capitalizes "Partially Met / Not Met", the template uses "Partially met / Not met") — casing normalization is an out-of-scope edit.
+  4. Write the SC6 traceability walk to `.release-loop/reports/traceability.md`: one row per `docs/research/ultraprompt-survey.md` import-2 clause — ladder order, typecheck-never-closes, layer-mismatch/unit-closes-unit, binary reporting language, hedges-banned, three named consumers — citing the landed `file:line` (hedges-banned cites `skills/shipping/references/verification.md`'s unchanged red-flag list) or an explicit drop reason. Zero silent omissions.
+  5. Self-review against spec R6/R7 and S3: tri-state Verdict preserved; table shape unchanged; transcript vocabulary untouched.
+  6. Commit: "feat(retrospective): Record measured results in binary completion form"
+Acceptance: `rg -n "verified:" skills/retrospective/SKILL.md` matches in Phase 3; `rg -n "verified:" schemas/retro-template.md` matches in the measured-vs-declared section; `rg -c "Met / Partially met / Not met" schemas/retro-template.md` ≥ 1 (tri-state preserved, template casing); `.release-loop/reports/traceability.md` exists with all six clause rows, each citing a landed location or drop reason (reviewer walks it against the diff); `bash scripts/validate.sh` → ALL CHECKS PASSED (check 9 guards the transcript section).
 
 ## Mutation/failure-state matrix
 
