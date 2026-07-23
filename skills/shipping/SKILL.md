@@ -28,7 +28,7 @@ If any outward capability is missing, do not fail the skill -- terminate in a **
 
 ## Step 1: Verification Gate
 
-Apply the Iron Law before any claim in this skill: **no completion claim without fresh verification evidence run in this message.** Run the full test suite now; read its output; stop and report failures rather than proceeding to commit. See `references/verification.md` for the claim-to-evidence table, the red-flag phrase self-audit, the regression red-green protocol, and why agent self-reports are not evidence. `enforces: P3`
+Apply the Iron Law before any claim in this skill: **no completion claim without fresh verification evidence run in this message.** Run the full test suite now; read its output; stop and report failures rather than proceeding to commit. See `references/verification.md` for the evidence-tier ladder, the binary completion report form, the claim-to-evidence table, the red-flag phrase self-audit, the regression red-green protocol, and why agent self-reports are not evidence. `enforces: P3`
 
 ## Step 2: Environment + Branch Detection
 

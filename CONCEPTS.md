@@ -38,6 +38,14 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Prepare-before-gate** — the invariant that the exact command packet of a gated irreversible action is persisted durably before the gate resolves, whether the gate blocks on a human question or evaluates automatic conditions; disk never trails the conversation.
 - **Non-authorization marker** — the explicit statement carried by every persisted command packet that it is preparation evidence, never approval; the file-shaped counterpart of "gate approval is not execution authorization".
 
+## Completion evidence
+
+- **Evidence tier** — a named strength level of completion evidence; the position a proving observation occupies on the evidence-tier ladder.
+- **Evidence-tier ladder** — the fixed descending order of completion-evidence strength: failing-repro-now-passing > end-to-end run > integration test > unit test > typecheck/build. Typecheck/build alone never closes a completion claim. The ladder ranks strength where tiers apply; evidence that fits no tier (for example, a structural validation run proving a docs-only change) is cited tier-free, never forced into a tier label.
+- **Claim layer** — the layer a completion claim lives at, implied by the requirement or success criterion it answers (unit, integration, end-to-end).
+- **Layer-mismatch** — a completion claim whose best evidence sits below the claim's layer. A claim is closed only by evidence at or above its layer; unit-level evidence closes only a unit-level claim.
+- **Binary completion report** — the two-valued reporting form for completion claims at structured outputs: `verified: <observation>` or `unverified: <blocker>`, with no hedged middle state. For rubric-measured checks it reports evidence acquisition (the rubric was applied, reading cited), not the judgment itself.
+
 ## Metrics
 
 - **Changed non-test lines** — the count of modified lines (added + removed) excluding tests, generated files, and lockfiles, used as the canonical diff-size metric across all phases (e.g. lane triggers).
