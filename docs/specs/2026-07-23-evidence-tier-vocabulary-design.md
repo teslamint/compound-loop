@@ -44,7 +44,8 @@ work", no "probably fine".
 `/retrospective` Phase 3 runs a declared proving command fresh and records
 the Measured result cell as `verified: scripts/validate.sh → ALL CHECKS
 PASSED` (or `unverified: <blocker>`), so a reader can judge evidence
-strength from the doc alone.
+strength from the doc alone. Structural validation fits no ladder tier, so
+the cell cites the observation tier-free per R3.
 
 ### S4: Agent resolves the canonical meaning from CONCEPTS.md
 
@@ -90,8 +91,8 @@ finding class.
 | Claim | Command | Observed at | Observed result | Evidence source |
 |---|---|---|---|---|
 | `CONCEPTS.md` exists with a `## Release verification` section (new section slots alongside) | `rg -n "^## " CONCEPTS.md` | 2026-07-23T12:41:00+0900 | 6 sections: Release verification, Release ceremony, Python compatibility, Retrospective interview, Session resilience, Metrics | Working tree @ `ee70f03` |
-| `shipping`'s verification reference has a claim→evidence table and red-flag phrase list but no tier ladder or binary reporting form | `rg -n "tier\|ladder\|verified:" skills/shipping/references/verification.md` | 2026-07-23T12:45:00+0900 | No matches for tier/ladder/`verified:` | Working tree @ `ee70f03` |
-| `reviewing` has no completion-evidence-strength vocabulary | `rg -n -i "evidence tier\|ladder\|layer" skills/reviewing/SKILL.md` | 2026-07-23T12:45:00+0900 | No matches | Working tree @ `ee70f03` |
+| `shipping`'s verification reference has a claim→evidence table and red-flag phrase list but no tier ladder or binary reporting form | `rg -n -e "tier" -e "ladder" -e "verified:" skills/shipping/references/verification.md` | 2026-07-23T12:45:00+0900 | No matches | Working tree @ `ee70f03` |
+| `reviewing` has no completion-evidence-strength vocabulary; its sole "ladder"/"tier" hits are dispatch degradation and model tiering, unrelated to evidence strength | `rg -n -i -e "evidence tier" -e "ladder" -e "layer" skills/reviewing/SKILL.md` | 2026-07-23T12:53:15+0900 | One match, line 65: "Degradation ladder … Model tiering" (dispatch/model concerns, not completion evidence) | Working tree @ `ee70f03` |
 | `retrospective` Phase 3 records measured results with no binary form | `rg -n "verified" skills/retrospective/SKILL.md` | 2026-07-23T12:45:00+0900 | No `verified:`/`unverified:` form; Phase 3 says "Record the measured result next to the declared target" | Working tree @ `ee70f03` |
 | `scripts/validate.sh` check 9 inspects only interview-transcript vocabulary in `schemas/retro-template.md`, not the measured-vs-declared table | `sed -n 280,340p scripts/validate.sh` | 2026-07-23T12:47:52+0900 | Check 9 parses `## Interview Transcript`, `- Independence level:`, `Verdict cell values:` lines only | Working tree @ `ee70f03` |
 
@@ -114,14 +115,19 @@ Grouped by concern; stable R-IDs.
 - **R1**: `CONCEPTS.md` gains a `## Completion evidence` section defining
   exactly these terms: **Evidence tier**, **Evidence-tier ladder**, **Claim
   layer**, **Layer-mismatch**, **Binary completion report**. Definitions stay
-  conceptual per the file's own header rule — no file paths or skill names.
+  conceptual per the file's own header rule ("no implementation specifics,
+  status, or links").
 - **R2**: The ladder's fixed descending order is:
   failing-repro-now-passing > end-to-end run > integration test > unit test >
   typecheck/build. The definition states that typecheck/build alone never
   closes a completion claim.
 - **R3**: Layer-mismatch is defined as: a completion claim is closed only by
   evidence at or above the layer the claim lives at; unit-level evidence
-  closes only a unit-level claim.
+  closes only a unit-level claim. The definitions also cover work outside the
+  ladder: a claim whose proof fits no tier (e.g. a docs-only change proved by
+  a structural validation run) cites its proving observation tier-free — the
+  ladder ranks strength where tiers apply, it never forces a tier label onto
+  evidence that has none.
 
 ### Consumption (rules in skill bodies)
 
@@ -129,19 +135,37 @@ Grouped by concern; stable R-IDs.
   Completeness rule in Step 8): a completion claim whose best evidence sits
   below the claim's layer is an actionable layer-mismatch finding, and the
   verdict cannot be `clean` while it stands (approved dialogue decision).
+  When a claim's layer cannot be determined (no spec criterion or requirement
+  implies one), the mismatch test is undecidable — the lane files an
+  unverifiable-claim finding naming the missing layer instead of a
+  layer-mismatch finding. Layer-mismatch findings pass through the normal
+  Suppression Policy like any lane finding, no special exemption: a claim
+  whose evidence turns out layer-appropriate is exactly the false-positive
+  class suppression exists for.
 - **R5**: `shipping`'s `references/verification.md` gains the evidence-tier
-  ladder and the binary completion report form; the Step 1 verification-gate
-  report and every claim in the claim→evidence table's scope use
-  `verified: <observation>` / `unverified: <blocker>`, naming the evidence
-  tier where a tier applies. The existing Iron Law, gate function, and
+  ladder and the binary completion report form. The form binds exactly two
+  surfaces: the Step 1 verification-gate report, and the evidence cited for a
+  claim→evidence table row when that claim is formally reported. Naming the
+  evidence tier is required where a tier applies (per R3's tier-free rule
+  otherwise). Conversational claims elsewhere in shipping (Steps 4/6/7
+  narration) stay governed by the existing red-flag list only — they are not
+  bound to the binary form. The existing Iron Law, gate function, and
   red-flag list are unchanged — the ladder layers on top.
 - **R6**: `retrospective` Phase 3 records each Measured result cell in the
   binary form; `schemas/retro-template.md`'s measured-vs-declared example row
-  shows it. Table column shape is unchanged.
-- **R7**: The binary form is mandatory only at structured outputs — the three
-  points named in R4–R6 (review verdict evidence, shipping verification-gate
-  report, retro measured-result cells) — never a prose-wide language rule
-  (approved dialogue decision).
+  shows it. Table column shape is unchanged. For rubric-measured criteria
+  (no runnable command), the binary form reports evidence acquisition, not
+  judgment: `verified: <rubric applied, reading cited>` /
+  `unverified: <why the rubric could not be applied>`. The Verdict column
+  keeps the tri-state judgment (Met / Partially met / Not met) — a
+  `verified:` Measured result can still carry a Partially met or Not met
+  Verdict; `unverified:` means the measurement itself could not run, which is
+  never recorded as Met.
+- **R7**: The binary form is mandatory only at structured outputs — the
+  surfaces enumerated in R4–R6 (review verdict evidence, shipping's Step 1
+  verification-gate report and formally reported claim→evidence rows, retro
+  measured-result cells) — never a prose-wide language rule (approved
+  dialogue decision).
 
 ## Testing
 
@@ -176,9 +200,9 @@ Structural + judgment, matching the repo's docs-only change conventions
 
 1. `CONCEPTS.md` contains a `## Completion evidence` section defining the
    five R1 terms.
-   - **Measured by**: `rg -n "^## Completion evidence" CONCEPTS.md && rg -c "Evidence tier|Evidence-tier ladder|Claim layer|Layer-mismatch|Binary completion report" CONCEPTS.md` — section heading present, all five terms matched.
+   - **Measured by**: `rg -n "^## Completion evidence" CONCEPTS.md && rg -o -e "Evidence tier\b" -e "Evidence-tier ladder" -e "Claim layer" -e "Layer-mismatch" -e "Binary completion report" CONCEPTS.md | sort -u | wc -l` — section heading present and the count is ≥ 5 (each of the five terms matched at least once).
 2. The ladder appears in the exact declared order with the typecheck rule.
-   - **Measured by**: `rg -n "failing-repro-now-passing" CONCEPTS.md` — the match line lists the five tiers in R2's order and the section states typecheck/build alone never closes a completion claim (read the section).
+   - **Measured by**: judgment rubric — read the `## Completion evidence` section; pass = the five tiers appear in R2's descending order (line-wrapping allowed) and the section states typecheck/build alone never closes a completion claim.
 3. Each consumer carries an executable rule referencing the canonical terms.
    - **Measured by**: `rg -l "layer-mismatch|Layer-mismatch" skills/reviewing/SKILL.md && rg -l "evidence-tier ladder|Evidence-tier ladder" skills/shipping/references/verification.md && rg -l "verified:" skills/retrospective/SKILL.md` — all three files match.
 4. `reviewing`'s rule blocks `clean` on a standing layer-mismatch finding.
@@ -188,8 +212,10 @@ Structural + judgment, matching the repo's docs-only change conventions
 6. Traceability: every source-inventory mechanism from
    `docs/research/ultraprompt-survey.md` import 2 (ladder order,
    typecheck-never-closes, layer-mismatch/unit-closes-unit, binary reporting
-   language, three named consumers) is present in the deliverable with a
-   citation, or on an explicit drop-list with a reason.
+   language, hedges-banned — satisfied by `verification.md`'s existing
+   unchanged red-flag list, cite it — and three named consumers) is present
+   in the deliverable with a citation, or on an explicit drop-list with a
+   reason.
    - **Measured by**: judgment rubric — walk the survey's import-2 sentence clause by clause against the landed diff; pass = zero silent omissions.
 7. Structural validation passes on the final tree.
    - **Measured by**: `bash scripts/validate.sh` → `ALL CHECKS PASSED`.
