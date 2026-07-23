@@ -87,6 +87,8 @@ Requirements Completeness rule: if the diff confirms observable behavior absent 
 
 Stateful ceremony evidence gate: a finding remains actionable and the verdict cannot be `clean` when any applicable matrix cell or corresponding evidence record is missing; isolation is unproved or a real target remains reachable; the observed failure came from the wrong mechanism; or the observed post-state, rerun, rollback or compensation, headless, or cancellation or abort behavior differs from the approved matrix. A post-approval change to a matrix row or outcome is observable behavior and requires item 1's separate committed deviation addendum before review can return `clean`; do not rewrite the approved matrix or treat evidence of the new behavior as authorization.
 
+Layer-mismatch rule: when a completion claim in the reviewed material rests on best evidence sitting below the claim's layer (evidence-tier ladder and layer-mismatch, defined in the repo's `CONCEPTS.md` where present), that is an actionable layer-mismatch finding, and the verdict cannot be `clean` while it stands. When no spec criterion or requirement implies a claim layer, the mismatch test is undecidable -- file an unverifiable-claim finding naming the missing layer instead. Layer-mismatch findings pass through the normal Suppression Policy like any lane finding, with no special exemption. This rule binds findings and verdicts (structured output), not the reviewer's surrounding prose.
+
 ## Suppression Policy
 
 Before any finding survives to a report, check it against `references/suppression.md` -- the merged false-positive catalog and protected-artifact list. A finding matching a suppression category is dropped outright, never routed to a soft bucket.
