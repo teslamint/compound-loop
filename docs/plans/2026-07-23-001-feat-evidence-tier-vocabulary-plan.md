@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Evidence-Tier Vocabulary
 type: feat
-status: draft
+status: approved
 date: 2026-07-23
 execution: non-code
 origin: docs/specs/2026-07-23-evidence-tier-vocabulary-design.md
