@@ -1,6 +1,6 @@
 ---
 title: Evidence-Tier Vocabulary
-status: draft
+status: approved
 date: 2026-07-23
 schema: spec/v1
 ---
