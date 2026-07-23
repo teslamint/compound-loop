@@ -55,7 +55,12 @@ Trace data flow backward from the symptom toward where valid state first became 
 - What is wrong and where (file:line)
 - A **grounding observation** — a runtime value, log line, instrumented capture, or behavior delta against a working comparison case. "X seems off" is not evidence; reject any hypothesis that can't cite one. Go back to Phase 1 and instrument instead.
 - The causal chain, step by step, from trigger to symptom
+- A **kill criterion** — the concrete observation that would rule this hypothesis out, stated before any probe runs ("H2 is dead if the log shows X"). A hypothesis without one is a belief, not a hypothesis — sharpen it or drop it. When a probe meets a kill criterion, mark the hypothesis dead with the evidence; do not soften to "unlikely" and keep half-probing it.
 - For **uncertain links** in the chain: a prediction — something true in a *different* code path or scenario if this link is correct. If the chain is obvious (missing import, explicit null deref), the chain explanation alone is sufficient; predictions are a tool for uncertain links, not a ritual for every hypothesis.
+
+Alongside the ranked hypotheses, keep one **boring hypothesis** live — stale build, wrong environment, bad test data, misread symptom — even after Phase 1's environment sanity check; it wins embarrassingly often and is the cheapest to kill.
+
+**Predict before probing**: before running any probe (log line, breakpoint, bisect, config flip), write down what each live hypothesis predicts it will show, then compare observed against predicted. Predictions committed in advance cannot be retrofitted — this is the guard that keeps a favorite hypothesis from absorbing every result. Prefer the probe whose outcome the fewest hypotheses predict identically; a probe whose every outcome you'd explain the same way discriminates nothing.
 
 **Causal-chain gate**: no fix until the chain has no gaps. The user may explicitly authorize proceeding with the best-available hypothesis when investigation is genuinely stuck — this is an explicit override, never a silent default.
 
