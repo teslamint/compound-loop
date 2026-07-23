@@ -28,6 +28,35 @@ BEFORE claiming any status or expressing satisfaction:
 Skip any step = lying, not verifying.
 ```
 
+## Evidence-tier ladder
+
+Completion evidence is ranked on a fixed descending ladder of strength:
+
+```
+failing-repro-now-passing > end-to-end run > integration test > unit test > typecheck/build
+```
+
+Canonical definitions of the five tiers live in the repo-root `CONCEPTS.md` (`## Completion evidence`) when that file is present; this section restates only the order and its operating rules so the skill executes standalone. The ladder applies to every completion claim this file governs -- it names the tier cited whenever evidence is reported for a claim:
+
+- Typecheck/build alone never closes a completion claim.
+- Evidence that fits no tier (for example, a structural validation run proving a docs-only change) is cited tier-free -- never forced into a tier label.
+
+## Binary completion report
+
+Exactly two surfaces are bound to this form: the Step 1 verification-gate report, and the evidence cited for a claim -> evidence table row when that claim is formally reported. On those two surfaces, use exactly one of:
+
+```
+verified: <observation>
+unverified: <blocker>
+```
+
+naming the evidence tier where one applies (tier-free evidence is cited without a tier label). No hedged middle state. One example of each form:
+
+- `verified: pytest -q -> 124 passed, 0 failed (integration tier)`
+- `unverified: no test suite exists; highest evidence is typecheck (build tier)`
+
+Conversational narration elsewhere in shipping (Steps 4/6/7) stays governed by the existing red-flag list only -- it is not bound to the binary form.
+
 ## Claim -> evidence table
 
 | Claim | Requires | Not sufficient |
