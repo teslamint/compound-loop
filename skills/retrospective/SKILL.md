@@ -39,7 +39,7 @@ For each criterion in the spec's Success Criteria section:
 
 1. Identify the proving command or judgment rubric exactly as declared — do not paraphrase it into something easier to run.
 2. **Run the command fresh, in this execution.** A prior claim in a commit message, PR body, or earlier retro is not evidence. `enforces: P3`
-3. Record the measured result next to the declared target and classify **Met / Partially Met / Not Met**, with the gap stated explicitly for anything short of Met.
+3. Record the measured result next to the declared target and classify **Met / Partially Met / Not Met**, with the gap stated explicitly for anything short of Met. The Measured result cell uses the binary completion report form — `verified: <observation>` (naming the evidence tier where one applies; tier-free otherwise) or `unverified: <why the measurement could not run>`. For rubric-measured criteria the form reports evidence acquisition (`verified: <rubric applied, reading cited>`), never the judgment: the Verdict cell keeps Met / Partially Met / Not Met, and a `verified:` result can still carry Partially Met or Not Met; `unverified:` is never recorded as Met. The form binds Measured result cells only, not the doc's narrative prose.
 
 One row per criterion — vague summarization across criteria is banned. **If no spec exists, state that explicitly in the doc and skip this section.** Never reconstruct success criteria after the fact from what was actually built; a criterion invented post-hoc is not a measurement, it's a rationalization.
 

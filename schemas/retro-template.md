@@ -26,10 +26,13 @@ Written by `retrospective` to `docs/retros/YYYY-MM-DD-<context>-retro.md`, where
 
 One row per criterion from the spec's Success Criteria section. The measurement is run FRESH
 during the retro (enforces: P3) — a prior claim in a commit message or PR body is not evidence.
+The Measured result cell uses the binary completion report form — `verified: <observation>` or
+`unverified: <blocker>` — and for rubric-measured criteria it reports evidence acquisition
+(rubric applied, reading cited), never the Verdict itself.
 
 | # | Declared criterion | Measurement (command / rubric) | Measured result | Verdict |
 |---|---|---|---|---|
-| 1 | <criterion> | `<command>` | <output summary> | Met / Partially met / Not met — <gap> |
+| 1 | <criterion> | `<command>` | verified: <observation> / unverified: <blocker> | Met / Partially met / Not met — <gap> |
 
 (If no spec exists, state that explicitly and skip this section — do not reconstruct criteria after the fact.)
 
