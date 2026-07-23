@@ -18,6 +18,16 @@ fires, not before (`enforces: P6`).
 | Project-defined lane schema | Formal schema for custom review lanes (v0.1: free-form markdown in the consuming repo's AGENTS.md) | Second project defining custom lanes |
 | Ambient compound triggers | "that worked / it's fixed" phrase detection auto-offering `compound` (v0.1: explicit calls + skill descriptions) | Evidence that solved problems routinely go uncaptured outside release-loop |
 | Gemini support verification | `ask_user` question-tool path is documented but untested | First Gemini-harness user |
+| Evidence-tier vocabulary | Shared CONCEPTS.md ladder of completion-evidence strength (failing-repro-now-passing > end-to-end run > integration test > unit test > typecheck/build; typecheck alone never closes a completion claim, a unit test only closes a unit-level claim) plus binary reporting language (`verified: <observation>` / `unverified: <blocker>`, no "should work" hedges) consumed by reviewing/shipping/retrospective | First completion claim that escapes review because it was verified at a lower layer than the requirement lived at |
+| Skill-level trace evidence | Structured channel where a retro records which skill *section* the session confirmed, contradicted, or refined; compound-refresh consumes the rows as skill-maturity evidence (today lessons reach docs/solutions/ and ROADMAP, never a per-skill-section record) | First retro lesson that contradicts a shipped skill's guidance rather than the code under work |
+| New-skill distinctness gate | Absorb-over-add rule for skill proposals: a candidate must show evidence distinct from every existing skill or be absorbed into the nearest one — complements trigger-to-build (which decides *when* to build; this decides *whether*) | Next new-skill proposal (14th skill) |
+
+The last three rows come from the 2026-07-23 survey of
+[rlaope/ultraprompt](https://github.com/rlaope/ultraprompt)
+([docs/research/ultraprompt-survey.md](docs/research/ultraprompt-survey.md)) —
+external idea imports, not v0.1 deferrals. The survey's fourth import
+(hypothesis kill criteria / predict-before-probe / boring hypothesis) was applied
+directly to `skills/debugging/SKILL.md` the same day and is not tracked here.
 
 ## Shipped
 

@@ -8,3 +8,7 @@ Distillation inventories produced during compound-loop's design phase (2026-07-1
 - [distill-review.md](distill-review.md) — reviewing (SP requesting/receiving, CE ce-code-review/ce-simplify-code, EC review-phase)
 - [distill-ship.md](distill-ship.md) — shipping (SP verification/finishing-branch, CE ce-commit/ce-commit-push-pr/ce-resolve-pr-feedback/lfg, EC ship-phase)
 - [distill-retro.md](distill-retro.md) — retrospective/compound/compound-refresh (EC retro-phase, CE ce-compound/ce-compound-refresh/ce-sessions)
+
+External surveys (post-v0.1 idea imports, not part of the original distillation):
+
+- [ultraprompt-survey.md](ultraprompt-survey.md) — 2026-07-23 survey of rlaope/ultraprompt strategy-axis skills; source of the debugging Phase 2 hypothesis-discipline additions and three ROADMAP Future candidates rows
