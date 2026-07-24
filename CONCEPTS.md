@@ -46,6 +46,13 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Layer-mismatch** — a completion claim whose best evidence sits below the claim's layer. A claim is closed only by evidence at or above its layer; unit-level evidence closes only a unit-level claim.
 - **Binary completion report** — the two-valued reporting form for completion claims at structured outputs: `verified: <observation>` or `unverified: <blocker>`, with no hedged middle state. For rubric-measured checks it reports evidence acquisition (the rubric was applied, reading cited), not the judgment itself.
 
+## Carry-forward triggers
+
+- **Edit-based trigger** — a carry-forward trigger that fires when a named file or section is touched by planned or actual work; detected by diffing a plan's file list against the trigger's named targets.
+- **Drift-based trigger** — a carry-forward trigger that fires when a named record shape or observable state deviates from its contract; detected by inspecting the named record where observable.
+- **Event-based trigger** — a carry-forward trigger that fires on a future occurrence rather than a file edit or record shape (a new install, an external report, the next cycle of a named kind); detected by judgment, not diffing.
+- **Trigger audit** — the planning-time act of classifying every open carry-forward row's trigger into exactly one class and diffing the fireable classes against the plan's file list and observable record state. A fired trigger demands a recorded disposition, and a recorded firing latches: archiving or resetting the drifted record never un-fires a row.
+
 ## Metrics
 
 - **Changed non-test lines** — the count of modified lines (added + removed) excluding tests, generated files, and lockfiles, used as the canonical diff-size metric across all phases (e.g. lane triggers).
