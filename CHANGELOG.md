@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.0] - 2026-07-24
+
+### Added
+- Added the completion-evidence vocabulary to CONCEPTS.md — Evidence tier, Evidence-tier ladder (failing-repro-now-passing > end-to-end run > integration test > unit test > typecheck/build), Claim layer, Layer-mismatch, and Binary completion report — with the rules that typecheck/build alone never closes a completion claim and that evidence fitting no tier is cited tier-free.
+- Added the layer-mismatch rule to reviewing's output step: a completion claim whose best evidence sits below its claim layer is an actionable finding and the verdict cannot be `clean` while it stands; a claim with no determinable layer files an unverifiable-claim finding instead, and layer-mismatch findings pass through normal suppression with no special exemption.
+- Added the evidence-tier ladder and binary completion report form to shipping's verification reference — `verified: <observation>` / `unverified: <blocker>` bound to exactly the Step 1 verification-gate report and formally reported claim→evidence rows, with conversational narration exempt — plus the Step 1 pointer naming both.
+- Added hypothesis kill criteria, a standing boring hypothesis, and predict-before-probe discipline to debugging Phase 2, and captured the carry-forward trigger planning-audit lesson under docs/solutions/workflow-issues/.
+
+### Changed
+- retrospective Phase 3 and the retro template now record measured results in the binary completion report form: tier named where one applies, tier-free otherwise, rubric-measured rows reporting evidence acquisition rather than judgment, and the tri-state Verdict column preserved.
+- ROADMAP registers the ultraprompt survey (docs/research/ultraprompt-survey.md) with three future-candidate imports and the evidence-tier cycle's new carry-forward rows (planning-time trigger audit, vocabulary polish batch, spec-level carve-out rule).
+
 ## [0.5.0] - 2026-07-22
 
 ### Added
