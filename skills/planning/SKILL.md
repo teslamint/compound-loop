@@ -72,6 +72,20 @@ must say:
 
 Map files to create or modify before defining units: one responsibility per file, colocate what changes together, split by responsibility rather than technical layer, and follow the existing codebase's scale — don't unilaterally restructure an established large-file convention.
 
+## 5a. Carry-forward trigger audit
+
+When the File structure section is written, list every open row in the durable tracker (ROADMAP, issue tracker, or equivalent — the same tracker `retrospective` pushes carry-forward items to) and classify each row's trigger into exactly one class: edit-based (names a file or section whose touch fires it), drift-based (names a record shape or observable state whose deviation fires it), or event-based (names a future occurrence). Tiebreak: a trigger naming both a file condition and an event resolves to edit-based — the mechanically checkable reading wins.
+
+Read recorded fired-state annotations first (latching): a row whose firing is already recorded in the tracker or a prior retro counts as fired regardless of current observability — an archived or reset record does not un-fire it.
+
+Diff edit-based triggers against the planned file list; check each drift-based trigger's named record where observable at planning time. An unobservable record is recorded as unobservable in the audit section — never given an invented verdict. A row with no classifiable trigger condition is recorded as unclassifiable and handled under the event-based feature-relevance question, never silently skipped.
+
+Every fired trigger gets a disposition in the same planning pass: fold the row in as a unit, or add a Deferred to Follow-Up Work entry naming the row and the reason. Silence on a fired trigger is a plan gap that blocks approval.
+
+Record the result in the plan's Carry-forward trigger audit section per `schemas/plan-schema.md` — fired rows, unobservable rows, and the attestation line.
+
+Reviewer mandate: any independent plan review re-derives this audit — open tracker rows versus the plan's File structure and the audit section's dispositions — rather than trusting the section's claims; an omitted fired row is a blocking finding. Whoever composes a plan-review dispatch prompt carries this re-derive instruction into the prompt verbatim, so the mandate travels with the dispatch.
+
 ## 6. Deliverable-type gate
 
 Classify the spec's deliverable once: `code` (source, schema, CLI, API changes) or `non-code` (docs, skill files, config-only). Record it in the plan frontmatter's `execution` field per `schemas/plan-schema.md` — never in a side-channel file. This selects the unit template in step 9.
@@ -134,7 +148,7 @@ Before finalizing, the author (not a subagent) checks:
 - **Placeholder scan** — search for step 13's red flags; fix inline.
 - **Type consistency** — do signatures, names, and types agree across units (a function `clearLayers()` in U2 and `clearFullLayers()` in U5 is a bug)?
 - **Callers + invariants** — for code units, who calls the functions being changed, and what invariants must still hold afterward?
-- **Retro carryover** — does a prior retrospective's carry-forward item belong in this plan? Check the durable tracker before finalizing.
+- **Retro carryover** — re-run the step 5a trigger audit against the final file list (deepening and unit edits are the likeliest divergence vector), confirm the attestation line still names the tracker state actually examined, and keep the feature-relevance question ("does this item belong in this plan?") for event-based triggers only.
 
 Fix issues inline; no separate review pass is needed.
 
