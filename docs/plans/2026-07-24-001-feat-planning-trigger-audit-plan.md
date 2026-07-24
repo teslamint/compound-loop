@@ -29,13 +29,16 @@ in `skills/planning/SKILL.md`, per spec R1–R6 and R2a.
   not the glosses.
 - **No step renumbering in the planning skill**: U3 inserts the audit as step
   `5a` between File structure (5) and Deliverable-type gate (6). The skill body
-  cross-references step numbers at lines 13, 86, 92, 94, 98, 117, 134 (verified
-  2026-07-24T18:35:37+0900); renumbering 6–18 would touch all of them for zero
-  behavior gain.
+  cross-references step numbers at lines 13, 77, 86, 92, 94, 98, 117, 134
+  (verified via `rg -n "step [0-9]+" skills/planning/SKILL.md`, independent
+  review re-run at `f6bceaf`); renumbering 6–18 would touch all of them for
+  zero behavior gain.
 - **Contained renumbering in plan-schema**: U2 inserts the audit section as
   hard-floor item 8, shifting Deferred to Follow-Up Work to 9 and Open unknowns
-  to 10. Hard-floor items carry no stable IDs (spec R5); other files reference
-  these sections by name, never by number.
+  to 10. Hard-floor items carry no stable IDs (spec R5); the two shifted
+  sections are referenced elsewhere by name, never by number (an existing
+  numeric reference, "item 1's deviation-addendum rule", points at an unshifted
+  item and appears stale independently of this change — see Deferred).
 - **Lean audit record**: three record shapes only — fired row, unobservable
   row, and the always-present fixed-template attestation line. Fired includes
   latched rows (a recorded firing never un-fires when the drifted record is
@@ -63,29 +66,13 @@ working tree `29602c5`:
 | `skills/planning/SKILL.md` | Insert step 5a (audit procedure + reviewer mandate); extend step 14 Retro carryover bullet | U3 |
 | `docs/plans/2026-07-24-001-feat-planning-trigger-audit-plan.md` | This plan (carries the first executed audit section below) | — |
 
-## Carry-forward trigger audit
-
-First executed audit (dogfood, spec SC6). Classification per spec R2/R2a
-against the planned file list above, the live `.release-loop/progress.md`, and
-each row's recorded fired-state annotations.
-
-| Tracker row (ROADMAP.md line) | Class | Fired by | Disposition |
-|---|---|---|---|
-| Automated numbered-reference validation for planning and plan schema (45) | edit-based | U3 inserts a numbered planning step (5a); U2 inserts a plan-schema hard-floor item — both named insertion conditions hold | Deferred with reason (see Deferred to Follow-Up Work) |
-| Plan internal clause-consistency check (48) | edit-based | U3 edits `skills/planning/SKILL.md` self-review — the row's named edit condition | Deferred with reason; satisfied procedurally this cycle: the plan-review dispatch prompt carries the mandated architecture-notes-vs-unit-steps diff |
-| Mechanical validate.sh check for `final_action` shape (55) | drift-based | Latching rule: tracker-annotated **fired** (second consecutive cycle); the drifted record now lives only in `.release-loop/archive/2026-07-23-evidence-tier-vocabulary/progress.md` — archival does not un-fire the row | Deferred with reason (see Deferred to Follow-Up Work) |
-| Planning-time trigger audit (56) | event-based | The named occurrence — "next planning cycle (any plan with a File structure section)" — is this plan | Folded: this entire plan (U1–U3) |
-| Spec-level carve-out rule (58) | event-based | The named occurrence — a designing cycle whose spec pairs a universal principle with a mandating requirement — is this cycle's spec (gloss boundary vs R2 literal executability) | Deferred with reason; handled procedurally in the origin spec (explicit gloss-boundary carve-out sentence) |
-
-Audited ROADMAP.md carry-forward table at 29602c5: 15 open rows, 5 fired, 0 unobservable.
-
 ## Scenario coverage map
 
 | S-ID | Unit chain | Observable verification |
 |---|---|---|
 | S1 (edit-based fire → disposition) | U1 → U2 → U3 | This plan's audit section rows 45/48 (real edit-based firings with dispositions); a reader executing U3's step 5a text against ROADMAP.md's current table reproduces the same fired set |
 | S2 (no-fire attestation) | U2 → U3 | U2's schema text fixes the attestation template; reviewer applies the template to a hypothetical plan touching only `README.md` and confirms the section reduces to one decidable line |
-| S3 (drift fire + latching) | U1 → U2 → U3 | This plan's audit section row 55: fired via recorded annotation while the live record is clean — the latching clause in U3's text and U1's trigger-audit definition both name this outcome |
+| S3 (drift fire + latching) | U1 → U2 → U3 | This plan's audit section rows 55 (tracker-annotation arm) and 47/54 (prior-retro-reconciliation arm): fired via recorded firing while the live tree shows no fresh fire — the latching clause in U3's text and U1's trigger-audit definition both name this outcome |
 | S4 (reviewer re-derives) | U3 | The independent review of this plan is dispatched with the re-derive instruction (R6) and reports its own tracker-vs-file-list diff, not a trust-the-section check |
 | S5 (no durable tracker) | U2 | `rg -n -F "No durable carry-forward tracker" schemas/plan-schema.md` hits the exact fallback line after U2 |
 
@@ -112,7 +99,7 @@ Files:
 Steps:
   1. In "Document body — hard floor", insert a new item 8 titled **Carry-forward trigger audit** immediately before Deferred to Follow-Up Work, and renumber the two following items (Deferred to Follow-Up Work 8→9, Open unknowns 9→10). The new item's text states, in this order:
      - The section records the planning-time trigger audit (the classification of every open carry-forward tracker row's trigger — edit-based (fires on a named file or section being touched), drift-based (fires on a named record shape deviating), or event-based (fires on a future occurrence) — diffed against the plan's file list and observable record state).
-     - Three record shapes, lean by design: one row per fired trigger (tracker row, trigger class, what fired it, disposition with reason); one row per unobservable drift-based trigger (tracker row, the named record, why it is not observable at planning time); and one always-present attestation line in the fixed template `Audited <tracker location> at <tracker state>: <N> open rows, <M> fired, <K> unobservable.` where tracker state is a commit or equivalent identifier.
+     - Three record shapes, lean by design: one row per fired trigger (tracker row, trigger class, what fired it, disposition with reason — "what fired it" is a deliberate one-field addition to spec R5's enumeration, approved with this plan); one row per unobservable drift-based trigger (tracker row, the named record, why it is not observable at planning time); and one always-present attestation line in the fixed template `Audited <tracker location> at <tracker state>: <N> open rows, <M> fired, <K> unobservable.` where tracker state is a commit or equivalent identifier.
      - Fired includes latched rows: a firing already recorded in the tracker or a prior retro counts regardless of current observability.
      - When no trigger fired and nothing is unobservable, the section is the attestation line alone.
      - A fired trigger's disposition is fold-as-unit or a Deferred to Follow-Up Work entry naming the row and the reason; a fired row with neither blocks approval.
@@ -143,6 +130,28 @@ Acceptance: `rg -n -e "edit-based" -e "drift-based" -e "event-based" skills/plan
 
 No stateful ceremony in the deliverable; no mutation/failure-state matrix required.
 
+## Carry-forward trigger audit
+
+First executed audit (dogfood, spec SC6), placed per the U2 contract
+(immediately before Deferred to Follow-Up Work). Classification per spec
+R2/R2a against the File structure table above, the live
+`.release-loop/progress.md`, and each row's recorded fired-state annotations.
+The table's "Fired by" column is an intentional superset of spec R5's
+fired-row fields (tracker row, trigger class, disposition, reason) — recorded
+here and in U2 as a deliberate contract addition, not drift.
+
+| Tracker row (ROADMAP.md line) | Class | Fired by | Disposition |
+|---|---|---|---|
+| Automated numbered-reference validation for planning and plan schema (45) | edit-based | U3 inserts a numbered planning step (5a); U2 inserts a plan-schema hard-floor item — both named insertion conditions hold | Deferred with reason (see Deferred to Follow-Up Work) |
+| Carry-forward check structural assertion (47) | event-based | Latching rule, prior-retro arm: the 2026-07-24 retro's reconciliation records "trigger fired under the strict reading" (`503da9b` edited `schemas/retro-template.md`), unconsumed by any disposition | Deferred with reason (see Deferred to Follow-Up Work) |
+| Plan internal clause-consistency check (48) | edit-based | U3 edits `skills/planning/SKILL.md` self-review — the row's named edit condition | Deferred with reason; satisfied procedurally this cycle: the plan-review dispatch prompt carries the mandated architecture-notes-vs-unit-steps diff |
+| Define hand-up packet in shipping SKILL (54) | edit-based | Latching rule, prior-retro arm: the 2026-07-24 retro's reconciliation records "trigger fired unnoticed" (`2299955` edited `skills/shipping/SKILL.md`), unconsumed; no fresh fire this cycle | Deferred with reason (see Deferred to Follow-Up Work) |
+| Mechanical validate.sh check for `final_action` shape (55) | drift-based | Latching rule, tracker arm: tracker-annotated **fired** (second consecutive cycle); the drifted record now lives only in `.release-loop/archive/2026-07-23-evidence-tier-vocabulary/progress.md` — archival does not un-fire the row | Deferred with reason (see Deferred to Follow-Up Work) |
+| Planning-time trigger audit (56) | event-based | The named occurrence — "next planning cycle (any plan with a File structure section)" — is this plan | Folded: this entire plan (U1–U3) |
+| Spec-level carve-out rule (58) | event-based | The named occurrence — a designing cycle whose spec pairs a universal principle with a mandating requirement — is this cycle's spec (gloss boundary vs R2 literal executability) | Deferred with reason; handled procedurally in the origin spec (explicit gloss-boundary carve-out sentence) |
+
+Audited ROADMAP.md carry-forward table at 29602c5: 15 open rows, 7 fired, 0 unobservable.
+
 ## Deferred to Follow-Up Work
 
 - **ROADMAP row 45 (automated numbered-reference validation)** — trigger fired
@@ -151,11 +160,23 @@ No stateful ceremony in the deliverable; no mutation/failure-state matrix requir
   explicitly deferred mechanical checks this cycle on the trigger-to-build
   pattern. The firing itself is recorded here so the row latches; U2 and U3
   carry manual numbering acceptance checks in its place this cycle.
+- **ROADMAP row 47 (carry-forward check structural assertion)** — fired via
+  latching, prior-retro arm (the 2026-07-24 retro's reconciliation records the
+  strict-reading firing by `503da9b`, unconsumed). Deferred:
+  `schemas/retro-template.md` and validate.sh check 9 are outside the approved
+  spec's file set; the row's own trigger text routes it to a retro-template or
+  check-9 design cycle, which this is not.
 - **ROADMAP row 48 (plan internal clause-consistency check)** — trigger fired
   (U3 edits the planning self-review). Deferred: the row's resolution needs its
   own design fork (procedural self-review bullet vs mechanical check) that this
   cycle's spec did not adjudicate; the defect class is covered procedurally
   this cycle by the mandated clause-diff in the plan-review dispatch prompt.
+- **ROADMAP row 54 (define hand-up packet in shipping SKILL)** — fired via
+  latching, prior-retro arm (the 2026-07-24 retro's reconciliation records the
+  unnoticed firing by `2299955`, unconsumed). Deferred:
+  `skills/shipping/SKILL.md` is outside the approved spec's file set; the P4
+  one-sentence definition remains the natural fold for the next cycle that
+  edits that file.
 - **ROADMAP row 55 (mechanical validate.sh check for final_action shape)** —
   fired via latching (tracker-annotated, second consecutive cycle). Deferred:
   `scripts/validate.sh` is outside the approved spec scope; the row is now
@@ -171,6 +192,11 @@ No stateful ceremony in the deliverable; no mutation/failure-state matrix requir
 - **Mechanical validate.sh check for the audit section itself** — spec Out;
   build on first observed omission of the section in a real plan
   (trigger-to-build).
+- **Stale numeric cross-reference discovered by review**:
+  `schemas/plan-schema.md:32` and `skills/planning/SKILL.md:106` cite "item
+  1's deviation-addendum rule", but the deviation-addendum rule lives in
+  hard-floor item 3 (Assumption Recheck) — pre-existing defect, outside this
+  plan's scope; candidate carry-forward row for this cycle's retro.
 
 ## Open unknowns
 
@@ -184,6 +210,7 @@ No stateful ceremony in the deliverable; no mutation/failure-state matrix requir
 
 ## Verification summary
 
-Per-unit acceptance commands above; branch-level: spec SC1–SC5 commands as
-written in the spec, SC6 by reviewer rubric against this plan's audit section,
-SC7 `bash scripts/validate.sh` → ALL CHECKS PASSED.
+Per-unit acceptance commands above; branch-level: SC1 per U1's recorded
+case-adaptation (`-i` added), SC2–SC5 commands as written in the spec, SC6 by
+reviewer rubric against this plan's audit section, SC7
+`bash scripts/validate.sh` → ALL CHECKS PASSED.
