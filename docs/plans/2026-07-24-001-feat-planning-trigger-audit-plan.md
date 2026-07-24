@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Planning-time carry-forward trigger audit
 type: feat
-status: draft
+status: approved
 date: 2026-07-24
 execution: non-code
 origin: docs/specs/2026-07-24-planning-trigger-audit-design.md
