@@ -24,6 +24,8 @@ This is a hand-rolled frontmatter reader, not a YAML parser — it only
 understands the subset of YAML this schema uses (top-level scalars and
 simple `- item` lists under a key). Pure stdlib, no PyYAML or other deps.
 """
+from __future__ import annotations
+
 import os
 import re
 import sys
