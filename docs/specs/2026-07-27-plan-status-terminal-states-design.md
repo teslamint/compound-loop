@@ -1,6 +1,6 @@
 ---
 title: Plan status terminal states and frontmatter validation
-status: draft
+status: approved
 date: 2026-07-27
 schema: spec/v1
 ---
@@ -178,6 +178,11 @@ flipping after merge puts a commit on the base branch outside the PR.
 `retrospective` runs after merge (`skills/retrospective/SKILL.md:12`), has an AUTO
 gate (`:14`), and already commits a document the flip can ride.
 
+A retro covering more than one plan flips **every** plan it covers, each with its
+own `completed_by:` naming the merge that landed that plan's work (resolved at
+the approval gate, 2026-07-27). A retro with no plan writes no flip — the skill's
+existing no-plan branch (`:34`) already covers it.
+
 ### Mutable-slot boundary
 
 A plan's **body** is immutable after the approved commit. The `status` field and
@@ -320,16 +325,13 @@ its approval, since `superseded` can reach a plan that is never approved.
 
 ## Open Decisions
 
-1. **`retrospective` covering more than one plan, or none.** Its entry is "a merged
-   PR, a finished session or debugging arc, or direct invocation"
-   (`skills/retrospective/SKILL.md:12`), and `:34` already handles the no-plan
-   case. Success Criterion 6 requires the skill to state both, but the *content*
-   of the multi-plan rule — flip all, flip none, or ask — is unresolved.
-   **Owner: user**, at the Step 12 gate.
-2. **Whether `superseded_by` may name a spec or a deviation addendum rather than a
+1. **Whether `superseded_by` may name a spec or a deviation addendum rather than a
    plan.** `resume-builder`'s single instance names a plan. Restricting to plans
    is the conservative reading and is what R3 assumes. **Owner: `planning`**, if a
    non-plan successor ever appears.
-3. **Whether `execution: ops` is a third execution mode.** Deliberately out of
+2. **Whether `execution: ops` is a third execution mode.** Deliberately out of
    scope; the validator will flag the existing instances. **Owner: a future
    `designing` cycle**, triggered by the ROADMAP row this spec registers.
+
+The multi-plan retro question originally listed here was resolved at the approval
+gate (flip all; see Architecture → Writers).
