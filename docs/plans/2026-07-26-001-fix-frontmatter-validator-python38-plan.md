@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Frontmatter Validator Runs on Python 3.8
 type: fix
-status: draft
+status: approved
 date: 2026-07-26
 execution: code
 origin: docs/specs/2026-07-26-frontmatter-validator-python38-compat-design.md
