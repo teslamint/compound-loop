@@ -1,6 +1,6 @@
 ---
 title: Frontmatter Validator Runs on Python 3.8
-status: draft
+status: approved
 date: 2026-07-26
 schema: spec/v1
 ---
