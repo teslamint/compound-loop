@@ -55,6 +55,7 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Drift-based trigger** — a carry-forward trigger that fires when a named record shape or observable state deviates from its contract; detected by inspecting the named record where observable.
 - **Event-based trigger** — a carry-forward trigger that fires on a future occurrence rather than a file edit or record shape (a new install, an external report, the next cycle of a named kind); detected by judgment, not diffing.
 - **Trigger audit** — the planning-time act of classifying every open carry-forward row's trigger into exactly one class and diffing the fireable classes against the plan's file list and observable record state. A fired trigger demands a recorded disposition, and a recorded firing latches: archiving or resetting the drifted record never un-fires a row.
+- **Unexercised-path observation** — a clean reading of a record taken in a cycle where the path that would have dirtied it never ran. It says the record is clean; it says nothing about the gap the row tracks, so reconciling a row as improving on this evidence is a measurement error. The carry-forward counterpart of a criterion that cannot fail.
 
 ## Metrics
 
