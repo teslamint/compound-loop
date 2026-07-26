@@ -225,7 +225,8 @@ keep working, and additive fields need no version bump.
 **R7 — `skills/planning/scripts/validate-plan-frontmatter.py`.** Checks: the
 required key set (`schema`, `title`, `type`, `status`, `date`, `execution`); each
 closed enum (`type`, `status`, `execution`); R2's and R3's conditional
-requirements; and that `superseded_by:` resolves to an existing file. Exit 0 is
+requirements; that `superseded_by:` resolves to an existing file; and that
+`origin:`, when present, resolves to an existing file. Exit 0 is
 required before `planning` claims success, using `skills/compound/SKILL.md:48`'s
 wording so the two skills read the same way.
 
@@ -256,8 +257,9 @@ its approval, since `superseded` can reach a plan that is never approved.
 - Validator fixtures: valid (`draft`, `approved`, `done` + `completed_by`,
   `superseded` + `superseded_by`); invalid (each deleted value; `done` without
   `completed_by`; `superseded` without `superseded_by`; `superseded_by` pointing
-  at a missing path; unknown `schema:` version); legacy (a plan carrying only the
-  pre-change key set, which must pass).
+  at a missing path; `origin` pointing at a missing path; unknown `schema:`
+  version); legacy (a plan carrying only the pre-change key set, which must
+  pass).
 - Register the validator in `scripts/test-python-compatibility.sh:196` so it is
   compiled against both boundary interpreters (3.9 and 3.14).
 - `implementing` entry behavior: one case per terminal state asserting the refusal
