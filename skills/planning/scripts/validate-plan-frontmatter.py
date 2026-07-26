@@ -156,23 +156,33 @@ def check_schema(data: dict, repo_root: str) -> list[str]:
         if not data.get(field):
             issues.append(f"missing required field: '{field}'")
 
-    schema_val = data.get("schema")
+    def scalar(key: str) -> "str | None":
+        """Return data[key] if it's a plain string; otherwise record a
+        'must be scalar' issue (e.g. a YAML list value) and return None so
+        callers skip enum/regex/path checks on it."""
+        val = data.get(key)
+        if val is not None and not isinstance(val, str):
+            issues.append(f"'{key}' must be a scalar value, not a list")
+            return None
+        return val
+
+    schema_val = scalar("schema")
     if schema_val and schema_val != "plan/v1":
         issues.append(f"'schema' value '{schema_val}' is not 'plan/v1'")
 
-    type_val = data.get("type")
+    type_val = scalar("type")
     if type_val and type_val not in TYPES:
         issues.append(f"'type' value '{type_val}' is not one of: {sorted(TYPES)}")
 
-    status_val = data.get("status")
+    status_val = scalar("status")
     if status_val and status_val not in STATUSES:
         issues.append(f"'status' value '{status_val}' is not one of: {sorted(STATUSES)}")
 
-    execution_val = data.get("execution")
+    execution_val = scalar("execution")
     if execution_val and execution_val not in EXECUTIONS:
         issues.append(f"'execution' value '{execution_val}' is not one of: {sorted(EXECUTIONS)}")
 
-    date_val = data.get("date")
+    date_val = scalar("date")
     if date_val and not DATE_RE.match(date_val):
         issues.append(f"'date' value '{date_val}' does not match YYYY-MM-DD")
 
@@ -180,7 +190,7 @@ def check_schema(data: dict, repo_root: str) -> list[str]:
         issues.append("status 'done' requires a non-empty 'completed_by'")
 
     if status_val == "superseded":
-        superseded_by = data.get("superseded_by")
+        superseded_by = scalar("superseded_by")
         if not superseded_by:
             issues.append("status 'superseded' requires a non-empty 'superseded_by'")
         elif not os.path.isfile(os.path.join(repo_root, superseded_by)):
@@ -188,7 +198,7 @@ def check_schema(data: dict, repo_root: str) -> list[str]:
                 f"'superseded_by' value '{superseded_by}' does not resolve to an existing file"
             )
 
-    origin_val = data.get("origin")
+    origin_val = scalar("origin")
     if origin_val and not os.path.isfile(os.path.join(repo_root, origin_val)):
         issues.append(f"'origin' value '{origin_val}' does not resolve to an existing file")
 

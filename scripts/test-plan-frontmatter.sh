@@ -584,6 +584,56 @@ case_25_nonexistent_file() {
   return $result
 }
 
+# --- additional parser-safety / origin-resolution cases ---
+
+case_26_colon_space_parser_safety() {
+  local dir plan result=0
+  dir="$(setup_dir)" || return 1
+  plan="$dir/docs/plans/case-26.md"
+  cat >"$plan" <<'EOF'
+---
+schema: plan/v1
+title: Case 26 Plan: a nested-looking value
+type: feat
+status: draft
+date: 2026-07-27
+execution: code
+---
+EOF
+  run_validator "$plan"
+  [[ $RV_CODE -eq 1 ]] || { echo "  expected exit 1, got $RV_CODE"; result=1; }
+  assert_contains "$RV_STDERR" "title" "names field" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+case_27_origin_resolves() {
+  local dir plan spec result=0
+  dir="$(setup_dir)" || return 1
+  mkdir -p "$dir/docs/specs"
+  spec="$dir/docs/specs/case-27-spec.md"
+  cat >"$spec" <<'EOF'
+# Case 27 Spec
+EOF
+  plan="$dir/docs/plans/case-27.md"
+  cat >"$plan" <<'EOF'
+---
+schema: plan/v1
+title: Case 27 Plan
+type: feat
+status: draft
+date: 2026-07-27
+execution: code
+origin: docs/specs/case-27-spec.md
+---
+EOF
+  run_validator "$plan"
+  [[ $RV_CODE -eq 0 ]] || { echo "  expected exit 0, got $RV_CODE"; result=1; }
+  assert_contains "$RV_STDOUT" "OK:" "stdout OK" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case 01 case_01_draft_full_six
 run_case 02 case_02_approved
 run_case 03 case_03_done_with_completed_by
@@ -609,6 +659,8 @@ run_case 22 case_22_malformed_date
 run_case 23 case_23_unquoted_hash_parser_safety
 run_case 24 case_24_no_argument
 run_case 25 case_25_nonexistent_file
+run_case 26 case_26_colon_space_parser_safety
+run_case 27 case_27_origin_resolves
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
