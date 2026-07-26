@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Plan status terminal states and frontmatter validation
 type: feat
-status: draft
+status: approved
 date: 2026-07-27
 execution: code
 origin: docs/specs/2026-07-27-plan-status-terminal-states-design.md
