@@ -9,6 +9,8 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Structural criterion** — a success criterion that measures an artifact's presence or well-formedness (exists, parses, loads, emits an expected line) rather than its content. *Avoid: presence check* as a criterion name — reserve it for describing what the criterion measures.
 - **Traceability criterion** — a success criterion requiring every source-inventory item to be either present in the deliverable (with a citation) or on a drop-list with a reason. The fidelity-class complement to structural criteria for inventory-derived work.
 - **Content-fidelity drift** — divergence between a source inventory and the content authored from it; invisible to structural criteria by construction.
+- **Discriminating criterion** — a success criterion that measures a state change and therefore must fail on the pre-change tree. One that already passes before the work is done carries no information about the work, whatever it reports afterward.
+- **Invariance guard** — a success criterion that must hold both before and after, proving the change disturbed nothing. Passing on the pre-change tree is the expected result, not the non-discriminating defect; the two criterion kinds are read against opposite baselines.
 
 ## Release ceremony
 
@@ -23,6 +25,7 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Supported Python range** — the inclusive interval of CPython minor versions that repo-owned Python entry points and generated Python artifacts are expected to support.
 - **Boundary interpreter** — the oldest or newest minor in the supported Python range, used as an explicit endpoint for compatibility evidence.
 - **Generated Python artifact** — Python source rendered by another program and executed later; distinct from Python source executed directly by its containing shell command.
+- **Incidental compatibility** — an artifact running correctly on an interpreter outside the supported Python range, without that being declared, gated, or promised. Distinct from support: the range still excludes the interpreter, no boundary interpreter covers it, and nothing mechanical keeps it working. Worth buying for artifacts distributed to machines whose interpreter the repo does not choose; the cost is an accepted drift exposure, which belongs on a carry-forward row rather than being silently absorbed.
 
 ## Retrospective interview
 
