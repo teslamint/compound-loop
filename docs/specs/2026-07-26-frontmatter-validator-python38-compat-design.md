@@ -43,9 +43,10 @@ resolves normally on the ambient interpreter.
 `docs/retros/2026-07-24-evidence-tier-vocabulary-retro.md:116` and
 `docs/retros/2026-07-24-planning-trigger-audit-retro.md:120` each carry a
 sentence explaining that the ambient `python3` was 3.8, reproduced the known
-`list[str]` traceback, and that validation was therefore rerun on 3.9. That
-recurring caveat disappears — the retro records a single unqualified exit-0
-observation.
+`list[str]` traceback, and that validation was therefore rerun on 3.9. Those two
+lines are historical records and stay as written. What changes is the next
+retro run on a 3.8-ambient machine: it records a single unqualified exit-0
+observation instead of the caveat.
 
 ### S4: Maintainer still gets a 3.9-floored repository
 
@@ -104,20 +105,31 @@ interpreter.
 ## Assumptions and Preconditions
 
 All live assumptions were observed on branch `fix/frontmatter-validator-python38`
-at `60df670` (identical tree to `main`). E3-E5 were observed against a scratchpad
-copy of the validator carrying the proposed one-line change, not against the
-repository tree. Results are exit codes and one-word comparisons; no credentials,
-personal data, or unbounded output are retained.
+at `60df670` (identical tree to `main`). Rows A2-A5 were observed against a
+throwaway copy of the validator carrying the proposed one-line change, not
+against the repository tree. Results are exit codes and one-word comparisons; no
+credentials, personal data, or unbounded output are retained.
+
+Rows A2-A5 depend on two throwaway artifacts. Recreate both first, then run those
+rows' commands verbatim; `$d` is removed at the end:
+
+```bash
+d=$(mktemp -d)
+python3 -c 'import pathlib,sys; p=pathlib.Path("skills/compound/scripts/validate-frontmatter.py"); pathlib.Path(sys.argv[1]).write_text(p.read_text().replace("\"\"\"\nimport os", "\"\"\"\nfrom __future__ import annotations\n\nimport os", 1))' "$d/v.py"
+printf -- '---\nmodule: x\ndate: 2026-07-26\nproblem_type: build_error\ncomponent: y # bad\nseverity: low\n---\nbody\n' > "$d/bad.md"
+```
 
 | Claim | Command | Observed at | Observed result | Evidence source |
 |---|---|---|---|---|
-| The committed validator fails on 3.8 and passes on 3.9, so 3.8 is the exact broken boundary. | `python3.8 skills/compound/scripts/validate-frontmatter.py docs/solutions/workflow-issues/carry-forward-trigger-planning-audit-gap.md; python3.9 <same>` | `2026-07-26T06:21:32Z` | 3.8.10 → `rc=1` with `TypeError: 'type' object is not subscriptable` at line 51; 3.9.25 → `rc=0`, `OK: <path>`. | Working tree at `60df670` |
-| `from __future__ import annotations` makes the validator succeed on every locally available interpreter for a valid document. | `for i in 3.8 3.9 3.13 3.14; do python$i <patched-copy> docs/solutions/workflow-issues/carry-forward-trigger-planning-audit-gap.md; done` | `2026-07-26T06:21:32Z` | `3.8 rc=0  3.9 rc=0  3.13 rc=0  3.14 rc=0`. Local interpreters are 3.8.10, 3.9.25, 3.13.14, 3.14.6. | Scratchpad copy of the validator with the proposed change |
-| The failure path still fails, on every interpreter, with byte-identical diagnostics. | `for i in 3.8 3.9 3.13 3.14; do python$i <patched-copy> <invalid-fixture>; done` then `cmp -s <3.8 stderr> <3.14 stderr>` | `2026-07-26T06:21:32Z` | `3.8 rc=1  3.9 rc=1  3.13 rc=1  3.14 rc=1`; stderr comparison → `identical`. Usage error with no argument → `rc=2` on 3.8. | Scratchpad copy plus a scratchpad invalid-frontmatter fixture |
-| The patched file passes the compatibility gate's exact compile check on both declared boundaries. | `for i in 3.9 3.14; do python$i -W error::SyntaxWarning -m py_compile <patched-copy>; done` | `2026-07-26T06:21:32Z` | Both compiles exit 0, no warning raised as error. | Scratchpad copy; bytecode discarded |
-| A `__future__` import placed after the existing imports is a hard error, so placement is a real requirement rather than style. | `python3.14 <copy with the import after `import sys`> README.md` | `2026-07-26T06:21:32Z` | `SyntaxError: from __future__ imports must occur at the beginning of the file`. | Second scratchpad copy, deliberately misplaced |
-| Structural validation is green before the change, establishing the regression baseline. | `bash scripts/validate.sh` | `2026-07-26T06:21:32Z` | `ALL CHECKS PASSED`. | Working tree at `60df670` |
-| The other Python in the repository is already 3.8-clean, so this file is the sole blocker. | extract the `RELEASE_PUBLICATION_ENGINE_PY` heredoc from `scripts/release-publication.sh`, then `python3.8 -W error::SyntaxWarning -m py_compile` it; separately `git ls-files '*.py'` | `2026-07-26T06:21:32Z` | Engine compile → `rc=0`; `git ls-files '*.py'` lists exactly one file, the validator. | Working tree at `60df670`; extracted artifact deleted after the read-only compile |
+| A1 — The committed validator fails on 3.8 and passes on 3.9, so 3.8 is the exact broken boundary. | `for i in 3.8 3.9; do python$i skills/compound/scripts/validate-frontmatter.py docs/solutions/workflow-issues/carry-forward-trigger-planning-audit-gap.md; echo "rc=$?"; done` | `2026-07-26T06:21:32Z` | 3.8.10 → `rc=1` with `TypeError: 'type' object is not subscriptable` at line 51; 3.9.25 → `rc=0`, `OK: <path>`. | Working tree at `60df670` |
+| A2 — `from __future__ import annotations` makes the validator succeed on every locally available interpreter for a valid document. | `for i in 3.8 3.9 3.13 3.14; do python$i "$d/v.py" docs/solutions/workflow-issues/carry-forward-trigger-planning-audit-gap.md >/dev/null 2>&1; printf '%s rc=%s  ' "$i" "$?"; done` | `2026-07-26T06:25:57Z` | `3.8 rc=0  3.9 rc=0  3.13 rc=0  3.14 rc=0`. Local interpreters are 3.8.10, 3.9.25, 3.13.14, 3.14.6. | Throwaway copy `$d/v.py` built by the recipe above |
+| A3 — The failure path still fails, on every interpreter, with byte-identical diagnostics, and the usage path still exits 2. | `for i in 3.8 3.9 3.13 3.14; do python$i "$d/v.py" "$d/bad.md" >/dev/null 2>&1; printf '%s rc=%s  ' "$i" "$?"; done; python3.8 "$d/v.py" "$d/bad.md" 2>"$d/e38"; python3.14 "$d/v.py" "$d/bad.md" 2>"$d/e314"; cmp -s "$d/e38" "$d/e314" && echo identical; python3.8 "$d/v.py" >/dev/null 2>&1; echo "usage rc=$?"` | `2026-07-26T06:25:57Z` | `3.8 rc=1  3.9 rc=1  3.13 rc=1  3.14 rc=1`; stderr comparison → `identical`; `usage rc=2`. | Throwaway copy plus throwaway invalid-frontmatter fixture from the recipe above |
+| A4 — The patched file passes the compatibility gate's exact compile check on both declared boundaries. | `for i in 3.9 3.14; do python$i -W error::SyntaxWarning -m py_compile "$d/v.py" && echo "$i compile ok"; done` | `2026-07-26T06:25:57Z` | Both compiles exit 0, no warning raised as error. | Throwaway copy; bytecode discarded with `$d` |
+| A5 — A `__future__` import placed after the existing imports is a hard error, so placement is a requirement rather than style. | `python3 -c 'import pathlib,sys; p=pathlib.Path("skills/compound/scripts/validate-frontmatter.py"); pathlib.Path(sys.argv[1]).write_text(p.read_text().replace("import sys\n", "import sys\nfrom __future__ import annotations\n", 1))' "$d/wrong.py"; python3.14 "$d/wrong.py" README.md 2>&1 \| tail -1` | `2026-07-26T06:25:57Z` | `SyntaxError: from __future__ imports must occur at the beginning of the file`. | Second throwaway copy, deliberately misplaced |
+| A6 — Structural validation is green before the change, establishing the regression baseline. | `bash scripts/validate.sh` | `2026-07-26T06:21:32Z` | Final line `ALL CHECKS PASSED`. | Working tree at `60df670` |
+| A7 — The publication engine, the repository's only other Python, already compiles clean on 3.8. | `t=$(mktemp -d); awk '/<<'"'"'RELEASE_PUBLICATION_ENGINE_PY'"'"'/ { inside=1; next } /^RELEASE_PUBLICATION_ENGINE_PY$/ { exit } inside { print }' scripts/release-publication.sh > "$t/engine.py"; python3.8 -W error::SyntaxWarning -m py_compile "$t/engine.py"; echo "rc=$?"; rm -rf "$t"` | `2026-07-26T06:21:32Z` | `rc=0`. | Working tree at `60df670`; extracted artifact deleted after the read-only compile |
+| A8 — The validator is the only committed `.py` file, so it is the sole blocker. | `git ls-files '*.py'` | `2026-07-26T06:21:32Z` | Exactly one line: `skills/compound/scripts/validate-frontmatter.py`. | Working tree at `60df670` |
+| A9 — Every document Criterion 2 sweeps has frontmatter, so the sweep cannot pass by both interpreters uniformly erroring out. | `for f in $(git ls-files 'docs/solutions/*.md'); do head -1 "$f" \| grep -q '^---$' \|\| echo "NO-FM: $f"; done` | `2026-07-26T06:25:57Z` | No output; the pathspec matches 10 files, all with a `---` first line. | Working tree at `60df670` |
 
 Repository invariants that still apply: the validator is registered in
 `scripts/test-python-compatibility.sh:196` as the `committed` artifact class and
@@ -130,8 +142,8 @@ path green.
 One file changes. `from __future__ import annotations` switches the module to
 PEP 563 semantics: every annotation in the module is stored as a string and
 never evaluated at runtime, so `list[str]` at L51, L69, L105, L138, and L174
-becomes inert text on interpreters that lack PEP 585 subscripting. No call site, control flow,
-or data structure moves.
+becomes inert text on interpreters that lack PEP 585 subscripting. No call site,
+control flow, or data structure moves.
 
 Two annotation-adjacent details are deliberately left alone:
 
@@ -152,9 +164,20 @@ purpose of this change.
 
 ## Testing
 
-No new test file. Verification is the existing gate plus a bounded manual matrix,
-because the repository has no Python unit-test harness and adding one for a
-one-line change is disproportionate.
+No new test file. Verification is the existing gate plus a bounded manual matrix.
+The repository's testing convention is bash fixture harnesses under `scripts/`
+(`test-python-compatibility.sh`, `test-manifest-version-sync.sh`,
+`test-release-publication.sh`, `test-retro-format-drift.sh`,
+`test-signal-drift.sh`), not a Python unit-test framework. A one-line annotation
+change that the existing compatibility harness already compiles on both declared
+boundaries does not warrant a sixth harness.
+
+Two of the five checks below can fail independently: test 1 (the gate, which no
+other check exercises) and test 5 (the corpus sweep). Tests 2 and 3 are
+single-fixture instances the sweep subsumes, kept because they localize a
+failure the sweep only reports in aggregate. Test 4 is separate from both — the
+sweep never invokes the validator without an argument, so nothing else covers
+the usage path.
 
 1. **Regression on the declared boundaries** — `bash scripts/validate.sh` must
    end `ALL CHECKS PASSED`. This exercises the compatibility gate, which compiles
@@ -199,9 +222,28 @@ one-line change is disproportionate.
 4. Structural validation, including the 3.9/3.14 compatibility gate, stays green.
    - **Measured by**: `bash scripts/validate.sh` → final line `ALL CHECKS PASSED`.
 5. The declared support contract is byte-unchanged by this cycle.
-   - **Measured by**: `git diff main -- schemas/python-support.json scripts/test-python-compatibility.sh docs/specs/2026-07-19-python-compatibility-generated-code-warning-gate-design.md` → empty output.
+   - **Measured by**: `git diff 60df670 -- schemas/python-support.json scripts/test-python-compatibility.sh docs/specs/2026-07-19-python-compatibility-generated-code-warning-gate-design.md` → empty output. The comparison is pinned to the branch point (`git merge-base main HEAD` at spec time), not to `main`: after merge, `main` contains this work, so a `main`-relative diff would be empty no matter what changed and the criterion could never fail.
 6. The drift exposure is registered where retro reconciliation will find it.
    - **Measured by**: `grep -n '3.8' ROADMAP.md` → matches a row in the "Carry-forward from retros" table naming the exposure, its origin, a priority, and a trigger.
+
+## Review Record
+
+Step 10's independent review ran at a **degraded dispatch tier**, recorded here
+because `.release-loop/progress.md` is gitignored and this spec is the durable
+artifact. The harness's standing constraint forbids spawning subagents unless the
+user asks, so the reviewer-subagent tier was unavailable and the `advisor` tool —
+the next tier in `references/dispatch-degradation.md` — performed the review
+instead. It returned five actionable findings, all applied before the human gate:
+a Success Criterion 5 pinned to `main` that would have been unfalsifiable
+post-merge (now pinned to `60df670`); a false claim that the repository has no
+test-harness convention; one assumption row conflating two commands (split into
+A7/A8); placeholder `<patched-copy>` stand-ins in commands the template requires
+to be exact (replaced with a reproducible recipe); and an overstated S3.
+
+The empirical-grounding sub-step ran separately: every file and line reference in
+this spec was checked against the live tree, and every command in the assumptions
+table was re-executed verbatim at `2026-07-26T06:25:57Z`, reproducing each
+recorded result.
 
 ## Open Decisions
 
