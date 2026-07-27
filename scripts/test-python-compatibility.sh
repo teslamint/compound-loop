@@ -194,6 +194,7 @@ run_endpoints() {
 artifact_registry() {
   cat <<'REGISTRY'
 committed|compound-frontmatter-validator|skills/compound/scripts/validate-frontmatter.py
+committed|plan-frontmatter-validator|skills/planning/scripts/validate-plan-frontmatter.py
 generated|release-publication-engine|scripts/release-publication.sh|RELEASE_PUBLICATION_ENGINE_PY|RELEASE_PUBLICATION_ENGINE_PY
 REGISTRY
 }
@@ -524,10 +525,11 @@ case_endpoint_failures() {
 
 make_fixture_repo() {
   local destination="$1"
-  mkdir -p "$destination/scripts" "$destination/schemas" "$destination/skills/compound/scripts" "$destination/tmp"
+  mkdir -p "$destination/scripts" "$destination/schemas" "$destination/skills/compound/scripts" "$destination/skills/planning/scripts" "$destination/tmp"
   cp "$SELF" "$destination/scripts/test-python-compatibility.sh"
   cp "$ROOT/schemas/python-support.json" "$destination/schemas/python-support.json"
   cp "$ROOT/skills/compound/scripts/validate-frontmatter.py" "$destination/skills/compound/scripts/validate-frontmatter.py"
+  cp "$ROOT/skills/planning/scripts/validate-plan-frontmatter.py" "$destination/skills/planning/scripts/validate-plan-frontmatter.py"
   cp "$ROOT/scripts/release-publication.sh" "$destination/scripts/release-publication.sh"
 }
 
@@ -564,12 +566,14 @@ PY
 }
 
 case_real_artifacts_and_bytes() {
-  local entries line path class expected="$TMP_ROOT/expected-engine.py" count=0 result=0 out rc
+  local entries line path class source expected="$TMP_ROOT/expected-engine.py" count=0 result=0 out rc
   run_endpoints || return 1
   entries="$(registry_entries)" || return 1
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue; class="${line%%|*}"; path="$(materialize_entry "$line")" || return 1
-    if [[ "$class" == committed ]]; then cmp -s "$path" "$ROOT/skills/compound/scripts/validate-frontmatter.py" || result=1
+    if [[ "$class" == committed ]]; then
+      IFS='|' read -r _ _ source <<< "$line"
+      cmp -s "$path" "$ROOT/$source" || result=1
     else
       awk '/<<'"'"'RELEASE_PUBLICATION_ENGINE_PY'"'"'/ { inside=1; next } /^RELEASE_PUBLICATION_ENGINE_PY$/ { exit } inside { print }' "$ROOT/scripts/release-publication.sh" > "$expected"
       cmp -s "$path" "$expected" || result=1
@@ -577,7 +581,7 @@ case_real_artifacts_and_bytes() {
     out="$(compile_artifact "$line" "$path" 2>&1)"; rc=$?; [[ $rc -eq 0 ]] || { printf '%s\n' "$out"; result=1; }
     count=$((count + $(printf '%s\n' "$out" | grep -c 'status=pass')))
   done <<< "$entries"
-  [[ $count -eq 4 ]] || { echo "  expected four artifact pass records, got $count"; result=1; }
+  [[ $count -eq 6 ]] || { echo "  expected six artifact pass records, got $count"; result=1; }
   return "$result"
 }
 
@@ -634,7 +638,7 @@ case_boundary_compile_failures() {
   assert_contains "$out" 'role=newest' 'old syntax newest still checked' || result=1
   assert_contains "$out" 'status=pass' 'old syntax newest pass' || result=1
   [[ $(printf '%s\n' "$out" | grep -c 'artifact class=committed.*reason=compile-failed') -eq 1 ]] || result=1
-  [[ $(printf '%s\n' "$out" | grep -c 'artifact class=committed.*role=newest.*status=pass') -eq 1 ]] || result=1
+  [[ $(printf '%s\n' "$out" | grep -c 'label=compound-frontmatter-validator.*role=newest.*status=pass') -eq 1 ]] || result=1
   [[ -z "$(find "$d/old syntax/tmp" -mindepth 1 -print -quit)" ]] || result=1
 
   make_fixture_repo "$d/invalid escape"
@@ -677,9 +681,10 @@ case_validate_all_registered_artifacts() {
   [[ $rc -eq 0 ]] || { printf '%s\n' "$out"; return 1; }
   [[ $(printf '%s\n' "$out" | grep -c 'endpoint role=oldest') -eq 1 ]] || result=1
   [[ $(printf '%s\n' "$out" | grep -c 'endpoint role=newest') -eq 1 ]] || result=1
-  [[ $(printf '%s\n' "$out" | grep -c 'artifact class=.*status=pass') -eq 4 ]] || result=1
+  [[ $(printf '%s\n' "$out" | grep -c 'artifact class=.*status=pass') -eq 6 ]] || result=1
   [[ $(printf '%s\n' "$out" | grep -c '^ALL CHECKS PASSED$') -eq 1 ]] || result=1
   assert_contains "$out" 'label=compound-frontmatter-validator' 'registered committed artifact' || result=1
+  assert_contains "$out" 'label=plan-frontmatter-validator' 'registered committed artifact' || result=1
   assert_contains "$out" 'label=release-publication-engine' 'registered generated artifact' || result=1
   [[ -z "$(find "$d/tmp" -mindepth 1 -print -quit)" ]] || result=1
   return "$result"
