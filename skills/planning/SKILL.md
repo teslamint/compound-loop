@@ -117,7 +117,7 @@ A **stateful ceremony** is a workflow whose deliverable can cross an observable 
 
 If the deliverable contains a stateful ceremony, add a **Mutation/failure-state matrix** plan section. Include one row for every durable transition. Each row must name the transition identity, pre-state, action, expected post-state, owning implementation unit, and evidence owner that will produce disposable fixture evidence under `.release-loop/evidence/U<N>/`. Fill all six outcome classes: success; forced failure; rerun; rollback or compensation; headless; and cancellation or abort. Every forced-failure outcome names a safe injection boundary and isolation approach. Irreversible transitions describe compensation or explicit manual recovery rather than fictional rollback. Blank cells are invalid; every not-applicable cell gives a concrete reason tied to the interface or irreversibility boundary.
 
-Use `references/stateful-ceremony-matrix-example.md` as the worked example and `docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md` as the deviation authority; link them rather than duplicating their contracts. Changing an approved matrix row or outcome is observable behavior and triggers item 1's deviation-addendum rule before release.
+Use `references/stateful-ceremony-matrix-example.md` as the worked example and `docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md` as the deviation authority; link them rather than duplicating their contracts. Changing an approved matrix row or outcome is observable behavior and triggers item 3's deviation-addendum rule before release.
 
 If the deliverable contains no stateful ceremony, write exactly:
 `No stateful ceremony in the deliverable; no mutation/failure-state matrix required.`
@@ -162,7 +162,9 @@ Classify every open question as planning-owned (resolvable from repo context, do
 
 ## 17. Commit the plan
 
-Write to `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md` per the naming rule in `schemas/plan-schema.md`, then `git add` and commit with `status: draft`, following the repo's commit protocol. Present the drafted plan to the user; only after they approve it, commit again — same file, `status: approved` only — per this skill's Gate. Never commit a plan directly as `approved`; the draft commit is what a reviewer or a later session diffs against. From this point the plan is a decision artifact — `implementing` never edits its body.
+Write to `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md` per the naming rule in `schemas/plan-schema.md`, then `git add` and commit with `status: draft`, following the repo's commit protocol. Run `python3 skills/planning/scripts/validate-plan-frontmatter.py <plan-path>` on the drafted file; exit 0 required before presenting the draft and again before the approved-flip commit; a nonzero exit names the offending field — fix and re-run, never present a failing draft. Present the drafted plan to the user; only after they approve it, commit again — same file, `status: approved` only — per this skill's Gate. Never commit a plan directly as `approved`; the draft commit is what a reviewer or a later session diffs against. From this point the plan is a decision artifact — `implementing` never edits its body.
+
+When this plan replaces an earlier plan first committed after the terminal-state contract landed (`schemas/plan-schema.md`'s applicability boundary — plans predating it are never retroactively flipped), flip the predecessor to `status: superseded` with `superseded_by:` naming this plan's path, in the same commit that commits this plan (the predecessor may be `draft` or `approved`); run the validator on the predecessor too.
 
 Do not finalize or commit a plan whose Assumption Recheck contains a
 contradiction unless the separate addendum commit already exists.
