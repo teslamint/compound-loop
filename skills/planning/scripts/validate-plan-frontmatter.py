@@ -78,12 +78,14 @@ def parse_frontmatter(fm_lines: list[str]) -> dict:
         if not stripped or stripped.startswith("#"):
             continue
         if line.startswith((" ", "\t")):
-            # Nested content: only meaningful as a list item under current_key
             if stripped.startswith("- ") and current_key is not None:
                 item = stripped[2:].strip()
                 item = _unquote(item)
-                data.setdefault(current_key, [])
-                data[current_key].append(item)
+                existing = data.get(current_key)
+                if isinstance(existing, list):
+                    existing.append(item)
+                else:
+                    data[current_key] = [item]
             continue
         if ":" not in line:
             continue
@@ -186,8 +188,10 @@ def check_schema(data: dict, repo_root: str) -> list[str]:
     if date_val and not DATE_RE.match(date_val):
         issues.append(f"'date' value '{date_val}' does not match YYYY-MM-DD")
 
-    if status_val == "done" and not data.get("completed_by"):
-        issues.append("status 'done' requires a non-empty 'completed_by'")
+    if status_val == "done":
+        completed_by = scalar("completed_by")
+        if not completed_by:
+            issues.append("status 'done' requires a non-empty 'completed_by'")
 
     if status_val == "superseded":
         superseded_by = scalar("superseded_by")

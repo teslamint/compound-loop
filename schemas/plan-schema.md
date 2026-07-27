@@ -25,7 +25,7 @@ superseded_by: <path to successor plan>  # required when status: superseded
 
 ## Status lifecycle
 
-`status` moves `draft → approved → done | superseded`; `done` and `superseded` are the terminal states.
+`status` moves `draft → approved → done | superseded`, or directly `draft → superseded`; `done` and `superseded` are the terminal states.
 
 - **`done`** requires a non-empty `completed_by:` naming the commit on the base branch that landed the plan's work — normally the merge commit; the squashed or fast-forwarded tip when no merge commit exists. `retrospective` writes it in the same commit as the retro doc. `draft → done` is invalid.
 - **`superseded`** requires `superseded_by:` resolving to an existing repo-root-relative plan path, written by `planning` in the same commit that commits the successor. The successor's status is irrelevant; `draft → superseded` is valid. Direction is predecessor→successor only — no backlink.
