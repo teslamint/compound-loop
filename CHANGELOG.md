@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.1] - 2026-07-27
+
+### Added
+- Documented the cross-skill behavioral mandate gap (a mandate in skill A for behavior skill B performs is dead prose when B's entry path doesn't read A) and the validator harness mutation-gap technique as reusable solutions.
+
+### Fixed
+- Planning step 1 now specifies how to document a plan skip: attest all four conditions, then hand off; in release-loop context, write to progress.md Log. Aligns the release-loop Plan phase gate with planning's actual Exit condition.
+- Fixed `Plan:` → `plan:` casing at planning step 18 to match progress-schema.md (P3 carry-forward closed).
+
 ## [0.7.0] - 2026-07-27
 
 ### Added
