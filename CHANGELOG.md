@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.0] - 2026-07-27
+
+### Added
+- Settled the plan `status` enum at `draft | approved | done | superseded` with terminal-state evidence fields (`completed_by:` for done, `superseded_by:` for superseded), rejection records for `in-progress` and `abandoned`, a mutable-slot boundary, and an applicability boundary for grandfathering.
+- Shipped `skills/planning/scripts/validate-plan-frontmatter.py` — a pure-stdlib plan/v1 frontmatter validator with 27-case fixture harness, CWD-independent root derivation, and CPython 3.9–3.14 compilation.
+- Gated the plan corpus in `scripts/validate.sh` (15 plans validated) and registered the validator in the Python compatibility harness.
+- Added a carry-forward trigger audit step to `skills/planning/SKILL.md` with edit/drift/event-based classification and a reviewer re-derive mandate.
+- Added carry-forward trigger audit and plan-schema hard-floor sections to `schemas/plan-schema.md`.
+- `skills/planning/SKILL.md` now gates plan commits on the frontmatter validator and writes `superseded` status on predecessor plans.
+- `skills/retrospective/SKILL.md` Phase 8 now flips covered plans to `done` atomically with the retro commit, with flip-all for multi-plan retros.
+- `skills/implementing/SKILL.md` Pre-flight now refuses terminal-status plans naming the evidence field.
+- Documented PEP 585 annotations crash and mandated-field-absent-from-schema as reusable solutions.
+
+### Fixed
+- Compound frontmatter validator now runs cleanly on CPython 3.8 — replaced `list[str]` annotation with `from __future__ import annotations` placement.
+- Plan frontmatter validator guards against list-valued scalar fields (TypeError crash) and validates `completed_by` through the scalar helper.
+
 ## [0.6.0] - 2026-07-24
 
 ### Added

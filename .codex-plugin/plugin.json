@@ -1,6 +1,6 @@
 {
   "name": "compound-loop",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Cross-harness engineering lifecycle skills: design, plan, implement, review, ship, retrospect, and compound knowledge. Distilled from superpowers, compound-engineering, and release-loop.",
   "license": "MIT",
   "skills": "./skills/",
