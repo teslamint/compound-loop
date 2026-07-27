@@ -20,7 +20,7 @@ Orchestrates the full lifecycle. Holds **no phase logic** — every phase is an 
 | # | Phase | Invokes | Gate |
 |---|-------|---------|------|
 | 1 | Design | `designing` | **USER** — always human, never auto-skip |
-| 2 | Plan | `planning` | AUTO (plan committed) |
+| 2 | Plan | `planning` | AUTO (plan committed, or skip recorded in progress.md) |
 | 3 | Implement | `implementing` | AUTO (all units complete, tests pass) |
 | 4 | Review | `reviewing` (phase-gate caller shape, pipeline verification path) | AUTO when verdict `clean`; escalate to user when P0/P1 survive the capped re-review loop |
 | 5 | Ship | `shipping` | **USER**; with `--auto`: CI green + no open P0 |

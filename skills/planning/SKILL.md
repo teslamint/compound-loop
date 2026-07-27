@@ -23,7 +23,7 @@ Bias toward writing one: a thin plan for small work is mild ceremony, but skippi
 
 Stress-test anything that "looks atomic": "Add caching" hides TTL/invalidation/key-shape decisions; "migrate A to B" hides semantic-difference decisions; "add rate limiting" hides algorithm/scope decisions — all three warrant a plan. Genuine skips: a typo fix, a mechanical rename, a dependency bump with no breaking change.
 
-When skipping, hand off directly to `implementing` and stop here.
+When skipping, attest that all four conditions hold, citing the work's scope, then hand off directly to `implementing`. When invoked from `release-loop`, also write the skip to `.release-loop/progress.md`'s Log section with the conditions cited — `plan:` stays `null` (the Log line is the record; a non-path value would break resume's artifact-pointer verification).
 
 ## 2. Scope confirmation
 
@@ -173,4 +173,4 @@ contradiction unless the separate addendum commit already exists.
 
 Offer a 2-option menu: **Subagent-driven** (fresh subagent per unit, review between units — recommended) or **Inline** (execute in this session with checkpoints between units). Fire the chosen path; don't just announce it.
 
-When invoked headless from `release-loop` or any pipeline caller, skip the menu: write the plan's path to `.release-loop/progress.md`'s `Plan:` field and return control to the caller.
+When invoked headless from `release-loop` or any pipeline caller, skip the menu: write the plan's path to `.release-loop/progress.md`'s `plan:` field and return control to the caller.
