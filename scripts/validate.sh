@@ -389,6 +389,24 @@ for rel in (SKILL, PROBES):
 finish()
 PY
 
+# 10. Plan corpus: every docs/plans/*.md passes the plan/v1 frontmatter validator
+PLAN_TOTAL=0
+PLAN_OK=0
+for f in "$ROOT"/docs/plans/*.md; do
+  [ -e "$f" ] || continue
+  PLAN_TOTAL=$((PLAN_TOTAL + 1))
+  if err="$(python3 "$ROOT/skills/planning/scripts/validate-plan-frontmatter.py" "$f" 2>&1 >/dev/null)"; then
+    PLAN_OK=$((PLAN_OK + 1))
+  else
+    fail "[plan-frontmatter] $err"
+  fi
+done
+if [ "$PLAN_TOTAL" -eq 0 ]; then
+  fail "[plan-frontmatter] no plan files found"
+else
+  ok "[plan-frontmatter] $PLAN_OK plans valid"
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"

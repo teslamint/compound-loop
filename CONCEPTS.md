@@ -57,6 +57,13 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Trigger audit** — the planning-time act of classifying every open carry-forward row's trigger into exactly one class and diffing the fireable classes against the plan's file list and observable record state. A fired trigger demands a recorded disposition, and a recorded firing latches: archiving or resetting the drifted record never un-fires a row.
 - **Unexercised-path observation** — a clean reading of a record taken in a cycle where the path that would have dirtied it never ran. It says the record is clean; it says nothing about the gap the row tracks, so reconciling a row as improving on this evidence is a measurement error. The carry-forward counterpart of a criterion that cannot fail.
 
+## Plan lifecycle
+
+- **Terminal state** — a plan status with no outgoing transitions, recording that the plan was executed or replaced. Reaching one requires the evidence field that justifies it, so a bare terminal flag that merely restates derivable history cannot exist.
+- **Mutable slot** — the only part of a plan that may legally change after its approval: the status field and the terminal-state evidence accompanying it. Everything else is the immutable decision artifact; the boundary is what lets terminal states coexist with post-approval immutability.
+- **Supersession** — retiring a plan because a successor replaces it, recorded on the predecessor with a pointer to the successor. Timed at the successor's creation, not its approval, and reachable from draft: a plan can be replaced before anyone approves it. Direction is predecessor→successor only. *Avoid: abandoned* — retirement without a successor pointer has no observed instance and no slot to explain itself.
+- **Rejection record** — an inline schema note preserving why a value was removed from (or refused entry to) a closed vocabulary, so the absence reads as a decision rather than an oversight and the value is not re-proposed uninformed.
+
 ## Metrics
 
 - **Changed non-test lines** — the count of modified lines (added + removed) excluding tests, generated files, and lockfiles, used as the canonical diff-size metric across all phases (e.g. lane triggers).

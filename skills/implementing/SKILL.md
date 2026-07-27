@@ -14,9 +14,10 @@ Plan consumption follows `schemas/plan-schema.md` exactly; this skill does not r
 ## Pre-flight
 
 1. Read the plan once. It is a **decision artifact, not an execution script** (`enforces: P8`) — never edit its body during execution; progress lives in commits and the ledger, not plan edits.
-2. **Contradiction scan**: before Unit 1, scan the whole plan once for units that contradict each other or a Global Constraint, or that mandate something the review rubric below would flag as a defect. Batch every finding into **one** blocking question (`references/question-tools.md` at the plugin root); a clean scan proceeds without comment.
-3. **Ledger resume check**: read `.release-loop/progress.md`. Units it lists complete are done — do not re-dispatch them (`enforces: P8`); trust the ledger and `git log` over recollection. Resume at the first incomplete unit.
-4. **Worktree setup**: invoke `worktree-isolation` to obtain or confirm an isolated workspace before any unit touches files.
+2. **Status check** (when invoked with a plan file): read the plan's `status` field. If `done` → stop with a detectable error naming the recorded `completed_by:` commit ("this plan already executed; its work landed in `<completed_by>`"); when a `done` plan carries no `completed_by:` (a record predating or escaping the validator), report that as a validator violation rather than inventing a commit. If `superseded` → refuse, naming the `superseded_by:` successor path as where to go instead. Neither terminal state ever degrades to executing the plan.
+3. **Contradiction scan**: before Unit 1, scan the whole plan once for units that contradict each other or a Global Constraint, or that mandate something the review rubric below would flag as a defect. Batch every finding into **one** blocking question (`references/question-tools.md` at the plugin root); a clean scan proceeds without comment.
+4. **Ledger resume check**: read `.release-loop/progress.md`. Units it lists complete are done — do not re-dispatch them (`enforces: P8`); trust the ledger and `git log` over recollection. Resume at the first incomplete unit.
+5. **Worktree setup**: invoke `worktree-isolation` to obtain or confirm an isolated workspace before any unit touches files.
 
 ## Execution strategy
 

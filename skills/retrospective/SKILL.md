@@ -97,7 +97,11 @@ When invoked, pass the qualifying finding as context and expect `compound`'s exa
 
 **Pre-commit check** (`enforces: P8`): the doc contains an Interview Transcript section with a valid independence level and a rounds-used count; in `self-checklist` mode the rows are the checklist answers. A zero-row table under a valid header is valid — nothing warranted probing. A missing section blocks the commit.
 
-Commit the retro doc (and any durable-tracker updates from Phase 4) as its own commit, separate from other work in flight. Report what was measured, what carried forward, and what — if anything — was compounded.
+Commit the retro doc (and any durable-tracker updates from Phase 4) as its own commit, separate from other work in flight.
+
+The plans a retro covers are: the plan path in `.release-loop/progress.md`'s `plan:` field when that ledger exists for the cycle, plus any plan path this retro's Phase 2 data or doc body cites; when neither names a plan (session-end mode), no flip. For every covered plan **first committed after the terminal-state contract landed** (`schemas/plan-schema.md` applicability boundary — pre-contract plans are never flipped), set `status: done` and `completed_by:` naming the commit on the base branch that landed that plan's work, in the plan's frontmatter, in the same commit as the retro doc; a retro covering multiple plans flips every qualifying one, each with its own `completed_by:`; never edit anything in the plan below the frontmatter (mutable-slot boundary, `schemas/plan-schema.md`).
+
+Report what was measured, what carried forward, and what — if anything — was compounded.
 
 End every invocation with the exact terminal signal line from `schemas/headless-contract.md`:
 `Retrospective complete — <path>` on success, `Retrospective skipped — <reason>` when no retro was warranted (e.g. nothing to measure and no session content), or `Retrospective failed — <reason>` on failure. This line is the last non-empty line of the report in every mode, not only headless.
