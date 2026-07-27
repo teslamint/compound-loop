@@ -18,6 +18,8 @@ date: YYYY-MM-DD
 execution: code | non-code        # selects the unit template
 origin: <path to spec>            # optional; enables retro's measured-vs-declared pass
 deepened: true                    # optional; set by the deepening pass
+completed_by: <commit>            # required when status: done
+superseded_by: <path to successor plan>  # required when status: superseded
 ---
 ```
 
