@@ -407,6 +407,68 @@ else
   ok "[plan-frontmatter] $PLAN_OK plans valid"
 fi
 
+# 11. final_action shape in active progress.md (conditional — file is gitignored working state)
+python3 - "$ROOT" <<'PY' || FAIL=1
+import re, sys, pathlib
+
+root = pathlib.Path(sys.argv[1])
+TAG = "[final-action]"
+progress = root / ".release-loop" / "progress.md"
+
+if not progress.exists():
+    print(f"ok:   {TAG} no active progress.md — skipped")
+    sys.exit(0)
+
+text = progress.read_text(encoding="utf-8")
+fm_match = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+if not fm_match:
+    print(f"FAIL: {TAG} .release-loop/progress.md has no frontmatter block")
+    sys.exit(1)
+
+fm = fm_match.group(1)
+fa_match = re.search(r"^final_action:\s*$", fm, re.M)
+if not fa_match:
+    print(f"ok:   {TAG} no final_action block — skipped")
+    sys.exit(0)
+
+fa_lines = []
+for line in fm[fa_match.end():].split("\n"):
+    if line and not line.startswith("  "):
+        break
+    if line.startswith("  "):
+        fa_lines.append(line)
+
+ALLOWED = {"kind", "status", "command", "updated"}
+KIND_VALUES = {"merge-to-base"}
+STATUS_VALUES = {"predicted", "determined", "executed"}
+
+failures = []
+found_keys = set()
+for line in fa_lines:
+    km = re.match(r"^\s+(\w+):", line)
+    if km:
+        key = km.group(1)
+        value = line.split(":", 1)[1].strip()
+        found_keys.add(key)
+        if key not in ALLOWED:
+            failures.append(f"unknown final_action key '{key}'")
+        elif key == "kind" and value not in KIND_VALUES:
+            failures.append(f"final_action.kind '{value}' not in {KIND_VALUES}")
+        elif key == "status" and value not in STATUS_VALUES:
+            failures.append(f"final_action.status '{value}' not in {STATUS_VALUES}")
+
+missing = ALLOWED - found_keys
+if missing:
+    failures.append(f"missing required keys: {', '.join(sorted(missing))}")
+
+if failures:
+    for f in failures:
+        print(f"FAIL: {TAG} {f}")
+    sys.exit(1)
+
+print(f"ok:   {TAG} final_action shape valid ({', '.join(sorted(found_keys))})")
+PY
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"
