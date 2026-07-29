@@ -36,7 +36,7 @@ Completion evidence is ranked on a fixed descending ladder of strength:
 failing-repro-now-passing > end-to-end run > integration test > unit test > typecheck/build
 ```
 
-Canonical definitions of the five tiers live in the repo-root `CONCEPTS.md` (`## Completion evidence`) when that file is present; this section restates only the order and its operating rules so the skill executes standalone. The ladder applies to every completion claim this file governs -- it names the tier cited whenever evidence is reported for a claim:
+Canonical definitions of the five tiers live in the repo-root `CONCEPTS.md` (`## Completion evidence`) when that file is present; this section restates only the order and its operating rules so the skill executes standalone. The ladder applies to every completion claim this file governs -- name the tier cited whenever reporting evidence for a claim:
 
 - Typecheck/build alone never closes a completion claim.
 - Evidence that fits no tier (for example, a structural validation run proving a docs-only change) is cited tier-free -- never forced into a tier label.
