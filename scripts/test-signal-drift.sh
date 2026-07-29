@@ -108,7 +108,7 @@ PY
   return $result
 }
 
-# --- Case D: one-byte drift in skills/retrospective/SKILL.md:77 (cross-quoted compound line) ---
+# --- Case D: one-byte drift in skills/retrospective/SKILL.md:94 (cross-quoted compound line) ---
 case_d() {
   local dir out code result=0
   dir="$(setup_copy)" || return 1
@@ -116,15 +116,15 @@ case_d() {
 import sys
 path = sys.argv[1]
 lines = open(path, encoding="utf-8").read().split("\n")
-i = 76  # 0-indexed line 77 - the cross-quoted `compound` triplet in Phase 7
-assert "`Documentation complete — <path>`" in lines[i], "fixture assumption broken: expected span not found on line 77"
+i = 93  # 0-indexed line 94 - the cross-quoted `compound` triplet in Phase 7
+assert "`Documentation complete — <path>`" in lines[i], "fixture assumption broken: expected span not found on line 94"
 lines[i] = lines[i].replace("Documentation complete — <path>", "Documentation complete — <pat>", 1)
 open(path, "w", encoding="utf-8").write("\n".join(lines))
 PY
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
   assert_contains "$out" "[signal-drift]" "reported by the new check specifically" || result=1
-  assert_contains "$out" "skills/retrospective/SKILL.md:77" "file:line" || result=1
+  assert_contains "$out" "skills/retrospective/SKILL.md:94" "file:line" || result=1
   assert_contains "$out" "producer 'compound'" "correct producer guessed from candidate's own word, not the file it lives in" || result=1
   rm -rf "$dir"
   return $result

@@ -1753,8 +1753,8 @@ import sys
 skill = (pathlib.Path(sys.argv[1]) / "skills/release/SKILL.md").read_text(encoding="utf-8")
 marker = "## Arguments\n"
 local_section = skill[skill.index(marker):].encode("utf-8")
-assert hashlib.sha256(local_section).hexdigest() == "1a23b7d0703bc853cf094081eeed73d209b8a052b2b2c3d33ccdfb0905775053", (
-    "local release section differs byte-for-byte from the 48eccb0 base"
+assert hashlib.sha256(local_section).hexdigest() == "342f2f2d4e7028516b30e2a8ea29804dc98c24f404e2c2840ae06a5c388e2d37", (
+    "local release section differs byte-for-byte from the 1a02283 base"
 )
 PY
 }
