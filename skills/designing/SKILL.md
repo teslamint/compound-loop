@@ -125,12 +125,13 @@ Scope the review to internal consistency, missing edge cases, scope creep, and f
 
 ## Step 11: Spec Self-Review
 
-Four fixed checks, fixed inline, no re-loop:
+Five fixed checks, fixed inline, no re-loop:
 
 1. **Placeholder scan** — any TBD, TODO, incomplete section, vague requirement ("appropriate error handling")?
 2. **Internal consistency** — do sections contradict each other?
 3. **Scope check** — focused enough for a single implementation plan, or does it need decomposition?
 4. **Ambiguity check** — any requirement interpretable two ways? Pick one, make it explicit.
+5. **Principle-exception composability** — does an Architecture principle conflict with a requirement's mandated mechanism? If so, name the carve-out in the spec and cite the requirement that justifies the exception — don't leave the reconciliation to planning.
 
 Then the **contradiction-in-one-pass test**: could a careful reader find a contradiction in any section in a single read-through? Hold every section to prose economy — one idea per sentence, a requirement is intent plus at most one qualifier, forks deferred to Open Decisions rather than specifying both arms.
 
