@@ -12,6 +12,8 @@ NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
 
 If the verification command has not been run in this message, the claim cannot be made yet.
 
+**Source over memory:** when citing file content in a claim or report, read the file in the current turn — prior reads and conversation memory are not evidence of current disk state.
+
 ## The gate function
 
 ```
