@@ -150,6 +150,7 @@ Before finalizing, the author (not a subagent) checks:
 - **Callers + invariants** — for code units, who calls the functions being changed, and what invariants must still hold afterward?
 - **Retro carryover** — re-run the step 5a trigger audit against the final file list (deepening and unit edits are the likeliest divergence vector), confirm the attestation line still names the tracker state actually examined, and keep the feature-relevance question ("does this item belong in this plan?") for event-based triggers only.
 - **Architecture-unit clause consistency** — diff every claim in the Architecture notes against the unit steps and interfaces that implement it. A note asserting "X is always Y" while a unit step implements otherwise (or omits the constraint entirely) is a blocking finding.
+- **Command closure** — for every shell command in a unit step, verify that every variable it references is assigned or declared within that step or an earlier step in the same unit. A step referencing `$VAR` without a prior assignment is a dataflow gap that step 13's keyword scan cannot catch.
 
 Fix issues inline; no separate review pass is needed.
 
