@@ -236,6 +236,63 @@ PY
   return $result
 }
 
+# --- Case H: template has only 3 independence levels (malformation guard) ---
+case_h() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir/schemas/retro-template.md" <<'PY' || { echo "  harness error: fixture mutation failed"; rm -rf "$dir"; return 1; }
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = text.replace("| self-checklist", "", 1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "expected 4 distinct independence levels" "FAIL names the level-count guard" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case I: template has only 2 verdict forms (malformation guard) ---
+case_i() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir/schemas/retro-template.md" <<'PY' || { echo "  harness error: fixture mutation failed"; rm -rf "$dir"; return 1; }
+import sys, re
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = text.replace("`self-attested`", "", 1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "expected 3 distinct backticked verdict forms" "FAIL names the verdict-count guard" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case J: template missing `Verdict cell values:` line (malformation guard) ---
+case_j() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir/schemas/retro-template.md" <<'PY' || { echo "  harness error: fixture mutation failed"; rm -rf "$dir"; return 1; }
+import sys
+path = sys.argv[1]
+lines = open(path, encoding="utf-8").read().split("\n")
+lines = [l for l in lines if not l.startswith("Verdict cell values:")]
+open(path, "w", encoding="utf-8").write("\n".join(lines))
+PY
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "expected exactly one 'Verdict cell values:' line" "FAIL names the verdict-line guard" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -243,6 +300,9 @@ run_case D case_d
 run_case E case_e
 run_case F case_f
 run_case G case_g
+run_case H case_h
+run_case I case_i
+run_case J case_j
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
