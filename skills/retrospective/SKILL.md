@@ -45,7 +45,7 @@ One row per criterion — vague summarization across criteria is banned. **If no
 
 ## Phase 4: Carry-Forward Reconciliation
 
-Read the previous retro doc (most recent under `docs/retros/`), if any. For every item it registered, verify status now — Done / In progress / Not started — citing the commit, PR, or file that proves it. An item from the previous retro that goes unmentioned here is a silent drop, which is itself a defect to report.
+Read the previous retro doc (most recent under `docs/retros/`), if any. For every item it registered, classify its trigger class — edit-based (fires on a named file or section edit), drift-based (fires on a named record deviating), or event-based (fires on a future occurrence) — before classifying its status as Done / In progress / Not started, citing the commit, PR, or file that proves it. An item from the previous retro that goes unmentioned here is a silent drop, which is itself a defect to report.
 
 **Backward check** (`enforces: P3`): while reading the previous retro doc, verify its shape — an Interview Transcript section with a valid independence level, and no uncited findings. Record the result as this doc's `Previous doc shape` bullet: `conformant`, `violations recorded as findings`, or `pre-schema, exempt`. A violation becomes a finding in the current retro, never a silent repair; a previous doc predating the transcript schema is marked `pre-schema, exempt` and skipped. Running in a different execution than the one that wrote the doc, this check catches violations one cycle late but reliably.
 
