@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.8.0] - 2026-07-30
+
+### Added
+- Three new `scripts/validate.sh` structural checks: check 11 (final_action shape validation), check 12 (carry-forward T-ID referential integrity across retro docs), and check 13 (planning step/item numbering contiguity and cross-file reference resolution).
+- Designing step 11 gains a principle-exception composability check: when a spec pairs a universal principle with a requirement mandating an apparent exception, the spec names the carve-out.
+- `scripts/test-final-action-skip.sh` fixture test verifying check 11's skip path when no progress.md exists.
+- Three malformation-guard fixture cases (H/I/J) added to `scripts/test-retro-format-drift.sh` covering check 9's level-count, verdict-count, and verdict-line guards.
+
+### Changed
+- Planning step 14 (Self-review) gains two checks: architecture-unit clause consistency (diff Architecture notes claims against unit steps) and command closure (verify every shell variable referenced in a unit step is assigned within that step or earlier).
+- Retrospective Phase 4 now mandates classifying each carry-forward row's trigger class (edit-based, drift-based, event-based) before classifying its status.
+- `progress-schema.md` final_action block gains an optional `marker` field; the `predicted -> determined` transition now has the same explicit same-edit Log clause as the other transitions.
+- Shipping verification reference adds the source-over-memory citation rule: claims about file content require a same-turn read.
+- Shipping SKILL.md Step 7 adds the hand-up packet definition and a message-freshness rule for post-review commit messages.
+- Reviewing SKILL.md adds "claim layer" to the canonical evidence-tier term list.
+
+### Fixed
+- Repaired two pre-existing red test suites: signal-drift Case D line reference (77 -> 94) and release-publication hash fixture.
+- `validate.sh` check 5 now emits a named `FAIL:` line instead of a Python traceback on unreadable files.
+- `scripts/test-release-publication.sh` now pins `PYTHON_SUPPORT_FILE` at the delegation boundary.
+- `scripts/test-python-compatibility.sh` bootstrap interpreter gated at CPython >= 3.8.
+- Closed the plan-skip-documentation retro's missing `(T1)` carry-forward T-ID citation.
+
 ## [0.7.1] - 2026-07-27
 
 ### Added
