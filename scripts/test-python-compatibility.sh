@@ -7,6 +7,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SELF="$ROOT/scripts/test-python-compatibility.sh"
 CONTRACT="${PYTHON_SUPPORT_FILE:-$ROOT/schemas/python-support.json}"
 BOOTSTRAP="${PYTHON_BOOTSTRAP:-python3}"
+if ! "$BOOTSTRAP" -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" 2>/dev/null; then
+  echo "FAIL: [python-compat] bootstrap interpreter ($BOOTSTRAP) is below CPython 3.8 or missing"
+  exit 1
+fi
 TAG="[python-compat]"
 TMP_ROOT=""
 FAIL_COUNT=0
