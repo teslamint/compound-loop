@@ -469,6 +469,94 @@ if failures:
 print(f"ok:   {TAG} final_action shape valid ({', '.join(sorted(found_keys))})")
 PY
 
+# 12. Carry-forward T-ID referential integrity in retro docs
+python3 - "$ROOT" <<'PY' || FAIL=1
+import re, sys, pathlib
+
+root = pathlib.Path(sys.argv[1])
+TAG = "[cf-tid]"
+retro_dir = root / "docs" / "retros"
+failures = []
+
+def fail(msg):
+    failures.append(f"FAIL: {TAG} {msg}")
+
+if not retro_dir.is_dir():
+    print(f"ok:   {TAG} no docs/retros/ directory — skipped")
+    sys.exit(0)
+
+checked = 0
+for retro in sorted(retro_dir.glob("*-retro.md")):
+    text = retro.read_text(encoding="utf-8")
+    rel = retro.relative_to(root)
+
+    if "## Interview Transcript" not in text or "## Carry-forward from previous retro" not in text:
+        continue
+
+    transcript_start = text.index("## Interview Transcript")
+    transcript_section = text[transcript_start:]
+    next_h2 = re.search(r"\n## (?!Interview Transcript)", transcript_section)
+    if next_h2:
+        transcript_section = transcript_section[:next_h2.start()]
+
+    transcript_tids = set()
+    phase4_tids = set()
+    for m in re.finditer(
+        r"^\|\s*(T\d+)\s*\|[^|]*\|[^|]*(\d+)[^|]*\|", transcript_section, re.M
+    ):
+        tid = m.group(1)
+        transcript_tids.add(tid)
+        phase_text = m.group(2)
+        if phase_text == "4":
+            phase4_tids.add(tid)
+    for m in re.finditer(
+        r"^\|\s*(T\d+)\s*\|\s*—\s*\|\s*(\d+)\s*\|", transcript_section, re.M
+    ):
+        tid = m.group(1)
+        transcript_tids.add(tid)
+        if m.group(2) == "4":
+            phase4_tids.add(tid)
+
+    if not transcript_tids:
+        continue
+
+    cf_start = text.index("## Carry-forward from previous retro")
+    cf_section = text[cf_start:]
+    next_h2 = re.search(r"\n## (?!Carry-forward from previous retro)", cf_section)
+    if next_h2:
+        cf_section = cf_section[:next_h2.start()]
+
+    cf_tid_refs = re.findall(r"\(T(\d+)\)", cf_section)
+    cf_tid_set = {f"T{n}" for n in cf_tid_refs}
+
+    for tid in sorted(cf_tid_set):
+        if tid not in transcript_tids:
+            fail(f"{rel}: carry-forward cites {tid} but no such T-ID in interview transcript")
+
+    table_rows = re.findall(r"^\|[^|]+\|[^|]+\|[^|]+\|$", cf_section, re.M)
+    has_data_rows = False
+    for row in table_rows:
+        cells = [c.strip() for c in row.strip("|").split("|")]
+        if len(cells) >= 1:
+            item = cells[0].strip()
+            if item and not re.match(r"^[-—]+$", item) and not item.lower().startswith("item") and "(none" not in item.lower():
+                has_data_rows = True
+                break
+
+    if has_data_rows and phase4_tids and not phase4_tids.intersection(cf_tid_set):
+        fail(
+            f"{rel}: Phase 4 probes {sorted(phase4_tids)} exist but none cited "
+            f"in carry-forward Evidence cells"
+        )
+
+    checked += 1
+
+if failures:
+    print("\n".join(failures))
+    sys.exit(1)
+print(f"ok:   {TAG} carry-forward T-ID integrity: {checked} retro docs checked")
+PY
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"

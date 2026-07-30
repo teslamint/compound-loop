@@ -34,7 +34,7 @@ Previous retro: `docs/retros/2026-07-27-plan-status-terminal-states-retro.md`.
 
 | Item | Status | Evidence |
 |---|---|---|
-| Fix `Plan:` → `plan:` casing at `skills/planning/SKILL.md:176` | Done | `da1fdf9` — casing corrected; ROADMAP row closed at `20d59c1` |
+| Fix `Plan:` → `plan:` casing at `skills/planning/SKILL.md:176` | Done | `da1fdf9` — casing corrected; ROADMAP row closed at `20d59c1` (T1) |
 
 - Previous doc shape: conformant
 
