@@ -83,7 +83,12 @@ root = pathlib.Path(sys.argv[1])
 valid = {f"P{i}" for i in range(1, 10)}
 bad = []
 for f in list(root.glob("skills/**/*.md")) + list(root.glob("references/*.md")) + list(root.glob("schemas/*.md")):
-    for m in re.finditer(r"enforces:\s*(P\d+(?:\s*[,/]\s*P\d+)*)", f.read_text(encoding="utf-8")):
+    try:
+        text = f.read_text(encoding="utf-8")
+    except OSError as exc:
+        bad.append(f"{f.relative_to(root)}: unreadable ({exc.strerror or exc})")
+        continue
+    for m in re.finditer(r"enforces:\s*(P\d+(?:\s*[,/]\s*P\d+)*)", text):
         for pid in re.findall(r"P\d+", m.group(1)):
             if pid not in valid:
                 bad.append(f"{f.relative_to(root)}: unknown principle {pid}")
