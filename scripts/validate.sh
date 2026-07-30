@@ -443,7 +443,9 @@ for line in fm[fa_match.end():].split("\n"):
     if line.startswith("  "):
         fa_lines.append(line)
 
-ALLOWED = {"kind", "status", "command", "updated"}
+REQUIRED = {"kind", "status", "command", "updated"}
+OPTIONAL = {"marker"}
+ALLOWED = REQUIRED | OPTIONAL
 KIND_VALUES = {"merge-to-base"}
 STATUS_VALUES = {"predicted", "determined", "executed"}
 
@@ -462,7 +464,7 @@ for line in fa_lines:
         elif key == "status" and value not in STATUS_VALUES:
             failures.append(f"final_action.status '{value}' not in {STATUS_VALUES}")
 
-missing = ALLOWED - found_keys
+missing = REQUIRED - found_keys
 if missing:
     failures.append(f"missing required keys: {', '.join(sorted(missing))}")
 

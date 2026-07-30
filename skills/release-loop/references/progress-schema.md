@@ -29,6 +29,7 @@ final_action:
   kind: merge-to-base                   # closed vocabulary; sole value
   status: predicted                     # predicted | determined | executed
   command: null                         # exact command string once determined; no secrets — ambient auth only
+  marker: null                          # optional; preparation-not-approval text when present
   updated: <ISO-8601 timestamp>
 
 # Phase counters
@@ -60,5 +61,5 @@ blocked_reason: null                    # set when phase_status: blocked
 - Corrupt/unparsable file on resume → rebuild frontmatter from git evidence (branch, committed artifacts, PR state via `gh pr view`), keep the old file as `progress.md.corrupt-<timestamp>`, and note the rebuild in the Log.
 - `.release-loop/` (briefs/, reports/, reviews/, progress.md) is local working state: gitignore it by default; the durable artifacts are the committed spec/plan/retro docs.
 - `final_action` is additive and optional on `release-loop/v1`: absence stays valid — consumers reject unknown `schema:` versions, never unknown fields.
-- `final_action.status` has exactly three transitions: `predicted → determined` when the exact command becomes knowable; `determined → predicted` on invalidation (PR closed, new commits on the branch) with the reason logged in the same edit; `determined → executed` in the same edit as the evidence Log line and `merged: true` — the two fields never disagree across a write.
+- `final_action.status` has exactly three transitions: `predicted → determined` in the same edit as its Log line, when the exact command becomes knowable; `determined → predicted` on invalidation (PR closed, new commits on the branch) with the reason logged in the same edit; `determined → executed` in the same edit as the evidence Log line and `merged: true` — the two fields never disagree across a write.
 - **The `final_action` record is preparation evidence, never approval**: possession of the command is not authorization to run it. Approval evidence lives only in `ship_approved`. `enforces: P7`
