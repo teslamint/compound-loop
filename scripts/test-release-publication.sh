@@ -1527,7 +1527,7 @@ PY
 
 case_embedded_engine_syntax_warnings() {
   local out
-  out="$(bash "$ROOT/scripts/test-python-compatibility.sh" generated)"
+  out="$(PYTHON_SUPPORT_FILE="$ROOT/schemas/python-support.json" bash "$ROOT/scripts/test-python-compatibility.sh" generated)"
   assert_contains "$out" 'endpoint role=oldest' oldest-endpoint-identity
   assert_contains "$out" 'endpoint role=newest' newest-endpoint-identity
   assert_contains "$out" 'label=release-publication-engine' shared-publication-artifact
