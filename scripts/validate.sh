@@ -557,6 +557,103 @@ if failures:
 print(f"ok:   {TAG} carry-forward T-ID integrity: {checked} retro docs checked")
 PY
 
+# 13. Planning step/item numbering contiguity and reference resolution
+python3 - "$ROOT" <<'PY' || FAIL=1
+import re, sys, pathlib
+
+root = pathlib.Path(sys.argv[1])
+TAG = "[plan-refs]"
+failures = []
+
+def fail(msg):
+    failures.append(f"FAIL: {TAG} {msg}")
+
+def check_contiguity(numbers, label):
+    if not numbers:
+        fail(f"{label}: no numbered items found")
+        return
+    for i in range(len(numbers) - 1):
+        if numbers[i + 1] != numbers[i] + 1:
+            fail(f"{label}: gap between {numbers[i]} and {numbers[i + 1]}")
+
+skill_path = root / "skills" / "planning" / "SKILL.md"
+deepening_path = root / "skills" / "planning" / "references" / "deepening.md"
+schema_path = root / "schemas" / "plan-schema.md"
+
+for p in (skill_path, deepening_path, schema_path):
+    if not p.exists():
+        fail(f"{p.relative_to(root)} missing")
+
+if failures:
+    print("\n".join(failures))
+    sys.exit(1)
+
+skill_text = skill_path.read_text(encoding="utf-8")
+deepening_text = deepening_path.read_text(encoding="utf-8")
+schema_text = schema_path.read_text(encoding="utf-8")
+
+skill_steps = set()
+skill_int_steps = []
+for m in re.finditer(r"^## (\d+[a-z]?)\.\ ", skill_text, re.M):
+    step = m.group(1)
+    skill_steps.add(step)
+    if step.isdigit():
+        skill_int_steps.append(int(step))
+skill_int_steps.sort()
+check_contiguity(skill_int_steps, "skills/planning/SKILL.md steps")
+
+deep_int_steps = []
+for m in re.finditer(r"^## (\d+)\.\ ", deepening_text, re.M):
+    deep_int_steps.append(int(m.group(1)))
+deep_int_steps.sort()
+check_contiguity(deep_int_steps, "skills/planning/references/deepening.md sections")
+
+schema_items = set()
+schema_int_items = []
+hf_match = re.search(r"## Document body — hard floor\n\n(.*?)(?=\n## )", schema_text, re.S)
+if hf_match:
+    for m in re.finditer(r"^(\d+)\.\s+\*\*", hf_match.group(1), re.M):
+        n = int(m.group(1))
+        schema_items.add(str(n))
+        schema_int_items.append(n)
+    schema_int_items.sort()
+    check_contiguity(schema_int_items, "schemas/plan-schema.md hard-floor items")
+else:
+    fail("schemas/plan-schema.md: '## Document body — hard floor' section not found")
+
+all_files = {
+    "skills/planning/SKILL.md": skill_text,
+    "skills/planning/references/deepening.md": deepening_text,
+    "schemas/plan-schema.md": schema_text,
+}
+for ref_dir in (root / "skills" / "planning" / "references").iterdir():
+    if ref_dir.suffix == ".md" and ref_dir.name != "deepening.md":
+        rel = str(ref_dir.relative_to(root))
+        all_files[rel] = ref_dir.read_text(encoding="utf-8")
+
+for rel, text in all_files.items():
+    for m in re.finditer(r"\bstep (\d+[a-z]?)\b", text, re.I):
+        ref = m.group(1).lower()
+        if ref not in skill_steps:
+            line = text[:m.start()].count("\n") + 1
+            fail(f"{rel}:{line}: 'step {ref}' references nonexistent planning step")
+
+for m in re.finditer(r"\bitem (\d+)", schema_text, re.I):
+    ref = m.group(1)
+    if ref not in schema_items:
+        line = schema_text[:m.start()].count("\n") + 1
+        fail(f"schemas/plan-schema.md:{line}: 'item {ref}' references nonexistent hard-floor item")
+
+if failures:
+    print("\n".join(failures))
+    sys.exit(1)
+print(
+    f"ok:   {TAG} planning references valid: "
+    f"{len(skill_steps)} steps, {len(deep_int_steps)} deepening sections, "
+    f"{len(schema_items)} hard-floor items"
+)
+PY
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"
