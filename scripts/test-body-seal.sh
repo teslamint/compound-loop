@@ -64,29 +64,32 @@ run_validate() {
   bash "$d/scripts/validate.sh" 2>&1
 }
 
-assert_seal_ok() {
-  local label="$1" out="$2"
+assert_seal_verified() {
+  local label="$1" out="$2" rc="$3" expect_verified="$4" expect_skipped="$5"
+  local seal_line
+  seal_line="$(echo "$out" | grep '\[body-seal\]' | grep -v FAIL | head -1)"
   if echo "$out" | grep -q 'FAIL: \[body-seal\]'; then
-    echo "  FAIL: $label — body-seal FAIL line found"
+    echo "  FAIL: $label — unexpected body-seal FAIL line"
     echo "  output: $(echo "$out" | grep 'body-seal' | head -3)"
     FAIL_COUNT=$((FAIL_COUNT + 1))
-  elif echo "$out" | grep -q '\[body-seal\]'; then
+  elif echo "$seal_line" | grep -q "${expect_verified} verified, ${expect_skipped} skipped"; then
     echo "  PASS: $label"
     PASS_COUNT=$((PASS_COUNT + 1))
   else
-    echo "  FAIL: $label — no body-seal output at all"
+    echo "  FAIL: $label — expected ${expect_verified} verified, ${expect_skipped} skipped"
+    echo "  got: $seal_line"
     FAIL_COUNT=$((FAIL_COUNT + 1))
   fi
 }
 
 assert_seal_fail() {
-  local label="$1" out="$2"
-  if echo "$out" | grep -q 'FAIL: \[body-seal\]'; then
+  local label="$1" out="$2" rc="$3"
+  if [ "$rc" -ne 0 ] && echo "$out" | grep -q 'FAIL: \[body-seal\]'; then
     echo "  PASS: $label"
     PASS_COUNT=$((PASS_COUNT + 1))
   else
-    echo "  FAIL: $label — expected FAIL: [body-seal] line"
-    echo "  output: $(echo "$out" | grep 'body-seal' | head -3)"
+    echo "  FAIL: $label — expected nonzero exit with FAIL: [body-seal]"
+    echo "  exit=$rc output: $(echo "$out" | grep 'body-seal' | head -3)"
     FAIL_COUNT=$((FAIL_COUNT + 1))
   fi
 }
@@ -122,7 +125,47 @@ body_seal: $seal" \
 This is a test plan with a correct body seal.
 "
 out="$(run_validate "$d")"; rc=$?
-assert_seal_ok "correct body_seal → ok line" "$out"
+assert_seal_verified "correct body_seal → 1 verified, 0 skipped" "$out" "$rc" "1" "0"
+rm -rf "$d"
+
+# --- Fixture A2: golden-hash round-trip (write, seal, verify, re-read) ---
+echo "Fixture A2: golden-hash round-trip"
+d="$(setup_scratch)"
+write_plan "$d" "test-golden.md" \
+  "schema: plan/v1
+title: Golden hash
+type: feat
+status: approved
+date: 2026-07-31
+execution: code" \
+  "
+## Goal
+
+Fixed body for golden-hash round-trip.
+"
+golden="$(compute_seal "$d" "test-golden.md")"
+# Re-seal: compute again independently to prove determinism
+golden2="$(compute_seal "$d" "test-golden.md")"
+if [ "$golden" != "$golden2" ]; then
+  echo "  FAIL: golden-hash — non-deterministic: $golden vs $golden2"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+else
+  write_plan "$d" "test-golden.md" \
+    "schema: plan/v1
+title: Golden hash
+type: feat
+status: approved
+date: 2026-07-31
+execution: code
+body_seal: $golden" \
+    "
+## Goal
+
+Fixed body for golden-hash round-trip.
+"
+  out="$(run_validate "$d")"; rc=$?
+  assert_seal_verified "golden-hash round-trip → 1 verified" "$out" "$rc" "1" "0"
+fi
 rm -rf "$d"
 
 # --- Fixture B: wrong body_seal → FAIL ---
@@ -142,7 +185,7 @@ body_seal: 0000000000000000000000000000000000000000000000000000000000000000" \
 This body does not match the fake seal above.
 "
 out="$(run_validate "$d")"; rc=$?
-assert_seal_fail "wrong body_seal → FAIL line" "$out"
+assert_seal_fail "wrong body_seal → FAIL line" "$out" "$rc"
 rm -rf "$d"
 
 # --- Fixture C: no body_seal → skip ---
@@ -161,7 +204,42 @@ execution: code" \
 This plan has no body_seal field.
 "
 out="$(run_validate "$d")"; rc=$?
-assert_seal_ok "no body_seal → skip, no FAIL" "$out"
+assert_seal_verified "no body_seal → 0 verified, 1 skipped" "$out" "$rc" "0" "1"
+rm -rf "$d"
+
+# --- Fixture D: frontmatter mutation only (S8) → still verified ---
+echo "Fixture D: sealed plan with frontmatter-only mutation (terminal-state flip)"
+d="$(setup_scratch)"
+write_plan "$d" "test-terminal.md" \
+  "schema: plan/v1
+title: Test terminal flip
+type: feat
+status: approved
+date: 2026-07-31
+execution: code" \
+  "
+## Goal
+
+This plan will get a terminal-state flip.
+"
+seal="$(compute_seal "$d" "test-terminal.md")"
+# Rewrite with seal, then mutate frontmatter only (done + completed_by)
+write_plan "$d" "test-terminal.md" \
+  "schema: plan/v1
+title: Test terminal flip
+type: feat
+status: done
+date: 2026-07-31
+execution: code
+body_seal: $seal
+completed_by: abc123def" \
+  "
+## Goal
+
+This plan will get a terminal-state flip.
+"
+out="$(run_validate "$d")"; rc=$?
+assert_seal_verified "frontmatter-only mutation → 1 verified, 0 skipped" "$out" "$rc" "1" "0"
 rm -rf "$d"
 
 echo

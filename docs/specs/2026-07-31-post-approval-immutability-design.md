@@ -185,8 +185,8 @@ body_seal: <64-char lowercase hex SHA-256>  # optional; set at approval
    - **Measured by**: judgment rubric — input: a plan with the stateless fallback + a unit containing `git push`; pass: the reviewer cites the outward-publication clause and files a matrix-requirement finding; fail: the reviewer accepts the stateless fallback.
 6. Implementing preflight stops execution when it detects a plan whose body has been modified post-approval (seal mismatch), directing to deviation addendum or byte-exact revert.
    - **Measured by**: judgment rubric — a reviewer reads the preflight immutability check, confirms it names: (a) the seal computation delegated to `scripts/validate.sh` or an inline equivalent, (b) the stop condition (mismatch or absence-when-expected), and (c) the two remediation paths (deviation addendum or byte-exact revert).
-7. Body-seal computation passes on both boundary interpreters.
-   - **Measured by**: structural validation output shows seal-check pass lines for both 3.9 and 3.14.
+7. Body-seal check 14 heredoc uses only 3.9-safe constructs (`hashlib`, `re`, `pathlib`, f-strings).
+   - **Measured by**: code inspection — no walrus operators, no `match`/`case`, no 3.10+ syntax. Boundary-interpreter compilation is covered when `test-python-compatibility.sh` runs `invoke_validation_fixture_repo` (which executes validate.sh end-to-end); check 14 is not separately registered because it is an inline heredoc, not a standalone artifact.
 
 ## Open Decisions
 

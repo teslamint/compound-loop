@@ -691,14 +691,21 @@ for plan in plans:
     frontmatter = parts[1]
     body = parts[2]
 
-    seal_match = re.search(r"^body_seal:\s*(\S+)", frontmatter, re.M)
-    if not seal_match:
+    key_match = re.search(r"^body_seal:[ \t]*(.*)$", frontmatter, re.M)
+    if not key_match:
         skipped += 1
         continue
 
-    stored = seal_match.group(1).strip()
-    computed = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    raw_value = key_match.group(1).strip()
     rel = plan.relative_to(root)
+    if not re.fullmatch(r"[0-9a-f]{64}", raw_value):
+        failures.append(
+            f"FAIL: {TAG} {rel}: body_seal present but malformed: '{raw_value}'"
+        )
+        continue
+
+    stored = raw_value
+    computed = hashlib.sha256(body.encode("utf-8")).hexdigest()
 
     if stored != computed:
         failures.append(

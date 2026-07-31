@@ -37,7 +37,7 @@ superseded_by: <path to successor plan>  # required when status: superseded
 
 ## Body seal
 
-The `body_seal` field stores the SHA-256 hex digest of the plan's markdown body — everything after the line matching the second `---` in the file, through end of file including any trailing newline. The second `---` line itself is excluded.
+The `body_seal` field stores the SHA-256 hex digest of the plan's markdown body. The canonical extraction is `text.split('---', 2)[2]` — everything after the second `---` delimiter characters, including the newline that terminates the delimiter line. All consumers use this expression; prose descriptions in other skills reference this section rather than restating the rule.
 
 - **Set at**: the approval commit (planning step 17), in the same commit as the `status: approved` flip.
 - **Re-sealable**: only by interactive deepening (`skills/planning/references/deepening.md` §6). No other editing path may update `body_seal` after the initial approval.
