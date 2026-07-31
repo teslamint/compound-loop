@@ -19,6 +19,7 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Backfill** — creating CHANGELOG sections for releases that predate the file itself, derived from their committed specs and retros; keyed on the file's absence, one-time per repo.
 - **Prepare-only** — the headless posture of a ceremony that requires first-hand consent: run every step up to the gate, persist the draft and exact commands, and stop with a skip signal instead of executing.
 - **Deviation addendum** — a committed companion to an approved spec or plan that preserves the original approval record while documenting post-approval observable behavior before release. *Avoid: implementation drift record* — the addendum records an authorized contract change, not merely that code differs.
+- **Outward-publication boundary** — any action that makes an artifact accessible outside the local repository's default branch: pushing to a remote, creating a remote repository, publishing to a registry, creating a platform release, changing repository visibility. A deliverable crossing this boundary constitutes a stateful ceremony and requires a mutation/failure-state matrix.
 
 ## Python compatibility
 
@@ -60,7 +61,8 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 ## Plan lifecycle
 
 - **Terminal state** — a plan status with no outgoing transitions, recording that the plan was executed or replaced. Reaching one requires the evidence field that justifies it, so a bare terminal flag that merely restates derivable history cannot exist.
-- **Mutable slot** — the only part of a plan that may legally change after its approval: the status field and the terminal-state evidence accompanying it. Everything else is the immutable decision artifact; the boundary is what lets terminal states coexist with post-approval immutability.
+- **Mutable slot** — the only part of a plan that may legally change after its approval: the status field, the terminal-state evidence accompanying it, and the body seal. Everything else is the immutable decision artifact; the boundary is what lets terminal states coexist with post-approval immutability.
+- **Body seal** — the SHA-256 hex digest of a plan's markdown body (after the closing frontmatter delimiter), stored in the frontmatter at approval. Proves body-matches-last-seal; does not prove unchanged-since-approval. A mutator that re-seals defeats the mechanical check — the cross-cutting skill rules are the defense against unauthorized re-sealing; interactive deepening is the sole authorized re-seal path.
 - **Supersession** — retiring a plan because a successor replaces it, recorded on the predecessor with a pointer to the successor. Timed at the successor's creation, not its approval, and reachable from draft: a plan can be replaced before anyone approves it. Direction is predecessor→successor only. *Avoid: abandoned* — retirement without a successor pointer has no observed instance and no slot to explain itself.
 - **Rejection record** — an inline schema note preserving why a value was removed from (or refused entry to) a closed vocabulary, so the absence reads as a decision rather than an oversight and the value is not re-proposed uninformed.
 

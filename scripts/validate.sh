@@ -661,6 +661,69 @@ print(
 )
 PY
 
+# 14. Plan corpus: body-seal integrity
+python3 - "$ROOT" <<'PY' || FAIL=1
+import hashlib, re, sys, pathlib
+
+root = pathlib.Path(sys.argv[1])
+TAG = "[body-seal]"
+plans_dir = root / "docs" / "plans"
+
+if not plans_dir.is_dir():
+    print(f"ok:   {TAG} no docs/plans/ directory — skipped")
+    sys.exit(0)
+
+plans = sorted(plans_dir.glob("*.md"))
+if not plans:
+    print(f"ok:   {TAG} no plan files — skipped")
+    sys.exit(0)
+
+failures = []
+checked = 0
+skipped = 0
+
+for plan in plans:
+    text = plan.read_text(encoding="utf-8")
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        skipped += 1
+        continue
+    frontmatter = parts[1]
+    body = parts[2]
+
+    key_match = re.search(r"^body_seal:[ \t]*(.*)$", frontmatter, re.M)
+    if not key_match:
+        skipped += 1
+        continue
+
+    raw_value = key_match.group(1).strip()
+    rel = plan.relative_to(root)
+    if not re.fullmatch(r"[0-9a-f]{64}", raw_value):
+        failures.append(
+            f"FAIL: {TAG} {rel}: body_seal present but malformed: '{raw_value}'"
+        )
+        continue
+
+    stored = raw_value
+    computed = hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    if stored != computed:
+        failures.append(
+            f"FAIL: {TAG} {rel}: body_seal mismatch "
+            f"expected={stored} actual={computed}"
+        )
+    else:
+        checked += 1
+
+if failures:
+    print("\n".join(failures))
+    sys.exit(1)
+print(
+    f"ok:   {TAG} body-seal integrity: "
+    f"{checked} verified, {skipped} skipped (no seal)"
+)
+PY
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"
