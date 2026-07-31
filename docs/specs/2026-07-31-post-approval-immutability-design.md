@@ -1,6 +1,6 @@
 ---
 title: Post-Approval Immutability and Outward-Publication Ceremony
-status: draft
+status: approved
 date: 2026-07-31
 schema: spec/v1
 ---
