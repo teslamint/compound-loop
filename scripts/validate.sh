@@ -344,9 +344,9 @@ if len(verdict_lines) != 1:
     fail(f"{TEMPLATE}: expected exactly one '{VERDICT_PREFIX}' line, found {len(verdict_lines)}")
 else:
     verdicts = re.findall(r"`([^`]+)`", verdict_lines[0])
-    if len(set(verdicts)) != 3:
+    if len(set(verdicts)) != 4:
         fail(
-            f"{TEMPLATE}: expected 3 distinct backticked verdict forms on the "
+            f"{TEMPLATE}: expected 4 distinct backticked verdict forms on the "
             f"'{VERDICT_PREFIX}' line, found {len(set(verdicts))}: {verdicts!r}"
         )
         verdicts = []

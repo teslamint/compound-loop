@@ -142,7 +142,7 @@ Before finalizing, the author (not a subagent) checks:
   case against the final wording. Confirm contradictions block finalization and
   commit until a separate committed addendum exists, and unavailable evidence
   stays a planning-time unknown unless the user narrows the claim.
-- **Spec coverage** — every spec requirement traces to a unit; list gaps.
+- **Spec coverage** — every spec requirement traces to a unit; list gaps. When the spec has a Risks table with mitigations that require a specific deliverable, each such mitigation traces to a unit step or a Deferred to Follow-Up Work entry — an un-traced mitigation is an undelivered promise.
 - **Scenario coverage** — re-walk the Scenario coverage map against the final unit set: every S-ID still completes end to end (deepening and unit edits are the likeliest breakage vector), and every map row names real scenario evidence (integration test, or observable verification for non-code plans). `enforces: P8`
 - **Mutation/failure-state completeness** — when the deliverable contains a stateful ceremony, confirm every durable transition has a row with transition identity, pre-state, action, expected post-state, all six outcome classes, and an implementation-unit/evidence-owner mapping. Confirm irreversible transitions name compensation or manual recovery, every forced failure uses safe isolated injection, and no cell is blank or uses not-applicable without a concrete reason. Otherwise confirm the exact stateless fallback is present.
 - **Placeholder scan** — search for step 13's red flags; fix inline.

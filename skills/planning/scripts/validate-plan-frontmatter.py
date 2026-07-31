@@ -40,7 +40,7 @@ import sys
 
 TYPES = {"feat", "fix", "refactor", "chore", "docs"}
 STATUSES = {"draft", "approved", "done", "superseded"}
-EXECUTIONS = {"code", "non-code"}
+EXECUTIONS = {"code", "non-code", "ops"}
 REQUIRED = ["schema", "title", "type", "status", "date", "execution"]
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -205,6 +205,12 @@ def check_schema(data: dict, repo_root: str) -> list[str]:
     origin_val = scalar("origin")
     if origin_val and not os.path.isfile(os.path.join(repo_root, origin_val)):
         issues.append(f"'origin' value '{origin_val}' does not resolve to an existing file")
+
+    body_seal_val = scalar("body_seal")
+    if body_seal_val and not re.fullmatch(r"[0-9a-f]{64}", body_seal_val):
+        issues.append(
+            f"'body_seal' value '{body_seal_val}' is not a valid 64-char lowercase hex SHA-256"
+        )
 
     return issues
 

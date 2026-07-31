@@ -32,4 +32,14 @@ Three consecutive rejections on the same probe → the exchange terminates and i
 
 ## Output contract
 
-The facilitator returns every probed exchange as a (probe, answer, evidence) triple carrying a stable T-ID (T1, T2, … — never renumbered) and a facilitator-authored verdict, recorded verbatim in the transcript's Verdict cell: `accepted` for evidenced answers, `no evidenced answer (3 rejections): <verbatim>` for exchanges terminated by the rejection rule above, `self-attested` in self-checklist mode. Facilitator instruction: write each verdict in at most two sentences; whatever comes back is recorded in full, with no truncation. Phase 5 findings may only cite evidence that appears in a triple — by T-ID — or in Phase 2–3 data; nothing enters a finding on narrative authority alone.
+The facilitator returns every probed exchange as a (probe, answer, evidence) triple carrying a stable T-ID (T1, T2, … — never renumbered) and a facilitator-authored verdict, recorded verbatim in the transcript's Verdict cell. Facilitator instruction: write each verdict in at most two sentences; whatever comes back is recorded in full, with no truncation.
+
+Verdict forms by independence level:
+
+| Level | Verdict forms |
+|---|---|
+| heterogeneous / same-model fresh-context | `accepted`, `no evidenced answer (3 rejections): <verbatim>`, `no evidenced answer (dispatch cap): <verbatim>` |
+| in-thread (approximated independence) | `self-attested` (the respondent and facilitator share a context; `accepted` would misrepresent the independence) |
+| self-checklist | `self-attested` (the rows are the checklist answers) |
+
+Phase 5 findings may only cite evidence that appears in a triple — by T-ID — or in Phase 2–3 data; nothing enters a finding on narrative authority alone.

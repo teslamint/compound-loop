@@ -45,9 +45,10 @@ The Measured result cell uses the binary completion report form — `verified: <
 (Every item from the previous retro appears here — silent drops are a defect.
 Rows probed during the interview append `(T<n>)` to their Evidence cell.)
 
-- Previous doc shape: conformant | violations recorded as findings | pre-schema, exempt
+- Previous doc shape: conformant | violations recorded as findings | pre-schema, exempt | no previous retro doc
 
-(the backward check's result on the previous retro doc)
+(the backward check's result on the previous retro doc; `no previous retro doc` is for the
+first retro in a repo where no prior doc exists under `docs/retros/`)
 
 ## Interview Transcript
 
@@ -59,10 +60,15 @@ Rows probed during the interview append `(T<n>)` to their Evidence cell.)
 | T1 | 1 | 5 | <probe> | <answer> | <commit/file/measurement> | accepted |
 | T2 | 3 | 4 | <probe> | <final answer> | — | no evidenced answer (3 rejections): <facilitator's final rejection, verbatim> |
 
-Verdict cell values: `accepted` | `no evidenced answer (3 rejections): <verbatim>` | `self-attested`
+Verdict cell values: `accepted` | `no evidenced answer (3 rejections): <verbatim>` | `self-attested` | `no evidenced answer (dispatch cap): <verbatim>`
 
 (`self-attested` is for degraded modes only; in `self-checklist` mode the rows are the
-checklist answers; a zero-row table under a valid header is valid.)
+checklist answers; a zero-row table under a valid header is valid.
+`no evidenced answer (dispatch cap): <verbatim>` is for exchanges terminated because the
+5-dispatch global cap was exhausted before the 3-rejection limit was reached — the
+facilitator's last probe text is recorded verbatim.
+Round-span notation `1→2` indicates an exchange that started in round 1 and concluded in
+round 2; the T-ID is stable across rounds.)
 
 ## Findings
 

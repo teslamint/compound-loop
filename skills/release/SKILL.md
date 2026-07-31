@@ -147,7 +147,8 @@ stable and no release-note work occurs for an invalid repository.
 
    In `mode:headless`, never present that gate or ask any question. Create
    `.release/` on demand and write `.release/draft.md` as a recovery handoff
-   containing the recognized subject/version, commit ID, exact path set,
+   with the same non-authorization marker (preparation evidence, never
+   approval) containing the recognized subject/version, commit ID, exact path set,
    manifest values, newest CHANGELOG version, reconstructed inventory mapping
    and Drop-list, resolved highlights, and both available recovery choices.
    Render the tag choice and revert choice as two separate, complete fenced
@@ -341,7 +342,9 @@ write, validation, staging, commit, or verification command.
 On the normal release path, `mode:headless` stops after Version; a recognized
 incomplete release instead uses the recovery handoff defined in Preflight step
 7. For a normal release, create `.release/` on demand and write
-`.release/draft.md` with every draft component named in Phase 3. Its final
+`.release/draft.md` with the same non-authorization marker used on the
+interactive path (preparation evidence, never approval) and every draft
+component named in Phase 3. Its final
 section is `## Exact commands` and contains exactly one fenced `bash` program
 beginning with `set -euo pipefail`. That single program contains the fully
 rendered write, manifest bump, validation, staging, commit, pre-tag

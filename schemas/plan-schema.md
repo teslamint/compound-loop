@@ -15,7 +15,7 @@ title: Human-readable plan title
 type: feat | fix | refactor | chore | docs
 status: draft | approved | done | superseded  # draft commits first; approved is a separate commit after the USER gate (skills/planning/SKILL.md)
 date: YYYY-MM-DD
-execution: code | non-code        # selects the unit template
+execution: code | non-code | ops  # selects the unit template
 origin: <path to spec>            # optional; enables retro's measured-vs-declared pass
 deepened: true                    # optional; set by the deepening pass
 body_seal: <64-char lowercase hex SHA-256>  # optional; set at approval, verified by validate.sh check 14

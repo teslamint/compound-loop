@@ -269,7 +269,7 @@ open(path, "w", encoding="utf-8").write(text)
 PY
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
-  assert_fail_naming "$out" "expected 3 distinct backticked verdict forms" "FAIL names the verdict-count guard" || result=1
+  assert_fail_naming "$out" "expected 4 distinct backticked verdict forms" "FAIL names the verdict-count guard" || result=1
   rm -rf "$dir"
   return $result
 }
