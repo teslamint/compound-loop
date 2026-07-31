@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Post-approval immutability enforcement and outward-publication recognition
 type: feat
-status: draft
+status: approved
 date: 2026-07-31
 execution: code
 origin: docs/specs/2026-07-31-post-approval-immutability-design.md
