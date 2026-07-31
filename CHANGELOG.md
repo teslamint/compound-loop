@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.9.0] - 2026-08-01
+
+### Added
+- Mechanical body-seal enforcement for approved plans: `body_seal` (SHA-256 hex digest) set at approval, verified by `validate.sh` check 14, with cross-cutting immutability checks in implementing preflight and reviewing.
+- Outward-publication boundary recognition: actions making artifacts accessible outside the local repo's default branch (push, publish, release, visibility change) now constitute a stateful ceremony requiring a mutation/failure-state matrix.
+- `scripts/test-body-seal.sh` fixture harness with 5 test cases covering correct seal, wrong seal, absent seal, golden-hash round-trip, and terminal-state-flip scenarios.
+- `scripts/test-plugin-skill-discovery.sh` validating plugin skill paths, frontmatter, and manifest agreement across all 13 skills.
+- `execution: ops` added to the plan schema enum and frontmatter validator.
+- Interview protocol vocabulary expanded: `no previous retro doc` shape, `no evidenced answer (dispatch cap)` verdict form, round-span notation, and verdict-by-independence-level table.
+- Risk mitigation traceability in planning step 14: Spec coverage now traces Risks table mitigations to units or Deferred entries.
+
+### Changed
+- `validate.sh` check 9 verdict form count updated from 3 to 4 to accommodate the dispatch-cap verdict form.
+- Release headless-path `.release/draft.md` now carries the same non-authorization marker as the interactive path.
+
+### Fixed
+- `validate-plan-frontmatter.py` now validates `body_seal` format (64-char lowercase hex SHA-256).
+- Cleared all 30 carry-forward items from ROADMAP.md (22 previously completed, 8 resolved this cycle).
+
 ## [0.8.0] - 2026-07-30
 
 ### Added
