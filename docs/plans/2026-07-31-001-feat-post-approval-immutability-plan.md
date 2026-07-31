@@ -6,6 +6,7 @@ status: approved
 date: 2026-07-31
 execution: code
 origin: docs/specs/2026-07-31-post-approval-immutability-design.md
+body_seal: 7d24dbc751e144a16a28251d95a93c342e7ec2ed431b86715a4c611aaaaafd9a
 ---
 
 ## Goal
