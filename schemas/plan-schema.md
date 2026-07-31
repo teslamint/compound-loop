@@ -18,6 +18,7 @@ date: YYYY-MM-DD
 execution: code | non-code        # selects the unit template
 origin: <path to spec>            # optional; enables retro's measured-vs-declared pass
 deepened: true                    # optional; set by the deepening pass
+body_seal: <64-char lowercase hex SHA-256>  # optional; set at approval, verified by validate.sh check 14
 completed_by: <commit>            # required when status: done
 superseded_by: <path to successor plan>  # required when status: superseded
 ---
@@ -29,10 +30,19 @@ superseded_by: <path to successor plan>  # required when status: superseded
 
 - **`done`** requires a non-empty `completed_by:` naming the commit on the base branch that landed the plan's work — normally the merge commit; the squashed or fast-forwarded tip when no merge commit exists. `retrospective` writes it in the same commit as the retro doc. `draft → done` is invalid.
 - **`superseded`** requires `superseded_by:` resolving to an existing repo-root-relative plan path, written by `planning` in the same commit that commits the successor. The successor's status is irrelevant; `draft → superseded` is valid. Direction is predecessor→successor only — no backlink.
-- **Mutable slots** (spec R5): the body is immutable after the approved commit; the `status` field and its terminal-state evidence field are the plan's only mutable slots.
+- **Mutable slots** (spec R5): the body is immutable after the approved commit; the `status` field, its terminal-state evidence field, and `body_seal` are the plan's only mutable slots.
 - **Rejection records** (spec R4): `in-progress` — live execution state lives in commits and the progress ledger; a committed second copy is a dual source of truth that a dead session latches permanently. `abandoned` — zero observed instances; the observed need is `superseded`, which carries a successor pointer the rejected value has no slot for.
 - **Unknown fields** (spec R6): consumers and the validator reject unknown `schema:` versions, never unknown fields.
 - **Applicability** (spec R8): terminal-state rules apply to plans first committed after this contract lands — keyed on the plan's creation, not its approval; no terminal state is backfilled onto earlier plans. Corpus conformance is asserted for this checkout only, never for `plan/v1` as a published contract.
+
+## Body seal
+
+The `body_seal` field stores the SHA-256 hex digest of the plan's markdown body — everything after the line matching the second `---` in the file, through end of file including any trailing newline. The second `---` line itself is excluded.
+
+- **Set at**: the approval commit (planning step 17), in the same commit as the `status: approved` flip.
+- **Re-sealable**: only by interactive deepening (`skills/planning/references/deepening.md` §6). No other editing path may update `body_seal` after the initial approval.
+- **Absence**: valid. Plans without `body_seal` are not sealed; `validate.sh` check 14 skips them. Plans predating this contract are never backfilled.
+- **Verification**: `validate.sh` check 14 recomputes the hash and compares. Mismatch → FAIL. The seal proves body-matches-last-seal, not unchanged-since-approval; an agent that re-seals after editing defeats the mechanical check — the cross-cutting skill rules (implementing preflight, reviewing) defend against unauthorized re-sealing.
 
 ## Document body — hard floor
 
