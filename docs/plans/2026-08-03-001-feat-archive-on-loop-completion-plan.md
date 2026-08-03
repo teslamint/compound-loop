@@ -2,10 +2,11 @@
 schema: plan/v1
 title: Archive on loop completion for release-loop
 type: feat
-status: draft
+status: approved
 date: 2026-08-03
 execution: non-code
 origin: docs/specs/2026-08-03-archive-on-loop-completion-design.md
+body_seal: b34b082c65be97d9f065387cfd83858b8a56e48db49060d3befa64643d9f95f0
 ---
 
 # Archive on Loop Completion Plan
