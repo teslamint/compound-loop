@@ -1,6 +1,7 @@
 ---
 module: release-loop
 date: "2026-08-03"
+last_updated: "2026-08-03"
 problem_type: workflow_issue
 component: loop-archive
 severity: medium
@@ -112,3 +113,16 @@ An older archive could satisfy it.
 
 The corrected workflow retains the exact path returned by the current procedure.
 It verifies feature identity, terminal state, destination evidence, and retro evidence there.
+
+### Assign post-Retro proof to the completion gate
+
+The retrospective could not verify its own terminal archive because archiving runs after Retro exits.
+The release-loop completion gate retained the exact returned path instead:
+`.release-loop/archive/2026-08-03-archive-on-loop-completion`.
+
+That record contains the expected feature, completed phase, executed final action,
+retro path, retro commit evidence, and canonical destination Log entry.
+The live `.release-loop/progress.md` is absent.
+
+Assign criteria that fire after Retro to this completion gate.
+Do not mark them complete from an earlier retrospective measurement pass.
