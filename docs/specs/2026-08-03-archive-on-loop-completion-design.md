@@ -1,6 +1,6 @@
 ---
 title: Archive on Loop Completion
-status: draft
+status: approved
 date: 2026-08-03
 schema: spec/v1
 ---
