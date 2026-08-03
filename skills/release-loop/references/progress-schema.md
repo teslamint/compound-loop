@@ -5,7 +5,7 @@
 ```markdown
 ---
 schema: release-loop/v1
-feature: <short feature name>
+feature: <feature_slug matching ^[a-z0-9]+(?:-[a-z0-9]+)*$ and not equal to resume>
 phase: design | plan | implement | review | ship | retro | done | blocked
 phase_status: in-progress | waiting-user | blocked | complete
 started: <ISO-8601 timestamp>
@@ -50,6 +50,7 @@ blocked_reason: null                    # set when phase_status: blocked
 - <timestamp> implement: U1 DONE (<sha>), task review clean
 - <timestamp> implement: U2 DONE_WITH_CONCERNS — <one line>, resolved by <sha>
 - <timestamp> ship: verification gate — `pytest -q` → 124 passed, 0 failed (fresh)
+- <timestamp> retro: archive-destination: .release-loop/archive/YYYY-MM-DD-<feature_slug>
 ```
 
 ## Rules
@@ -58,9 +59,12 @@ blocked_reason: null                    # set when phase_status: blocked
 - **Gate transitions record their evidence inline**: the proving command, its observed result, and the timestamp (see the `ship: verification gate` log line above). A transition line without command + result is a claim, not a record — resumed and headless runs inherit evidence only through these lines. `enforces: P3, P8`
 - Timestamps are ISO-8601 with timezone, **fetched fresh via command (`date -u +%Y-%m-%dT%H:%M:%SZ`) at each write — never estimated or interpolated** (pilot-proven: estimated timestamps produced a non-monotonic log).
 - **Status flips are atomic with their evidence**: changing `phase`/`phase_status` and writing the explaining Log line (plus `blocked_reason` when the status is blocked) happen in the same edit — a bare `blocked` with `blocked_reason: null` is a schema violation, not a placeholder.
-- Corrupt/unparsable file on resume → rebuild frontmatter from git evidence (branch, committed artifacts, PR state via `gh pr view`), keep the old file as `progress.md.corrupt-<timestamp>`, and note the rebuild in the Log.
-- `.release-loop/` (briefs/, reports/, reviews/, evidence/, progress.md) is local working state: gitignore it by default; the durable artifacts are the committed spec/plan/retro docs.
+- Corrupt/unparsable file on resume → rebuild frontmatter from git evidence (branch, committed artifacts, PR state via `gh pr view`), keep the old file as `progress.md.corrupt-<timestamp>`, and note the rebuild in the Log. A stored `feature:` that fails the `feature_slug` invariant is the same class of corruption.
+- `.release-loop/` (briefs/, reports/, reviews/, evidence/, progress.md, progress.md.corrupt-*) is local working state: gitignore it by default; the durable artifacts are the committed spec/plan/retro docs. Root-level `progress.md.corrupt-*` backups move into the same terminal archive as the rebuilt record.
 - `final_action` is additive and optional on `release-loop/v1`: absence stays valid — consumers reject unknown `schema:` versions, never unknown fields.
 - `final_action.status` has exactly three transitions: `predicted → determined` in the same edit as its Log line, when the exact command becomes knowable; `determined → predicted` on invalidation (PR closed, new commits on the branch) with the reason logged in the same edit; `determined → executed` in the same edit as the evidence Log line and `merged: true` — the two fields never disagree across a write.
-- A completed record's terminal home is `.release-loop/archive/<YYYY-MM-DD>-<feature>/`; a record already at `phase: done` with an archive-destination Log line marks an interrupted archive, so successors skip the done-flip edit and perform only the remaining moves. The procedure is idempotent: `progress.md` moves last as the commit point.
+- The `feature:` field stores one validated `feature_slug`. Consumers reject empty, uppercase, separator, dot-segment, or reserved `resume` values. They never silently normalize a stored value.
+- The canonical destination evidence is one Log line with the exact marker `archive-destination: <path>`. For interrupted reruns, that logged path is authoritative and must be reused without recalculating a collision suffix.
+- A completed record's terminal home is `.release-loop/archive/<YYYY-MM-DD>-<feature_slug>/`. A record qualifies as a completed archive candidate only when `feature:` exactly matches the validated selector, `phase: done`, `phase_status: complete`, and the canonical `archive-destination: <path>` Log line names that record's containing archive directory. One qualifying record reports completion. Zero qualifying records trigger reconstruction. Several qualifying records are ambiguous and stop the loop. Legacy records without valid destination evidence do not qualify and therefore reconstruct.
+- Move remaining working directories first, then any root-level `progress.md.corrupt-*` backups, then `progress.md` last as the commit point. A live record already at `phase: done` with `phase_status: complete` and one canonical destination path inside `.release-loop/archive/` marks an interrupted archive. Successors reuse that logged destination and perform only the remaining moves.
 - **The `final_action` record is preparation evidence, never approval**: possession of the command is not authorization to run it. Approval evidence lives only in `ship_approved`. `enforces: P7`
