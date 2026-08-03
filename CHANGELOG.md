@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.10.0] - 2026-08-03
+
+### Added
+- Release-loop completion now archives the progress record and working artifacts after Retro, then reports the exact archive path.
+
+### Changed
+- Loop start and resume now reuse one persisted archive destination and distinguish completed, incomplete, corrupt, and ambiguous records.
+
+### Fixed
+- Prevented feature-derived path escape, collision-suffix drift on rerun, incomplete archive matches, stranded corruption backups, and stale archive verification.
+
 ## [0.9.0] - 2026-08-01
 
 ### Added
