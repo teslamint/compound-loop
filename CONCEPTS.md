@@ -41,6 +41,7 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Final-action record** — the durable record naming a workflow's single irreversible/final action: its kind, a closed status (predicted, determined, executed), and the exact command once determined. Preparation evidence only — possession of the command is never permission to run it.
 - **Prepare-before-gate** — the invariant that the exact command packet of a gated irreversible action is persisted durably before the gate resolves, whether the gate blocks on a human question or evaluates automatic conditions; disk never trails the conversation.
 - **Non-authorization marker** — the explicit statement carried by every persisted command packet that it is preparation evidence, never approval; the file-shaped counterpart of "gate approval is not execution authorization".
+- **Loop archive** — the terminal archive of a finished release loop's local working state. It preserves the loop's final durable record in its archive home so completion is read from files rather than conversation memory.
 
 ## Completion evidence
 

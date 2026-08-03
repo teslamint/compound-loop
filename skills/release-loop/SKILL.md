@@ -1,6 +1,6 @@
 ---
 name: release-loop
-description: "Drive a feature from idea to merged PR to retrospective through six phases: Design, Plan, Implement, Review, Ship, Retro. Each phase invokes a standalone compound-loop skill; this skill only sequences, gates, and persists state. Use via /release-loop <feature> (Claude Code) or $release-loop <feature> (Codex); append resume to continue an interrupted loop."
+description: "Drive a feature from idea to merged PR to retrospective through six phases: Design, Plan, Implement, Review, Ship, Retro. Each phase invokes a standalone compound-loop skill; this skill only sequences, gates, and persists state. Use via /release-loop <feature> (Claude Code) or $release-loop <feature> (Codex). Bare resume continues a live record; use <feature> resume when no live record exists."
 ---
 
 # Release Loop
@@ -32,18 +32,33 @@ Ship without Retro is an incomplete release: after merge, the loop always enters
 
 ## Starting a new loop
 
-1. Parse flags; validate `--skip-*` prerequisites (above).
+1. Parse flags; validate `--skip-*` prerequisites (above). Before any feature-derived lookup or mutation, define one `feature_slug` from explicit feature input. Accept only `^[a-z0-9]+(?:-[a-z0-9]+)*$`, reject the reserved standalone token `resume`, never silently normalize invalid input, ask an interactive caller for a replacement, and return blocked context for an unattended caller. Reuse the exact `feature_slug` for `feature:`, the branch suffix, the archive suffix, and any archived-resume lookup.
 2. Detect base branch: `git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||' || echo main`
-3. If `.release-loop/progress.md` exists, stop and ask: resume it or archive it. Never silently overwrite a live loop.
+3. If `.release-loop/progress.md` exists, stop and ask: resume it or archive it. An `archive it` answer runs the `## Completing and archiving` section's Archive procedure. That procedure selects its evidence-based done-flip or archived-incomplete path. Never silently overwrite a live loop.
 4. Create a feature branch from HEAD (via `worktree-isolation` when isolation is wanted), unless `--skip-*` resumes an existing branch.
 5. Write initial `references/progress-schema.md`-conformant state, including `final_action` (`kind: merge-to-base`, `status: predicted`) with a Log line declaring it.
 6. Enter the first applicable phase.
 
 ## Resuming (`resume` argument)
 
-1. Read `.release-loop/progress.md`; reject unknown `schema:` versions rather than guessing.
-2. Verify the recorded branch exists and is checked out; verify recorded artifact pointers (spec/plan paths) still exist. On mismatch, corruption, **or a progress.md that is absent entirely** (a predecessor died before writing one — treat identically), rebuild state from git evidence — **the progress file and `git log` always outrank conversation memory**. `enforces: P8` A `determined` `final_action` is likewise verified against live state (PR open, head unchanged) before being trusted; a failed check flips it to `predicted` with the reason logged. The resume report includes one line stating the record's status and, when `determined`, its command.
-3. Resume at the recorded phase and unit.
+1. If `.release-loop/progress.md` exists, read it and reject unknown `schema:` versions rather than guessing.
+2. If `.release-loop/progress.md` is absent, require an explicit feature selector before any archive lookup. Accept `$release-loop <feature> resume` as that selector only after it validates to `feature_slug`. Bare `resume` asks one blocking question for the feature when no live record exists, then waits; in unattended mode, return blocked context instead. Do not search `.release-loop/archive/`, inspect branch names, or infer another selector before the user supplies that value. Search completed archives for candidates that satisfy all of these conditions: exact `feature:` match to the validated selector, `phase: done`, `phase_status: complete`, and a valid `archive-destination: <path>` Log entry that names the candidate's containing archive directory. One candidate reports completion and its archive path. Zero candidates enter git-evidence reconstruction. Several candidates stop as ambiguous. Legacy records without valid destination evidence do not qualify and therefore enter reconstruction.
+3. If `.release-loop/progress.md` exists, verify the recorded branch is checked out, its stored `feature:` still validates as `feature_slug`, and its artifact pointers still exist before any archive lookup or move. Treat an invalid stored slug as corrupt state. On mismatch or corruption, rebuild state from git evidence.
+4. After any reconstruction, finish through the `## Completing and archiving` section's Archive procedure when evidence proves completion. Otherwise, resume the reconstructed phase and unit. **The progress file and `git log` always outrank conversation memory.** `enforces: P8`
+5. Verify any `determined` `final_action` against live PR and head state before trusting it. A failed check flips it to `predicted` and logs the reason. The resume report states the record status and includes the command when `determined`.
+6. Resume at the recorded or reconstructed phase and unit.
+
+## Completing and archiving
+
+A **Loop archive** moves a loop's local working state to its terminal home. Run this procedure after Retro's exit condition holds (`retro` committed). `enforces: P8`
+
+### Archive procedure
+
+1. Determine completion from the `retro:` pointer or a retro commit found through `git log`, never conversation memory. Validate the stored `feature:` as `feature_slug` before any archive lookup or move; invalid stored state is corruption. A live record already at `phase: done` with `phase_status: complete` and one valid `archive-destination: <path>` Log line marks an interrupted archive when that path stays inside `.release-loop/archive/`. Read that logged destination as authoritative, skip step 2, and do not calculate another collision suffix. Legacy done records without valid destination evidence do not qualify for this fast path and must reconstruct instead.
+2. On the first archive attempt, choose `.release-loop/archive/<YYYY-MM-DD>-<feature_slug>/`, appending `-2`, `-3`, and so on when needed. Use the fresh UTC completion date for normal completion, the retro commit date for reconstruction, or the archiving date for incomplete work. Persist the collision-resolved destination before any move with the canonical Log marker `archive-destination: <path>`. For completed work, atomically set `phase: done`, set `phase_status: complete`, refresh `updated`, and log the retro commit SHA plus that exact destination. Add a reconstruction Log line when a successor established completion. For incomplete work archived at the user's direction, log `archived-incomplete` and the destination without changing phase fields.
+3. Move remaining contents from `briefs/`, `reports/`, `reviews/`, and `evidence/` into the destination first. Move every root-level `progress.md.corrupt-*` backup into the same destination before the live `progress.md`. On an interrupted rerun, reuse the logged destination and move only the paths that remain in working state. Move `progress.md` last as the commit point.
+
+After Retro's exit condition holds (`retro` committed), run the Archive procedure before reporting the loop done. Retain the exact returned `archive_path` through completion verification. Before reporting done, verify that the live `.release-loop/progress.md` is absent and that this exact path proves the current `feature_slug`, `phase: done`, `phase_status: complete`, `retro:` pointer, retro commit SHA, and `archive-destination` evidence. The completion report names that verified archive path.
 
 ## Gate handling
 
@@ -75,3 +90,4 @@ Silence is the default failure mode of a long-running dispatched worker — a de
 | Trust conversation memory on resume | Trust progress.md + git log |
 | Silently overwrite an existing progress.md | Ask: resume or archive |
 | Stop after merge | Retro completes the release |
+| Report the loop done with a live progress.md | Run the Archive procedure; the completion report names the archive path |
