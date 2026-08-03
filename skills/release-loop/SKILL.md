@@ -45,6 +45,18 @@ Ship without Retro is an incomplete release: after merge, the loop always enters
 2. Verify the recorded branch exists and is checked out; verify recorded artifact pointers (spec/plan paths) still exist. On mismatch, corruption, **or a progress.md that is absent entirely** (a predecessor died before writing one — treat identically), rebuild state from git evidence — **the progress file and `git log` always outrank conversation memory**. `enforces: P8` A `determined` `final_action` is likewise verified against live state (PR open, head unchanged) before being trusted; a failed check flips it to `predicted` with the reason logged. The resume report includes one line stating the record's status and, when `determined`, its command.
 3. Resume at the recorded phase and unit.
 
+## Completing and archiving
+
+A **Loop archive** moves a loop's local working state to its terminal home. Run this procedure after Retro's exit condition holds (`retro` committed). `enforces: P8`
+
+### Archive procedure
+
+1. Determine completion from the `retro:` pointer or a retro commit found through `git log`, never conversation memory. A record already at `phase: done` with an archive-destination Log line marks an interrupted archive; skip step 2.
+2. Choose `.release-loop/archive/<YYYY-MM-DD>-<feature>/`, appending `-2`, `-3`, and so on when needed. Use the fresh UTC completion date for normal completion, the retro commit date for reconstruction, or the archiving date for incomplete work. For completed work, atomically set `phase: done`, set `phase_status: complete`, refresh `updated`, and log the retro commit SHA and destination. Add a reconstruction Log line when a successor established completion. For incomplete work archived at the user's direction, log `archived-incomplete` and the destination without changing phase fields.
+3. Move remaining contents from `briefs/`, `reports/`, `reviews/`, and `evidence/` into the destination first. Move `progress.md` last as the commit point. This order makes the procedure idempotent after interruption and leaves the next loop's working directories empty.
+
+After Retro's exit condition holds (`retro` committed), run the Archive procedure before reporting the loop done. The completion report names the archive path.
+
 ## Gate handling
 
 - USER gates use the harness's blocking question tool per `references/question-tools.md` (plugin root). Record the approval in progress.md (`approved_by: user`, timestamp) — this is the evidence `--skip-design` later relies on.
@@ -75,3 +87,4 @@ Silence is the default failure mode of a long-running dispatched worker — a de
 | Trust conversation memory on resume | Trust progress.md + git log |
 | Silently overwrite an existing progress.md | Ask: resume or archive |
 | Stop after merge | Retro completes the release |
+| Report the loop done with a live progress.md | Run the Archive procedure; the completion report names the archive path |
