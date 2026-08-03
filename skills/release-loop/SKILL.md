@@ -34,7 +34,7 @@ Ship without Retro is an incomplete release: after merge, the loop always enters
 
 1. Parse flags; validate `--skip-*` prerequisites (above).
 2. Detect base branch: `git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||' || echo main`
-3. If `.release-loop/progress.md` exists, stop and ask: resume it or archive it. Never silently overwrite a live loop.
+3. If `.release-loop/progress.md` exists, stop and ask: resume it or archive it. An `archive it` answer runs the `## Completing and archiving` section's Archive procedure. That procedure selects its evidence-based done-flip or archived-incomplete path. Never silently overwrite a live loop.
 4. Create a feature branch from HEAD (via `worktree-isolation` when isolation is wanted), unless `--skip-*` resumes an existing branch.
 5. Write initial `references/progress-schema.md`-conformant state, including `final_action` (`kind: merge-to-base`, `status: predicted`) with a Log line declaring it.
 6. Enter the first applicable phase.
@@ -42,7 +42,7 @@ Ship without Retro is an incomplete release: after merge, the loop always enters
 ## Resuming (`resume` argument)
 
 1. Read `.release-loop/progress.md`; reject unknown `schema:` versions rather than guessing.
-2. Verify the recorded branch exists and is checked out; verify recorded artifact pointers (spec/plan paths) still exist. On mismatch, corruption, **or a progress.md that is absent entirely** (a predecessor died before writing one — treat identically), rebuild state from git evidence — **the progress file and `git log` always outrank conversation memory**. `enforces: P8` A `determined` `final_action` is likewise verified against live state (PR open, head unchanged) before being trusted; a failed check flips it to `predicted` with the reason logged. The resume report includes one line stating the record's status and, when `determined`, its command.
+2. Verify the recorded branch is checked out and its artifact pointers still exist. On mismatch or corruption, rebuild state from git evidence. **The progress file and `git log` always outrank conversation memory.** `enforces: P8` If `progress.md` is absent, first search `.release-loop/archive/` for a completed record with the requested `feature:`. When found, report the completed loop and its archive path instead of resuming. When no match exists, reconstruct the predecessor's state from git evidence. If reconstruction proves completion, finish through the `## Completing and archiving` section's Archive procedure; otherwise resume the reconstructed phase and unit. Verify any `determined` `final_action` against live PR and head state before trusting it. A failed check flips it to `predicted` and logs the reason. The resume report states the record status and includes the command when `determined`.
 3. Resume at the recorded phase and unit.
 
 ## Completing and archiving
