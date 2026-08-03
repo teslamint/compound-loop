@@ -1,6 +1,6 @@
 ---
 name: release-loop
-description: "Drive a feature from idea to merged PR to retrospective through six phases: Design, Plan, Implement, Review, Ship, Retro. Each phase invokes a standalone compound-loop skill; this skill only sequences, gates, and persists state. Use via /release-loop <feature> (Claude Code) or $release-loop <feature> (Codex); append resume to continue an interrupted loop."
+description: "Drive a feature from idea to merged PR to retrospective through six phases: Design, Plan, Implement, Review, Ship, Retro. Each phase invokes a standalone compound-loop skill; this skill only sequences, gates, and persists state. Use via /release-loop <feature> (Claude Code) or $release-loop <feature> (Codex). Bare resume continues a live record; use <feature> resume when no live record exists."
 ---
 
 # Release Loop
@@ -41,9 +41,10 @@ Ship without Retro is an incomplete release: after merge, the loop always enters
 
 ## Resuming (`resume` argument)
 
-1. Read `.release-loop/progress.md`; reject unknown `schema:` versions rather than guessing.
-2. Verify the recorded branch is checked out and its artifact pointers still exist. On mismatch or corruption, rebuild state from git evidence. **The progress file and `git log` always outrank conversation memory.** `enforces: P8` If `progress.md` is absent, first search `.release-loop/archive/` for a completed record with the requested `feature:`. When found, report the completed loop and its archive path instead of resuming. When no match exists, reconstruct the predecessor's state from git evidence. If reconstruction proves completion, finish through the `## Completing and archiving` section's Archive procedure; otherwise resume the reconstructed phase and unit. Verify any `determined` `final_action` against live PR and head state before trusting it. A failed check flips it to `predicted` and logs the reason. The resume report states the record status and includes the command when `determined`.
-3. Resume at the recorded phase and unit.
+1. If `.release-loop/progress.md` exists, read it and reject unknown `schema:` versions rather than guessing.
+2. If `.release-loop/progress.md` is absent, require an explicit feature selector before any archive lookup. Accept `$release-loop <feature> resume` as that selector. Bare `resume` asks one blocking question for the feature when no live record exists, then waits; do not search `.release-loop/archive/`, inspect branch names, or infer another selector before the user supplies that value. Search completed archives for an exact `feature:` match. When found, report the completed loop and its archive path instead of resuming. When no match exists, reconstruct the predecessor's state from git evidence. If reconstruction proves completion, finish through the `## Completing and archiving` section's Archive procedure; otherwise resume the reconstructed phase and unit.
+3. If `.release-loop/progress.md` exists, verify the recorded branch is checked out and its artifact pointers still exist. On mismatch or corruption, rebuild state from git evidence. If reconstruction proves completion, finish through the `## Completing and archiving` section's Archive procedure; otherwise resume the reconstructed phase and unit. **The progress file and `git log` always outrank conversation memory.** `enforces: P8` Verify any `determined` `final_action` against live PR and head state before trusting it. A failed check flips it to `predicted` and logs the reason. The resume report states the record status and includes the command when `determined`.
+4. Resume at the recorded or reconstructed phase and unit.
 
 ## Completing and archiving
 
