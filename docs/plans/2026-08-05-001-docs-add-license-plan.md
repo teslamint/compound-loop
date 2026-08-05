@@ -2,11 +2,12 @@
 schema: plan/v1
 title: Add MIT LICENSE file
 type: docs
-status: approved
+status: done
 date: 2026-08-05
 execution: non-code
 origin: docs/specs/2026-08-05-add-license-design.md
 body_seal: 17ea723f8133e21e0918e48fecf184dfcf0f9fe9b1f479ec73dd5fcbe89ae302
+completed_by: 6bb58cbe9792ea7a98a338d813b68b689dae1e45
 ---
 
 ## Goal
