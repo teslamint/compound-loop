@@ -2,10 +2,11 @@
 schema: plan/v1
 title: Default worktree isolation for release-loop
 type: feat
-status: draft
+status: approved
 date: 2026-08-05
 execution: code
 origin: docs/specs/2026-08-05-default-worktree-isolation-design.md
+body_seal: b333f207b8842bc5b664e9610db87326aebac5a2a1b524e026f73fc967908a66
 ---
 
 # Default Worktree Isolation Plan
