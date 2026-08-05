@@ -35,7 +35,7 @@ Ship without Retro is an incomplete release: after merge, the loop always enters
 1. Parse flags; validate `--skip-*` prerequisites (above). Before any feature-derived lookup or mutation, define one `feature_slug` from explicit feature input. Accept only `^[a-z0-9]+(?:-[a-z0-9]+)*$`, reject the reserved standalone token `resume`, never silently normalize invalid input, ask an interactive caller for a replacement, and return blocked context for an unattended caller. Reuse the exact `feature_slug` for `feature:`, the branch suffix, the archive suffix, and any archived-resume lookup.
 2. Detect base branch: `git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||' || echo main`
 3. If `.release-loop/progress.md` exists, stop and ask: resume it or archive it. An `archive it` answer runs the `## Completing and archiving` section's Archive procedure. That procedure selects its evidence-based done-flip or archived-incomplete path. Never silently overwrite a live loop.
-4. Create a feature branch from HEAD (via `worktree-isolation` when isolation is wanted), unless `--skip-*` resumes an existing branch.
+4. Create a feature branch from HEAD via `worktree-isolation` by default. Honor an explicit user request to work in the current checkout instead. Treat an explicit request not to create a new worktree as the same exception. Do not create a new branch or worktree when `--skip-*` resumes an existing branch.
 5. Write initial `references/progress-schema.md`-conformant state, including `final_action` (`kind: merge-to-base`, `status: predicted`) with a Log line declaring it.
 6. Enter the first applicable phase.
 
