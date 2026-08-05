@@ -1,6 +1,6 @@
 ---
 title: Default Worktree Isolation
-status: draft
+status: approved
 date: 2026-08-05
 schema: spec/v1
 ---
