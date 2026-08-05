@@ -1,7 +1,7 @@
 ---
 module: release-loop
 date: "2026-08-03"
-last_updated: "2026-08-03"
+last_updated: "2026-08-05"
 problem_type: workflow_issue
 component: loop-archive
 severity: medium
@@ -10,10 +10,12 @@ applies_when:
   - "a resume or retry path must preserve one durable destination across interrupted moves"
   - "planning is deciding whether a mutation or failure-state matrix is required"
   - "completion must be verified against the exact current artifact path, not a glob or recency rule"
+  - "workspace cleanup can delete the checkout that owns live lifecycle state before the next phase consumes it"
 related_components:
   - planning
   - reviewing
   - retrospective
+  - shipping
 tags:
   - release-loop
   - workflow-contract
@@ -22,6 +24,7 @@ tags:
   - idempotency
   - persisted-identity
   - archive-integrity
+  - state-handoff
 ---
 
 ## Context
@@ -52,6 +55,7 @@ Do not classify it only by the edited file type.
 5. Define explicit predicates for completed, incomplete, corrupt, and ambiguous records.
 6. Verify the exact artifact produced by the current run.
 7. Record review-introduced observable branches in a committed deviation addendum.
+8. Transfer live lifecycle state before deleting the workspace that owns it.
 
 For archive workflows, persist the collision-resolved destination before any move.
 Treat that destination as authoritative on every rerun.
@@ -126,3 +130,17 @@ The live `.release-loop/progress.md` is absent.
 
 Assign criteria that fire after Retro to this completion gate.
 Do not mark them complete from an earlier retrospective measurement pass.
+
+### Transfer state before workspace cleanup
+
+PR #4 ran from an isolated worktree.
+After merge, `shipping` needed to remove that worktree before `release-loop` entered Retro.
+The live `.release-loop/progress.md` still lived inside the worktree.
+
+The orchestrator first transferred the live loop state to the primary checkout.
+It preserved the existing archive directory.
+It then removed the worktree and deleted the feature branch.
+
+Treat workspace removal as a state handoff when later lifecycle phases need local records.
+Copy or move the durable record to its next owner before cleanup.
+Verify the new owner can resume from disk before deleting the old workspace.
