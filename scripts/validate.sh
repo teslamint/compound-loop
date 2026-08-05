@@ -724,6 +724,11 @@ print(
 )
 PY
 
+# 15. Release-loop new-work workspace policy
+if ! bash "$ROOT/scripts/test-release-loop-worktree-default.sh"; then
+  FAIL=1
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"
