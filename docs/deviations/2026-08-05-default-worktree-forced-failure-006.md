@@ -60,7 +60,7 @@ It grants no new user-consent exception.
 - Verify that the branch exists after the destination failure.
 - Verify that a blind `-b` rerun fails on the existing branch.
 - Verify that attaching the existing branch without `-b` succeeds.
-- Run an unattended disposable release loop through the Design gate.
+- Run an unattended disposable release loop up to the Design gate.
 - Verify that the unattended run creates one isolated worktree with no fallback.
 
 ## Traceability
