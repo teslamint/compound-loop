@@ -22,6 +22,7 @@ section="$(awk '
 for required in \
   'Create a feature branch from HEAD via `worktree-isolation` by default.' \
   'Honor an explicit user request to work in the current checkout instead.' \
+  'Treat an explicit request not to create a new worktree as the same exception.' \
   'Do not create a new branch or worktree when `--skip-*` resumes an existing branch.'
 do
   [[ "$section" == *"$required"* ]] || fail "required contract missing: $required"
