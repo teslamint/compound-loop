@@ -8,7 +8,7 @@ severity: medium
 applies_when:
   - "procedural skill text authorizes durable local mutation even though the implementation diff is documentation-only"
   - "a resume or retry path must preserve one durable destination across interrupted moves"
-  - "planning is deciding whether a mutation or failure-state matrix is required"
+  - "planning must make a forced-failure matrix executable and predict its partial durable state"
   - "completion must be verified against the exact current artifact path, not a glob or recency rule"
   - "workspace cleanup can delete the checkout that owns live lifecycle state before the next phase consumes it"
 related_components:
@@ -56,6 +56,12 @@ Do not classify it only by the edited file type.
 6. Verify the exact artifact produced by the current run.
 7. Record review-introduced observable branches in a committed deviation addendum.
 8. Transfer live lifecycle state before deleting the workspace that owns it.
+
+Each forced-failure outcome must name three things before plan approval:
+
+- the exact probe command or literal injected failure;
+- the partial durable state expected after failure; and
+- the owner of compensation, cleanup, or explicit manual recovery.
 
 For archive workflows, persist the collision-resolved destination before any move.
 Treat that destination as authoritative on every rerun.
@@ -144,3 +150,16 @@ It then removed the worktree and deleted the feature branch.
 Treat workspace removal as a state handoff when later lifecycle phases need local records.
 Copy or move the durable record to its next owner before cleanup.
 Verify the new owner can resume from disk before deleting the old workspace.
+
+### Make forced-failure rows executable
+
+The PR #4 plan injected a non-empty destination into `git worktree add -b`.
+It did not predict that Git would create the branch before rejecting the destination.
+The same approved evidence table stored a raw shell pipe that broke the table shape.
+
+Deviation 006 retained the orphan-branch state and its manual recovery owner.
+Deviation 007 replaced the raw pipe with separate `-e` patterns for future runs.
+
+A complete forced-failure row predicts durable leftovers before execution.
+It also stores a command that remains executable in its Markdown location.
+Name the phase or unit that owns cleanup so a failed probe cannot orphan state silently.
