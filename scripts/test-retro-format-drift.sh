@@ -277,10 +277,20 @@ cond_W3() {
 
 # W4, two paths. Zero transcript rows require both capability anchors on the
 # rounds-used line — the same absent-capability claim `self-checklist` carries.
-# A row-bearing transcript requires that no row records `self-attested`, which
-# is never a valid not-probed verdict.
+# A row-bearing transcript is the reachable-channel path, where the shipped
+# contract asks the confirming dispatch to land as a row whose Verdict cell
+# reads `accepted` (skills/retrospective/SKILL.md, warrant W4). So the path
+# requires a confirmation, not merely the absence of one bad verdict: at least
+# one row must read `accepted`, and no row may record `self-attested`. Without
+# the positive requirement a transcript whose only row is a terminal rejection
+# — `no evidenced answer (3 rejections)` — would confirm the judgment by
+# carrying no `self-attested` cell.
+#
+# `accepted` is matched as the whole trimmed cell, the bare form the template
+# publishes (schemas/retro-template.md line 71). A substring test would accept
+# a cell reading `not accepted`.
 cond_W4() {
-  local doc="$1" rows row cell
+  local doc="$1" rows row cell accepted=0
   [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
   rows="$(extract_section "$doc" "## Interview Transcript" | table_data_rows)"
   if [[ -z "$rows" ]]; then
@@ -294,7 +304,9 @@ cond_W4() {
     [[ -n "$row" ]] || continue
     cell="$(last_cell "$row" | tr '[:upper:]' '[:lower:]')"
     [[ "$cell" == *"self-attested"* ]] && return 1
+    [[ "$cell" == "accepted" ]] && accepted=1
   done <<<"$rows"
+  [[ $accepted -eq 1 ]] || return 1
   return 0
 }
 
@@ -1443,6 +1455,26 @@ case_c28() {
   return $result
 }
 
+# --- Case C29: not-probed confirmed by a terminal rejection row ---
+# Discrimination case for W4's positive requirement: a row exists and it is not
+# `self-attested`, so the two pre-existing guards both stay silent, yet the row
+# records `no evidenced answer (3 rejections)` — the dispatch reached a
+# facilitator and got no evidenced answer, which confirms nothing. The checker
+# must reject with `W4`.
+case_c29() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --rows "no evidenced answer (3 rejections)" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W4" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -1481,6 +1513,7 @@ run_case C25 case_c25
 run_case C26 case_c26
 run_case C27 case_c27
 run_case C28 case_c28
+run_case C29 case_c29
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
