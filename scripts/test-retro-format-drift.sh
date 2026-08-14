@@ -133,6 +133,15 @@ table_data_rows() {
   '
 }
 
+# The data-row count of the table under a named section heading. A missing
+# section, or a section carrying no table, counts zero.
+count_data_rows() {
+  local file="$1" heading="$2" rows
+  rows="$(extract_section "$file" "$heading" | table_data_rows)"
+  [[ -n "$rows" ]] || { printf '0\n'; return 0; }
+  grep -c . <<<"$rows"
+}
+
 # The last cell of a pipe row, trimmed.
 last_cell() {
   local row="$1"
@@ -245,8 +254,17 @@ cond_W1() {
 # W2: the Phase 4 reconciliation bullet records registered N equal to
 # accounted-for M. The degraded no-table fallback never satisfies W2, so a
 # `registered 0, accounted for 0` produced by a missing table is a failure.
+#
+# Both numbers are also checked against the tables they describe, because the
+# shipped contract defines them as row counts (skills/retrospective/SKILL.md
+# Phase 4, steps 1 and 3): N is the previous doc's registration-table row count,
+# M is this doc's carry-forward row count. Reading the bullet alone tests only
+# that the author wrote two equal numbers, which a document whose tables
+# disagree with them satisfies for free. N is checked only when a previous
+# document is readable; with none there is nothing to count, and the author's
+# figure stands.
 cond_W2() {
-  local doc="$1" line n m
+  local doc="$1" prev="${2:-}" line n m
   [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
   line="$(extract_section "$doc" "## Carry-forward from previous retro" \
     | grep -i '^- Reconciliation:' | head -n 1 | tr '[:upper:]' '[:lower:]')"
@@ -256,6 +274,10 @@ cond_W2() {
   n="${BASH_REMATCH[1]}"
   m="${BASH_REMATCH[2]}"
   [[ "$n" -eq "$m" ]] || return 1
+  [[ "$m" -eq "$(count_data_rows "$doc" "## Carry-forward from previous retro")" ]] || return 1
+  if [[ -n "$prev" && -r "$prev" ]]; then
+    [[ "$n" -eq "$(count_data_rows "$prev" "## Carry-forward items registered")" ]] || return 1
+  fi
   return 0
 }
 
@@ -321,22 +343,44 @@ cond_W4() {
 # previous document there is nothing to compare, so the condition is satisfied;
 # a previous document that carries no registration table registers nothing, so
 # any current data row fails.
+#
+# The match runs both ways, because the contract asks for a row-by-row match by
+# name (skills/retrospective/SKILL.md Phase 4, step 2) and a one-directional
+# check sees only half of a substitution. Three failures:
+#
+#   unregistered — a current row the previous document never registered;
+#   duplicate    — one name on two current rows, which fills the count a
+#                  dropped item left behind;
+#   dropped      — a registered item no current row names, the silent drop
+#                  Phase 4 calls a defect in its own right.
+#
+# The reviewer's example needs all three to be caught: previous registers `A`
+# and `B`, the current table lists `A` and `A`. Every current name is
+# registered and both counts read 2, so only the duplicate and dropped checks
+# can see that `B` disappeared.
 cond_phase4_unregistered() {
-  local doc="$1" prev="${2:-}" registered rows row name reg_names=""
+  local doc="$1" prev="${2:-}" registered rows row name reg_names="" cur_names=""
   [[ -n "$prev" && -r "$prev" ]] || return 0
   rows="$(extract_section "$doc" "## Carry-forward from previous retro" | table_data_rows)"
-  [[ -n "$rows" ]] || return 0
   registered="$(extract_section "$prev" "## Carry-forward items registered" | table_data_rows)"
   while IFS= read -r row; do
     [[ -n "$row" ]] || continue
-    reg_names+=$'\n'"$(first_cell "$row" | tr '[:upper:]' '[:lower:]')"
+    name="$(first_cell "$row" | tr '[:upper:]' '[:lower:]')"
+    [[ -n "$name" ]] || continue
+    reg_names+="$name"$'\n'
   done <<<"$registered"
   while IFS= read -r row; do
     [[ -n "$row" ]] || continue
     name="$(first_cell "$row" | tr '[:upper:]' '[:lower:]')"
     [[ -n "$name" ]] || continue
     grep -qxF -- "$name" <<<"$reg_names" || return 1
+    grep -qxF -- "$name" <<<"$cur_names" && return 1
+    cur_names+="$name"$'\n'
   done <<<"$rows"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    grep -qxF -- "$name" <<<"$cur_names" || return 1
+  done <<<"$reg_names"
   return 0
 }
 
@@ -1475,6 +1519,109 @@ case_c29() {
   return $result
 }
 
+# --- Case C30: the accounted-for figure exceeds the carry-forward table ---
+# The bullet reads `registered 2, accounted for 2` while the table it describes
+# holds one row. The two numbers agree with each other, so a bullet-only parse
+# passes; only counting M off the table sees the second item that was never
+# reconciled. The checker must reject with `W2`.
+case_c30() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --recon "registered 2, accounted for 2" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W2" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_reconciliation_bullet_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C31: the registered figure understates the previous document ---
+# The other half of the derivation: the previous retro registered two items and
+# the bullet reads `registered 1, accounted for 1`. Both numbers agree with each
+# other and with this doc's one-row table, so only counting N off the previous
+# registration table sees the understatement. `W2` precedes `phase4-unregistered`
+# in RETRO_CONDITIONS, so `W2` is the name reported even though the dropped item
+# would also fail the later condition.
+case_c31() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" "previous item" "dispatch cap"
+  write_fixture_retro_full "$dir/fixture-retro.md" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W2" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_reconciliation_bullet_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C32: the reviewer's worked example, one name filling two rows ---
+# The previous retro registers two items; the current table lists the first one
+# twice. Every current name is registered and both counts read 2, so the
+# one-directional check and the bullet parse are both satisfied while the second
+# registered item has vanished. The checker must reject with
+# `phase4-unregistered`. Two of the new guards can see this shape, so C33 and
+# C34 isolate them one at a time.
+case_c32() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" "checker grammar" "dispatch cap"
+  write_fixture_current_retro "$dir/fixture-retro.md" "registered 2, accounted for 2" \
+    "checker grammar" "checker grammar"
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase4-unregistered" || result=1
+  assert_phase4_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C33: a duplicated name with nothing dropped ---
+# Isolates the duplicate guard: both registered items appear, so no item was
+# dropped and every name is registered — the only defect is the first name
+# occupying two rows. The checker must reject with `phase4-unregistered`.
+case_c33() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" "checker grammar" "dispatch cap"
+  write_fixture_current_retro "$dir/fixture-retro.md" "registered 2, accounted for 3" \
+    "checker grammar" "checker grammar" "dispatch cap"
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase4-unregistered" || result=1
+  assert_phase4_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C34: a registered item no current row names ---
+# Isolates the dropped-item guard: the one current row is registered and unique,
+# so neither the unregistered nor the duplicate guard speaks. The second
+# registered item is simply missing — the silent drop Phase 4 calls a defect.
+# The checker must reject with `phase4-unregistered`.
+case_c34() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" "checker grammar" "dispatch cap"
+  write_fixture_current_retro "$dir/fixture-retro.md" "registered 2, accounted for 1" \
+    "checker grammar"
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase4-unregistered" || result=1
+  assert_phase4_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -1514,6 +1661,11 @@ run_case C26 case_c26
 run_case C27 case_c27
 run_case C28 case_c28
 run_case C29 case_c29
+run_case C30 case_c30
+run_case C31 case_c31
+run_case C32 case_c32
+run_case C33 case_c33
+run_case C34 case_c34
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
