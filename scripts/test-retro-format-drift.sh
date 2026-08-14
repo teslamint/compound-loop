@@ -72,27 +72,59 @@ assert_fail_naming() {
 # Conditions evaluate in RETRO_CONDITIONS order and the first failure is the
 # one reported. Adding a condition is one array entry plus one
 # cond_<name-with-underscores> function; nothing else changes.
-RETRO_CONDITIONS=(phase8-headless phase8-capability)
+# U5 appends `phase4-unregistered` last, together with its cond_ function; a
+# name without a function would make the dispatcher report that name for every
+# document.
+RETRO_CONDITIONS=(phase8-headless phase8-capability W1 W2 W3 W4)
 
 # Level values are the case-sensitivity exception: they match exactly.
 RETRO_DEGRADED_LEVELS=("in-thread (approximated independence)" "self-checklist")
+RETRO_NOTPROBED_LEVEL="not-probed (no narrative warranted)"
 
 RETRO_LEVEL=""
 RETRO_ROUNDS_LINE=""
 RETRO_DEGRADED=0
+RETRO_NOTPROBED=0
 
 retro_parse_doc() {
   local doc="$1" lvl
   RETRO_LEVEL=""
   RETRO_ROUNDS_LINE=""
   RETRO_DEGRADED=0
+  RETRO_NOTPROBED=0
   [[ -r "$doc" ]] || return 1
   RETRO_LEVEL="$(sed -n 's/^- Independence level:[[:space:]]*//p' "$doc" | head -n 1)"
   RETRO_ROUNDS_LINE="$(sed -n '/^- Rounds used:/p' "$doc" | head -n 1)"
   for lvl in "${RETRO_DEGRADED_LEVELS[@]}"; do
     [[ "$RETRO_LEVEL" == "$lvl" ]] && RETRO_DEGRADED=1
   done
+  [[ "$RETRO_LEVEL" == "$RETRO_NOTPROBED_LEVEL" ]] && RETRO_NOTPROBED=1
   return 0
+}
+
+# Data rows of a markdown table read from stdin: the pipe rows that follow the
+# `---` separator row, which drops the header-label row by construction. A
+# blank line ends the table.
+table_data_rows() {
+  awk '
+    /^\|/ {
+      if ($0 ~ /^\|[[:space:]:|-]+\|[[:space:]]*$/) { after = 1; next }
+      if (after) print
+      next
+    }
+    { after = 0 }
+  '
+}
+
+# The last cell of a pipe row, trimmed.
+last_cell() {
+  local row="$1"
+  row="${row%"${row##*[![:space:]]}"}"
+  row="${row%|}"
+  row="${row##*|}"
+  row="${row#"${row%%[![:space:]]*}"}"
+  row="${row%"${row##*[![:space:]]}"}"
+  printf '%s\n' "$row"
 }
 
 # `headless` as a token on the rounds-used line, when the level is degraded.
@@ -111,6 +143,79 @@ cond_phase8_capability() {
   line="$(tr '[:upper:]' '[:lower:]' <<<"$RETRO_ROUNDS_LINE")"
   [[ "$line" == *"no subagent primitive"* ]] || return 1
   [[ "$line" == *"no external facilitator cli"* ]] || return 1
+  return 0
+}
+
+# --- not-probed warrant conditions W1-W4 ----------------------------------
+# All four gate on the exact level `not-probed (no narrative warranted)`: they
+# are the warrant for that level alone, so any other level satisfies them
+# vacuously. An absent field fails the condition it belongs to — absence of
+# evidence never authorizes the cheapest level.
+
+# W1: no Verdict cell of the Phase 3 table reads `Partially met` or `Not met`
+# (casing of schemas/retro-template.md line 35, matched case-insensitively),
+# or the document states that no spec exists.
+cond_W1() {
+  local doc="$1" row cell
+  [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
+  grep -qi 'no spec exists' "$doc" && return 0
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    cell="$(last_cell "$row")"
+    grep -Eqi 'partially met|not met' <<<"$cell" && return 1
+  done < <(extract_section "$doc" "## Measured vs. Declared" | table_data_rows)
+  return 0
+}
+
+# W2: the Phase 4 reconciliation bullet records registered N equal to
+# accounted-for M. The degraded no-table fallback never satisfies W2, so a
+# `registered 0, accounted for 0` produced by a missing table is a failure.
+cond_W2() {
+  local doc="$1" line n m
+  [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
+  line="$(extract_section "$doc" "## Carry-forward from previous retro" \
+    | grep -i '^- Reconciliation:' | head -n 1 | tr '[:upper:]' '[:lower:]')"
+  [[ -n "$line" ]] || return 1
+  [[ "$line" == *"degraded: previous retro has no registration table"* ]] && return 1
+  [[ "$line" =~ registered\ ([0-9]+),\ accounted\ for\ ([0-9]+) ]] || return 1
+  n="${BASH_REMATCH[1]}"
+  m="${BASH_REMATCH[2]}"
+  [[ "$n" -eq "$m" ]] || return 1
+  return 0
+}
+
+# W3: the Findings section carries no entry outside the What Worked Well
+# bucket. A `### ` sub-heading opens a bucket; a list item is an entry.
+cond_W3() {
+  local doc="$1"
+  [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
+  extract_section "$doc" "## Findings" | awk '
+    /^### / { bucket = tolower($0); sub(/^###[[:space:]]*/, "", bucket); next }
+    /^[[:space:]]*[-*][[:space:]]/ { if (bucket != "what worked well") { found = 1; exit } }
+    END { exit(found ? 1 : 0) }
+  '
+}
+
+# W4, two paths. Zero transcript rows require both capability anchors on the
+# rounds-used line — the same absent-capability claim `self-checklist` carries.
+# A row-bearing transcript requires that no row records `self-attested`, which
+# is never a valid not-probed verdict.
+cond_W4() {
+  local doc="$1" rows row cell
+  [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
+  rows="$(extract_section "$doc" "## Interview Transcript" | table_data_rows)"
+  if [[ -z "$rows" ]]; then
+    local line
+    line="$(tr '[:upper:]' '[:lower:]' <<<"$RETRO_ROUNDS_LINE")"
+    [[ "$line" == *"no subagent primitive"* ]] || return 1
+    [[ "$line" == *"no external facilitator cli"* ]] || return 1
+    return 0
+  fi
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    cell="$(last_cell "$row" | tr '[:upper:]' '[:lower:]')"
+    [[ "$cell" == *"self-attested"* ]] && return 1
+  done <<<"$rows"
   return 0
 }
 
@@ -167,6 +272,95 @@ write_fixture_retro() {
 | ID | Round | Phase | Probe | Answer | Evidence | Verdict (verbatim) |
 |---|---|---|---|---|---|---|
 MD
+}
+
+# Couples the warrant conditions to the prose that owns them. Scoped to the
+# warrant section: `W1` through `W4` are short tokens that a file-wide check
+# would find elsewhere, and the coupling must break when the operative clause
+# moves or weakens.
+assert_warrant_anchors() {
+  local dir="$1" section anchor
+  section="$(extract_section "$dir/skills/retrospective/SKILL.md" "## Warrant for not-probed")"
+  if [[ -z "$section" ]]; then
+    echo "  assertion failed (warrant anchors): warrant section not found"
+    return 1
+  fi
+  for anchor in W1 W2 W3 W4; do
+    if [[ "$section" != *"$anchor"* ]]; then
+      echo "  assertion failed (warrant anchors): warrant section missing anchor: $anchor"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# A full retro fixture: Measured vs. Declared table, carry-forward section with
+# the reconciliation bullet, Findings buckets, and the Interview Transcript.
+# Defaults satisfy all four warrant conditions; each case perturbs one field,
+# which is what makes a rejection attributable to the condition it names.
+write_fixture_retro_full() {
+  local doc="$1"; shift
+  local level="not-probed (no narrative warranted)"
+  local rounds="1 (one facilitator dispatch confirmed the judgment)"
+  local measured="Met"
+  local recon="registered 1, accounted for 1"
+  local row_verdict="accepted"
+  local extra_finding=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --level) level="$2"; shift 2 ;;
+      --rounds) rounds="$2"; shift 2 ;;
+      --measured) measured="$2"; shift 2 ;;
+      --recon) recon="$2"; shift 2 ;;
+      --rows) row_verdict="$2"; shift 2 ;;
+      --extra-finding) extra_finding=1; shift ;;
+      *) echo "  harness error: unknown fixture option: $1" >&2; return 1 ;;
+    esac
+  done
+  {
+    cat <<MD
+## Measured vs. Declared
+
+| # | Declared criterion | Measurement (command / rubric) | Measured result | Verdict |
+|---|---|---|---|---|
+| 1 | the warrant gates the fifth level | scripts/test-retro-format-drift.sh | verified: seven cases | $measured |
+
+## Carry-forward from previous retro
+
+| Item | Status | Evidence |
+|---|---|---|
+| previous item | Done | commit abc1234 |
+
+- Reconciliation: $recon
+
+## Findings
+
+### What worked well
+- **What happened**: the warrant gated the fifth level
+  **Cites**: T1
+MD
+    if [[ $extra_finding -eq 1 ]]; then
+      cat <<MD
+
+### Process observations
+- **What happened**: the checker grew four conditions
+  **Cites**: T1
+MD
+    fi
+    cat <<MD
+
+## Interview Transcript
+
+- Independence level: $level
+- Rounds used: $rounds
+
+| ID | Round | Phase | Probe | Answer | Evidence | Verdict (verbatim) |
+|---|---|---|---|---|---|---|
+MD
+    if [[ "$row_verdict" != "none" ]]; then
+      printf '| T1 | 1 | 5 | probe | answer | commit abc1234 | %s |\n' "$row_verdict"
+    fi
+  } >"$doc"
 }
 
 assert_condition_name() {
@@ -554,6 +748,127 @@ case_c7() {
   return $result
 }
 
+# --- Case C8: not-probed on the dispatch path ---
+# One confirmation row with verdict `accepted`, no degraded Phase 3 verdict, an
+# agreeing reconciliation, and no finding outside What Worked Well. The
+# checker must accept.
+case_c8() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C9: not-probed claimed over a `Not met` criterion ---
+# A criterion the cycle did not meet is narrative material by definition. The
+# checker must reject with `W1`.
+case_c9() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --measured "Not met — the checker never rejected a bare claim" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C10: not-probed claimed over an unreconciled carry-forward ---
+# Four items registered, three accounted for: the missing item is exactly what
+# a probe would surface. The checker must reject with `W2`.
+case_c10() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --recon "registered 4, accounted for 3" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W2" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C12: not-probed with no dispatch and no capability claim ---
+# The load-bearing case. Zero transcript rows and a rounds-used line carrying
+# neither capability anchor is the incentive shape the fifth value risks
+# creating: nothing to probe, asserted by the party who benefits from
+# asserting it. The checker must reject with `W4`.
+case_c12() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --rows none --rounds "0 (nothing warranted probing)" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W4" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C13: not-probed on the no-channel path ---
+# Zero transcript rows, but the rounds-used line carries both capability
+# anchors — the same absent-capability claim `self-checklist` carries. The
+# checker must accept.
+case_c13() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" --rows none \
+    --rounds "0 (no subagent primitive and no external facilitator CLI reachable in this harness)" \
+    || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C14: not-probed confirmed by a self-attested row ---
+# Discrimination case: a row exists, so the zero-row path never applies, but
+# the row is the claimant's own verdict. The checker must reject with `W4`.
+case_c14() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --rows "self-attested" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W4" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C15: not-probed claimed alongside a Process Observations finding ---
+# A finding outside What Worked Well is a narrative the retro already wrote.
+# The checker must reject with `W3`.
+case_c15() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --extra-finding || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W3" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -571,6 +886,13 @@ run_case C4 case_c4
 run_case C5 case_c5
 run_case C6 case_c6
 run_case C7 case_c7
+run_case C8 case_c8
+run_case C9 case_c9
+run_case C10 case_c10
+run_case C12 case_c12
+run_case C13 case_c13
+run_case C14 case_c14
+run_case C15 case_c15
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
