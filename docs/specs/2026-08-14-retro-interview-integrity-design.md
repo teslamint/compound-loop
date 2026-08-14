@@ -1,6 +1,6 @@
 ---
 title: Retro Interview Integrity
-status: draft
+status: approved
 date: 2026-08-14
 schema: spec/v1
 ---
