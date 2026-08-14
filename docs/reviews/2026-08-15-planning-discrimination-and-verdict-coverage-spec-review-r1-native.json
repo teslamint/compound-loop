@@ -1,0 +1,106 @@
+{
+  "findings": [
+    {
+      "title": "Bind the Discrimination fixture to the step's actual comparands and record observed results",
+      "body": "P0 — invariant attack, R1. The guarantee R1 claims: a plan step whose comparison or guard cannot return both answers is refused at planning time. Constructed loophole: the defect step itself — 'compute D1=sha256(build/Model.mlmodelc), D2=sha256(src/Model.mlpackage); assert D1≠D2 to prove --optimize took effect' — plus the trace 'Discrimination fixture: pair (fixtures/x.bin, fixtures/x-changed.bin); expected: sha256(x.bin) twice → equal; vs sha256(x-changed.bin) → different.' Every written clause passes: a fixture pair and two expected results are named; same inputs compare equal; changed input compares different. The loophole clause is 'verify on a fixture that the comparison can return both answers' — nothing pins 'the comparison' to the step's actual operand kinds or producing process, so the author may read it as 'digest comparison in general' and demonstrate it on toy files while the step's real comparison (different-kind artifacts) still can never return equal. The trailing clause 'two artifacts of different kinds always differ — that comparison proves nothing about the change' is declarative rationale, not an imperative check, and is dodgeable by reading 'kind' at the comparand level (both operands are hex digests, same kind). Smallest repair: 'verify on a fixture pair of the same artifact kinds, produced by the same process, as the step's actual comparands, that the step's comparison returns both answers, and record the pair and its two observed results in the step'; optionally make the kinds clause imperative: 'a step comparing artifacts of different kinds fails this check.'",
+      "priority": 0,
+      "confidence": 0.9,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 78,
+      "line_end": 82
+    },
+    {
+      "title": "Close R2's enumeration source: the declared output set is authored by the party being checked",
+      "body": "P0 — invariant attack, R2. The guarantee R2 claims: every value a verdict-emitting unit can produce has a planned next step or a Deferred entry. Constructed loophole: spec enumerates hypotheses {H1,H2,H3}; the plan writes 'U2: measure the gap; declared output: verdict ∈ {H1,H2}', branches H1→U3, H2→U4, and records 'enumerated from U2's declared output set: {H1,H2}; both branched.' Every written clause passes: the enumeration came from a written source ('never from recall' satisfied), and each enumerated value has a next step. H3 — spec-enumerated and producible by the actual measurement — has no branch and no Deferred entry, which is exactly issue #12's defect. The loophole clause is 'from the emitting step's declared output set or the origin spec's own enumeration': the disjunction lets the author choose the narrower source, and the declared output set is written by the planner being checked — the exact author-controlled-input failure docs/solutions/workflow-issues/verify-against-plan-vs-attack-the-invariant.md names ('Ask where every value the check consumes comes from, and whether the party being checked controls it'). The spec's own S2 narrative silently assumes the spec arm is chosen. Smallest repair: replace the disjunction with a union or precedence — 'enumerate the possible values from the union of the emitting step's declared output set and the origin spec's own enumeration' (or: spec enumeration governs whenever one covers the verdict; the declared set alone suffices only when the spec has none).",
+      "priority": 0,
+      "confidence": 0.92,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 84,
+      "line_end": 86
+    },
+    {
+      "title": "'Expected results' cannot distinguish a run check from an unrun one, contradicting the trace's stated purpose",
+      "body": "P1 — internal contradiction feeding the R1 loophole. Architecture states 'The trace exists because the author's later reader cannot otherwise tell a run check from an unrun one', but the Interface wording requires naming the fixture pair and 'its two expected results'. Expected results are author-written predictions; an unrun check carries them just as easily as a run one, so the trace cannot serve its stated purpose. Issue #11's actual defect proves the gap: the author's expectation for the same-input run ('equal') was wrong — fresh manifest UUIDs make it compare different — and only an executed run reveals that. S1's narrative assumes the run happened; the wording only compels a prediction. Smallest fix: change 'two expected results' to 'two observed results' in both the Architecture trace sentence (line 76) and the R1 wording (line 82).",
+      "priority": 1,
+      "confidence": 0.9,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 76,
+      "line_end": 76
+    },
+    {
+      "title": "SC2's rejection of the .mlmodelc/.mlpackage case depends on a charitable referent for 'the comparison'",
+      "body": "P1 — reflexive-rejection soundness. Walking issue #11's step against the shipped R1 words: rejection follows only if 'verify on a fixture that the comparison can return both answers' is read with 'the comparison' meaning this step's comparison of these two artifacts (no fixture can make them equal → unsatisfiable → reject). Under the equally literal reading 'the comparison operator the step uses' (digest equality), a toy-file fixture demonstrates both answers and the step passes. The 'different kinds always differ' clause supports the goodwill reader but is declarative, not imperative, and names no rejection rule. So SC2's 'Pass requires reject on the first' holds only under the charitable reading — the criterion's pass depends on reader goodwill. Fix: the wording repair from the R1 P0 finding makes the rejection follow mechanically; alternatively SC2's rubric must state which referent of 'the comparison' governs.",
+      "priority": 1,
+      "confidence": 0.85,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 116,
+      "line_end": 117
+    },
+    {
+      "title": "SC3's rejection is not forced by the words: the rubric shape leaves the enumeration-source choice open",
+      "body": "P1 — reflexive-rejection soundness. Walking issue #12's shape (spec enumerates three hypotheses, two remedy branches, no Deferred entry) against the shipped R2 words: a reviewer who enumerates 'from the origin spec's own enumeration' gets three values, finds one without a next step, and rejects via 'A value with no branch is a plan gap.' A reviewer who takes the other arm of the disjunction — 'the emitting step's declared output set' — accepts whenever that set declares only the two branched values, and SC3's stated shape never pins what the emitting step declared. The rejection therefore follows from the words only when the reviewer chooses the larger source, which is goodwill, not wording. Fix: either the R2 union/precedence repair (P0 finding), or SC3's rubric must add 'the emitting unit declares only the two branched values' to the walked shape and still require rejection — which the current wording cannot deliver.",
+      "priority": 1,
+      "confidence": 0.88,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 118,
+      "line_end": 119
+    },
+    {
+      "title": "Option B's drift assertion only proves two files contain agreeing text, not the failure the recommendation cites",
+      "body": "P1 — Open Decision framing. The recommendation justifies Option B with 'Option A leaves nothing for a later reader to audit mechanically' and the ROADMAP P1 false-green warning ('an integrity mechanism whose success is \"the author says they ran it\"'). But the proposed validate.sh check 'asserting the skill prose and the schema requirement agree' can only assert textual agreement between skills/planning/SKILL.md and schemas/plan-schema.md. It detects in-repo mirror divergence — a real but different failure — and detects neither whether authors run the checks nor whether the wording can reject anything, so the false-green class is untouched. Worse, the spec's own assumptions row states no validate.sh check inspects plan body sections, so under Option B actual plans can still omit the branch table and fixture pair with nothing going red; B leaves plans exactly as mechanically unaudited as A. The one drift instance the spec documents (plugin cache vs repo at identical version 0.10.0) is outside the repo and undetectable by any validate.sh check. Fix: restate B's benefit honestly (contract-file sync only), or extend B with a check that inspects plan bodies for the conditional sections — which is a larger scope decision than the current framing admits.",
+      "priority": 1,
+      "confidence": 0.87,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 130,
+      "line_end": 134
+    },
+    {
+      "title": "The recommended Option B is covered by no Scope item and no Success Criterion",
+      "body": "P1 — internal consistency / scope. Scope/In lists only R1, R2, placement, and CHANGELOG; every Success Criterion measures the Option A deliverable (SC1 counts step 14 bullets, SC4/SC5 are unrelated invariants). If the user approves the recommended Option B at the gate, the schema hard-floor item and the new validate.sh check ship with no scope entry, no success criterion, and no red-before-green evidence obligation — the spec's recommendation exceeds the spec's own measured scope. Option B also exceeds issues #11 and #12 (both propose step 14 bullets only), which the spec acknowledges only obliquely ('Matches both issues verbatim in scope' under Option A). Fix: either add conditional Scope/In entries and criteria ('if Option B is approved: schemas/plan-schema.md gains …, validate.sh gains one check established red at …'), or scope B as a follow-up cycle and recommend A for this one.",
+      "priority": 1,
+      "confidence": 0.85,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 38,
+      "line_end": 43
+    },
+    {
+      "title": "Scope/In's placement-and-ordering item is measured by no Success Criterion",
+      "body": "P2 — scope/criteria mismatch. Scope/In declares 'Placement and ordering of both bullets inside step 14, with a stated rationale' as a deliverable, and Architecture supplies the rationale (Verdict coverage after Scenario coverage; Discrimination check last, after Command closure). SC1's measurement counts bullets and names ('grep -c') but never verifies position, so a build placing both bullets anywhere in step 14 passes every criterion while missing a declared Scope/In item. Fix: extend SC1's measurement with a position assertion (e.g. the line after the Scenario coverage bullet block matches 'Verdict coverage', and the last '- **' line in the range matches 'Discrimination check'), or drop placement from Scope/In.",
+      "priority": 2,
+      "confidence": 0.85,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 42,
+      "line_end": 42
+    },
+    {
+      "title": "SC6 gates success on a human-owned outward action that Scope/In never declares",
+      "body": "P2 — scope + known carry-forward class. SC6 requires issues #11 and #12 CLOSED with closing comments, but issue closure appears nowhere in Scope/In, and in this repo posting comments and closing issues are human-owned outward actions no skill executes. ROADMAP row 61 already tracks exactly this class ('A success criterion completed by a human action outside the pipeline has no gate that blocks the completion report — SC7 shipped half-unmet because merge did not force the question'); the spec re-introduces the shape without acknowledging the row or providing the prepare-only posture the repo uses for gated outward actions. Fix: mark SC6 as human-discharged with a prepared-comment brief as the pipeline-side deliverable, or move issue closure out of the criteria into the loop's outward-action ledger.",
+      "priority": 2,
+      "confidence": 0.8,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 124,
+      "line_end": 125
+    },
+    {
+      "title": "Verdict coverage has no answer for inconclusive or error outcomes of the measurement",
+      "body": "P2 — missing edge case. A measurement unit can fail to produce any enumerated verdict: the command errors, the data is ambiguous, or no hypothesis dominates. Neither the emitting step's declared output set nor the spec's enumeration typically contains 'inconclusive', so R2 as worded confirms coverage of the enumerated values only, and none of the existing ten checks asks the question either. A reader would reasonably expect the check named 'Verdict coverage' to ask what happens when the diagnostic resolves to nothing — which is a producible outcome of every real measurement and the one most likely to be missing a next step. Fix: one clause, e.g. 'the value set always includes the measurement failing to resolve; that value needs a next step or a Deferred entry like any other.'",
+      "priority": 2,
+      "confidence": 0.8,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 86,
+      "line_end": 86
+    },
+    {
+      "title": "Consumption-shape escapes: a catch-all next step and an unconditional-remedy plan both slip R2",
+      "body": "P2 — missing edge cases in R2's trigger and coverage clauses. (1) Catch-all consumer: 'confirm each value has a next step' is satisfied by a single generic consumer — 'U4: apply the remedy indicated by U2's verdict' — which names no value-specific action; every value 'has' the same next step. Step 13's placeholder scan may catch the vaguest phrasings, but nothing requires the next step to be value-specific. (2) Trigger escape: R2 fires only for verdicts 'consumed by a later unit'. A plan that measures which hypothesis holds and then schedules an unconditional remedy for one hypothesis has no formal consumer, so the check never fires — yet it produces precisely issue #12's observed harm (remedy work aimed at the wrong component when another verdict holds). Fix: require each enumerated value to map to a value-specific next step or Deferred entry, and add a sentence covering the measured-but-unconsumed verdict (a diagnostic whose outcome drives no unit is itself a plan gap or a deliberate Deferred).",
+      "priority": 2,
+      "confidence": 0.75,
+      "file_path": "docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md",
+      "line_start": 86,
+      "line_end": 86
+    }
+  ],
+  "overall_correctness": "incorrect",
+  "explanation": "The invariant attack succeeds against both shipped wordings: R1's fixture is unbound to the step's actual comparands (a toy-file fixture with author-written expected results passes the exact .mlmodelc/.mlpackage defect), and R2's enumeration-source disjunction lets an author-declared two-value output set shadow the spec's three-value enumeration, passing the exact issue #12 defect. Success Criteria 2 and 3 therefore reject the historical cases only under charitable readings the words do not force, and the recommended Option B is neither in scope nor measured, while its drift assertion only proves two contract files textually agree. Both P0 wording repairs are small (bind the fixture to the step's comparand kinds and producing process with observed results; enumerate from the union of declared set and spec enumeration), so the spec is close but not approvable as written.",
+  "confidence": 0.88
+}
