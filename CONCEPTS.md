@@ -68,6 +68,13 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Supersession** — retiring a plan because a successor replaces it, recorded on the predecessor with a pointer to the successor. Timed at the successor's creation, not its approval, and reachable from draft: a plan can be replaced before anyone approves it. Direction is predecessor→successor only. *Avoid: abandoned* — retirement without a successor pointer has no observed instance and no slot to explain itself.
 - **Rejection record** — an inline schema note preserving why a value was removed from (or refused entry to) a closed vocabulary, so the absence reads as a decision rather than an oversight and the value is not re-proposed uninformed.
 
+## Review independence
+
+- **Conformance review** — review that checks an artifact against the approved plan or spec that specified it. Finds drift, dataflow gaps, and contradictions between units; inherits the approved artifact's model of what could go wrong, so it cannot surface a failure mode the plan never imagined.
+- **Invariant attack** — review that states the mechanism's guarantee in its own sentence, then constructs the cheapest artifact satisfying every written check while violating that guarantee, and requires the mechanism to reject it. The complement to conformance review, not a replacement; it finds the class the plan failed to describe.
+- **Integrity mechanism** — a deliverable whose success is defined by what it refuses: a checker, gate, guard, validator, schema constraint, or audit rule. For this class the plan's model of failure is the product, which is why a conformance-only review is most expensive here.
+- **Threatened-criterion severity** — grading a finding by the success criterion it puts at risk rather than by the reachability of the code path it sits in. A hole in the mechanism a cycle exists to build is never minor, however narrow its blast radius.
+
 ## Metrics
 
 - **Changed non-test lines** — the count of modified lines (added + removed) excluding tests, generated files, and lockfiles, used as the canonical diff-size metric across all phases (e.g. lane triggers).
