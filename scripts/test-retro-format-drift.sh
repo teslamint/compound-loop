@@ -362,6 +362,30 @@ assert_measured_heading_anchor() {
   return 0
 }
 
+# Couples `cond_W2`'s literals to the template that owns the reconciliation
+# bullet (schemas/retro-template.md lines 48 and 53). W2's fixtures and W2's
+# parse share one copy of that text, so they agree with each other whatever it
+# says; only this assertion can catch the pair drifting away from the real
+# template. Scoped to the carry-forward section, and fixed-string throughout so
+# a reworded bullet cannot be satisfied by a substring of a neighbouring one.
+assert_reconciliation_bullet_anchor() {
+  local dir="$1" section
+  section="$(extract_section "$dir/schemas/retro-template.md" "## Carry-forward from previous retro")"
+  if [[ -z "$section" ]]; then
+    echo "  assertion failed (reconciliation bullet anchor): carry-forward section not found"
+    return 1
+  fi
+  if ! grep -qxF -e '- Reconciliation: registered <N>, accounted for <M>' <<<"$section"; then
+    echo "  assertion failed (reconciliation bullet anchor): template lacks the live bullet cond_W2 parses"
+    return 1
+  fi
+  if ! grep -qF -e '- Reconciliation: registered 0, accounted for 0 — degraded: previous retro has no registration table' <<<"$section"; then
+    echo "  assertion failed (reconciliation bullet anchor): template lacks the degraded string cond_W2 rejects"
+    return 1
+  fi
+  return 0
+}
+
 # A full retro fixture: the measured-criteria table under the heading
 # schemas/retro-template.md line 25 carries, carry-forward section with the
 # reconciliation bullet, Findings buckets, and the Interview Transcript.
@@ -963,6 +987,7 @@ case_c10() {
   [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
   assert_condition_name "$out" "W2" || result=1
   assert_warrant_anchors "$dir" || result=1
+  assert_reconciliation_bullet_anchor "$dir" || result=1
   rm -rf "$dir"
   return $result
 }
@@ -1166,6 +1191,7 @@ case_c21() {
   [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
   assert_condition_name "$out" "W2" || result=1
   assert_warrant_anchors "$dir" || result=1
+  assert_reconciliation_bullet_anchor "$dir" || result=1
   rm -rf "$dir"
   return $result
 }
