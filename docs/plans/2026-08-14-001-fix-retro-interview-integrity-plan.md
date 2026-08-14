@@ -26,13 +26,25 @@ Repair five defects in the interview protocol of the `retrospective` skill. The 
 
 **The checker is not a linter.** An agent executes the Phase 8 rule and the warrant at runtime. The shell checker is a second implementation. It runs against disposable fixtures only. It never reads `docs/retros/`. It proves two things: the rules discriminate, and the shipped prose still carries them. Each discrimination case therefore asserts its own clause in `skills/retrospective/SKILL.md`.
 
-**Checker grammar.** The plan fixes the detection anchors so two implementers cannot diverge. `phase8-headless` matches the token `headless` on the rounds-used line of a degraded level. `phase8-capability` requires both anchors `no subagent primitive` and `no external facilitator CLI` on that line. `W1` matches `Partially met` or `Not met` in the Verdict column of the Phase 3 table, using the exact casing of `schemas/retro-template.md` line 35. `W2` parses the reconciliation bullet defined in U5 step 8. `W3` detects any finding entry outside the What Worked Well bucket. `W4` reads the transcript table row count and the rounds-used line. `phase4-unregistered` compares item names between two tables. All matches are case-insensitive except the level values themselves.
+**Checker grammar.** The plan fixes the detection grammar so two implementers cannot diverge. Section scope always means the text from a named `## ` heading up to the next `## ` heading. A data row always means a pipe row whose first cell is neither a header label nor a `---` separator.
+
+- `phase8-headless` matches the token `headless` on the `- Rounds used:` line, when the `- Independence level:` line names a degraded level.
+- `phase8-capability` requires both anchors `no subagent primitive` and `no external facilitator CLI` on that same line.
+- `W1` reads the last cell of every data row in the `## Measured vs. Declared` section. It fails on `Partially met` or `Not met`, using the casing of `schemas/retro-template.md` line 35.
+- `W2` matches the regular expression `registered ([0-9]+), accounted for ([0-9]+)` on the reconciliation bullet. It fails when the two captures differ. It also fails when that line carries the degraded suffix.
+- `W3` reads the `## Findings` section. It treats a `### ` sub-heading as a bucket. It fails when any list item appears under a bucket other than What Worked Well.
+- `W4` counts data rows in the `## Interview Transcript` section. It reads the Verdict cell as the last cell of each data row.
+- `phase4-unregistered` reads the first cell of every data row in two sections: `## Carry-forward items registered` in the previous document, and `## Carry-forward from previous retro` in the current document.
+
+All matches are case-insensitive. The level values are the exception and match exactly.
 
 **Condition precedence.** The checker prints one condition name. It evaluates in this fixed order and reports the first failure: `phase8-headless`, `phase8-capability`, `W1`, `W2`, `W3`, `W4`, `phase4-unregistered`.
 
 **Known Pattern — disposable fixture trees.** `scripts/test-retro-format-drift.sh` builds a `mktemp -d` copy for each case. The case mutates the copy. The case runs `scripts/validate.sh` inside the copy. The case then asserts a named `FAIL:` string. Every new case follows this shape. No case mutates the real worktree.
 
-**Backtick constraint on verdict vocabulary.** Case C at lines 127-135 strips backticked `self-attested` from a copy of `skills/retrospective/SKILL.md`. It then asserts that no bare occurrence remains. Any new sentence in that file that names `self-attested` must therefore keep it backticked. U4 step 12 writes such a sentence.
+**Backtick constraint on verdict vocabulary.** Case C at lines 127-135 strips backticked `self-attested` from a copy of `skills/retrospective/SKILL.md`. It then asserts that no bare occurrence remains. Any new sentence in that file that names `self-attested` must therefore keep it backticked. U4 step 13 writes such a sentence.
+
+**Anchor assertions are section-scoped.** A discrimination case asserts its anchor inside the section that owns the rule, never anywhere in the file. C5, C6, and C7 scope to the Phase 8 section. C8 through C15 scope to the warrant section. C11 scopes to the Phase 4 section. A file-wide substring check would stay green after the operative clause moved or weakened, which is the failure the coupling exists to prevent.
 
 **The dispatch ladder is a shared file.** Twelve skill and reference files read `references/dispatch-degradation.md`. U2 rewords the tier-3 parenthetical. U2 does not delete it. A deletion would remove the only budget-based tier-3 sanction in the repository. It would also change the headless single-call collapse of `compound`. Phase 7 of `retrospective` depends on that collapse.
 
@@ -75,7 +87,8 @@ The recheck found no contradiction. The recheck found no unavailable evidence. N
 **Tracker and Ship preparation.**
 
 - Modify `ROADMAP.md`. U6 records the fired Conformance-suite trigger.
-- Create `.release-loop/briefs/issue-7-comment.md`. U6 drafts the issue #7 correction and its exact command. The file is local working state and stays uncommitted.
+- Create `.release-loop/briefs/issue-7-body.md`. U6 drafts the issue #7 correction body. `gh` posts this file verbatim, so it carries no metadata.
+- Create `.release-loop/briefs/issue-7-command.md`. U6 records the exact command and the non-authorization marker. Both files are local working state and stay uncommitted.
 
 ## Scenario coverage map
 
@@ -103,14 +116,14 @@ Interfaces:
 Test scenarios:
   happy: C4 — check 9 passes on an unmutated tree that carries five levels
   edge: C3 — check 9 fails when the case removes `in-thread (approximated independence)` from `interview-probes.md`. This proves the rule reads every level, not the last one
-  error: C1 — check 9 fails when the case removes `not-probed (no narrative warranted)` from `skills/retrospective/SKILL.md`. C2 — check 9 fails on the same removal from `interview-probes.md`. Each `FAIL:` line names the file and the missing level
+  error: C1 — check 9 fails when the case removes `not-probed (no narrative warranted)` from `skills/retrospective/SKILL.md`. C2 — check 9 fails on the same removal from `interview-probes.md`. Each `FAIL:` line names the file and the missing level. C1 and C2 are regression guards for the new value, not discriminating cases: the value does not exist before this unit, so their pre-change red is a fixture-setup artifact rather than evidence about the old validator. C3 and case H carry the discrimination for this unit
   integration: n/a — leaf unit. The scenario-walking cases belong to U3, U4, and U5
 Steps:
   1. Read case H at lines 239-256 of `scripts/test-retro-format-drift.sh`. Its mutation removes `| self-checklist` from the template copy. It asserts the string `expected 4 distinct independence levels`.
   2. Audit cases A through J for other assertions on the level count. Case I at line 272 asserts `expected 4 distinct backticked verdict forms`. This unit does not change the verdict count. Cases B and G assert no count.
   3. Change case H's assertion string to `expected 5 distinct independence levels`. Keep case H's mutation unchanged.
   4. Add cases C1, C2, C3, and C4 to `scripts/test-retro-format-drift.sh`. Follow the shape of `case_g()`, which opens at line 216 and ends at line 237.
-  5. Run `./scripts/test-retro-format-drift.sh`. Confirm four distinct red mechanisms. C1 and C2 fail at fixture setup, because `not-probed (no narrative warranted)` does not yet exist in either consumer file, so the assert-before-mutate guard trips. C3 fails its expected-FAIL assertion, because the positional rule ignores a removed non-final level and check 9 passes the mutated tree. Case H fails its assertion string, because the current validator still reports four. Record each observed line.
+  5. Run `./scripts/test-retro-format-drift.sh`. Confirm four distinct red mechanisms, and record each observed line. C1 and C2 fail at fixture setup, because `not-probed (no narrative warranted)` does not yet exist in either consumer file, so the assert-before-mutate guard trips. That is a setup artifact, so C1 and C2 prove nothing about the old validator; they guard the new value against later removal. C3 fails its expected-FAIL assertion, because the positional rule ignores a removed non-final level and check 9 passes the mutated tree. Case H fails its assertion string, because the current validator still reports four. C3 and case H are this unit's discrimination evidence.
   6. Commit: "test(retro): Add level-vocabulary cases red before check 9 changes"
   7. Append `not-probed (no narrative warranted)` to the `- Independence level:` line of `schemas/retro-template.md`. Place it last.
   8. Add the same value to the independence-level paragraph of `skills/retrospective/SKILL.md`.
@@ -164,7 +177,7 @@ Steps:
   2. Make the checker exit nonzero with `phase8-headless` when a degraded level carries the token `headless` on the rounds-used line.
   3. Make the checker exit nonzero with `phase8-capability` when a degraded level lacks either anchor `no subagent primitive` or `no external facilitator CLI` on that line. Match both anchors case-insensitively as substrings.
   4. Add cases C5, C6, and C7. Each case builds its fixture document in its own `mktemp -d` tree. Each case calls the checker. Each case asserts the exit status. Each rejecting case also asserts the printed condition name.
-  5. Add one more assertion to C5, C6, and C7. Each asserts that the case's copy of `skills/retrospective/SKILL.md` contains the three Phase 8 anchors that steps 8 through 11 write.
+  5. Add one more assertion to C5, C6, and C7. Each extracts the Phase 8 section from the case's copy of `skills/retrospective/SKILL.md`. Each then asserts that the section carries the three anchors that steps 8 through 11 write. Scope the assertion to that section, never to the whole file.
   6. Run `./scripts/test-retro-format-drift.sh`. Confirm that C5, C6, and C7 fail on the anchor assertion, because Phase 8 carries none of the three anchors yet. Record the failure lines.
   7. Commit: "test(retro): Add Phase 8 capability cases red before the clause lands"
   8. Extend the Phase 8 pre-commit check in `skills/retrospective/SKILL.md`. A degraded independence level must name the capability that was absent. Scope the requirement to `in-thread (approximated independence)` and `self-checklist`.
@@ -196,7 +209,7 @@ Steps:
   4. Add condition `W4`. It fails when the transcript holds zero data rows and the rounds-used line lacks either capability anchor. It also fails when a transcript row carries verdict `self-attested` under level `not-probed`.
   5. Order the seven conditions in the checker as the Architecture notes fix: `phase8-headless`, `phase8-capability`, `W1`, `W2`, `W3`, `W4`, `phase4-unregistered`. Report the first failure only.
   6. Add cases C8, C9, C10, C12, C13, C14, and C15. Each case builds its fixture document in its own `mktemp -d` tree. Each case asserts the exit status. Each rejecting case asserts the condition name.
-  7. Add to each of the seven cases an assertion that the case's copy of `skills/retrospective/SKILL.md` carries the four anchors `W1`, `W2`, `W3`, and `W4` that steps 10 through 14 write.
+  7. Add to each of the seven cases an assertion that extracts the warrant section from the case's copy of `skills/retrospective/SKILL.md`. Each asserts that the section carries the four anchors `W1`, `W2`, `W3`, and `W4` that steps 10 through 13 write. Scope the assertion to that section, never to the whole file.
   8. Run `./scripts/test-retro-format-drift.sh`. Confirm that all seven cases fail on the anchor assertion. Record the failure lines.
   9. Commit: "test(retro): Add not-probed warrant cases red before the warrant lands"
   10. Add the warrant to `skills/retrospective/SKILL.md` beside the independence-level paragraph. Label the four conditions `W1` through `W4`. Write W1: no Phase 3 criterion reads `Partially met` or `Not met`, or the document states that no spec exists.
@@ -228,7 +241,7 @@ Steps:
   2. Make the condition compare item names between two tables. The first is the `Carry-forward items registered` table of the previous document. The second is the `Carry-forward from previous retro` table of the current document. Compare the first cell of each data row. Strip whitespace. Match case-insensitively.
   3. Make the condition fail when a current row names an item that the previous document did not register.
   4. Add case C11. It builds both fixture documents in one `mktemp -d` tree. It asserts the exit status. It asserts the condition name.
-  5. Add to C11 an assertion that the case's copy of `skills/retrospective/SKILL.md` carries the three Phase 4 anchors that steps 9 through 12 write.
+  5. Add to C11 an assertion that extracts the Phase 4 section from the case's copy of `skills/retrospective/SKILL.md`. It asserts that the section carries the three anchors that steps 9 through 12 write. Scope the assertion to that section, never to the whole file.
   6. Run `./scripts/test-retro-format-drift.sh`. Confirm that C11 fails on the anchor assertion. Record the failure line.
   7. Commit: "test(retro): Add the carry-forward substitution case red before Phase 4 changes"
   8. Add the bullet `- Reconciliation: registered <N>, accounted for <M>` under the `## Carry-forward from previous retro` heading of `schemas/retro-template.md`. Add the degraded form beside it, which appends `— degraded: previous retro has no registration table`. Use a bullet. Never use a table row: line 543 of `scripts/validate.sh` collects every three-column pipe row in that section, so a table-row form would read as a carry-forward item in every future document that follows the template.
@@ -245,7 +258,7 @@ Acceptance: `./scripts/test-retro-format-drift.sh` exits 0. C11 rejects with `ph
 Execution note: skip-test-first
 Files:
   Modify: ROADMAP.md
-  Create: .release-loop/briefs/issue-7-comment.md
+  Create: .release-loop/briefs/issue-7-body.md, .release-loop/briefs/issue-7-command.md
 Interfaces:
   Consumes: the `Conformance suite` row of the Future candidates table in `ROADMAP.md`. Its trigger reads `First contract regression that structural validation (scripts/validate.sh) fails to catch`
   Produces: the same row marked as fired, with this cycle named as the evidence; a drafted comment body and its exact command, held as local working state for the Ship gate
@@ -260,13 +273,13 @@ Steps:
   3. Add to the same cell that the suite build stays deferred to its own cycle. The row therefore stays open. It must not read as delivered.
   4. Run `rg -n "Conformance suite.*fired" ROADMAP.md`. Confirm that it returns the row.
   5. Run `rg -n -e "Independence level: heterogeneous" -e "Independence level: same-model" -e "Independence level: in-thread" docs/retros/`. Record the seven filenames.
-  6. Write `.release-loop/briefs/issue-7-comment.md`. It holds the comment body for issue #7. The body states that the counts in the issue hold: 18 zero-round documents, 17 citing headless. The body states that the "never exercised" thesis is false. The body cites the seven filenames from step 5.
-  7. Add the exact command to the same file: `gh issue comment 7 --body-file .release-loop/briefs/issue-7-comment.md`.
-  8. Add a non-authorization marker to the same file. It states that the file is preparation evidence, never approval, and that the human posts the comment at the Ship gate.
-  9. Add a Log line to `.release-loop/progress.md`. It records the brief path and names the comment as a pending Ship-phase deliverable.
+  6. Write `.release-loop/briefs/issue-7-body.md`. It holds the comment body and nothing else. The body states that the counts in the issue hold: 18 zero-round documents, 17 citing headless. The body states that the "never exercised" thesis is false. The body cites the seven filenames from step 5. Write no command and no marker into this file. `gh` posts the whole file, so any metadata here would reach the public issue.
+  7. Write `.release-loop/briefs/issue-7-command.md`. It holds the exact command `gh issue comment 7 --body-file .release-loop/briefs/issue-7-body.md`.
+  8. Add a non-authorization marker to `.release-loop/briefs/issue-7-command.md`. It states that the file is preparation evidence, never approval.
+  9. Add a Log line to `.release-loop/progress.md`. It names both brief paths. It records the comment as a Ship-phase deliverable that no skill executes. The human runs the command at the Ship gate, and the orchestrator surfaces this line there.
   10. Run `./scripts/validate.sh`. Confirm exit 0.
-  11. Commit: "docs(roadmap): Record the fired Conformance-suite trigger". Commit `ROADMAP.md` only. The brief and the ledger are local working state and stay uncommitted.
-Acceptance: `rg -n "Conformance suite.*fired" ROADMAP.md` returns one line that names this cycle. `.release-loop/briefs/issue-7-comment.md` exists, carries the non-authorization marker, carries the `gh issue comment 7` command, and names seven retro filenames. `./scripts/validate.sh` exits 0.
+  11. Commit: "docs(roadmap): Record the fired Conformance-suite trigger". Commit `ROADMAP.md` only. Both briefs and the ledger are local working state and stay uncommitted.
+Acceptance: `rg -n "Conformance suite.*fired" ROADMAP.md` returns one line that names this cycle. `.release-loop/briefs/issue-7-body.md` exists and names seven retro filenames. `rg -c -e "gh issue comment" -e "preparation evidence" .release-loop/briefs/issue-7-body.md` returns 0, which proves the payload carries no metadata. `.release-loop/briefs/issue-7-command.md` carries the `gh issue comment 7` command and the non-authorization marker. `./scripts/validate.sh` exits 0.
 
 ## Mutation/failure-state matrix
 
@@ -274,7 +287,9 @@ No stateful ceremony in the deliverable; no mutation/failure-state matrix requir
 
 The planner recorded this recognition check deliberately. A prior cycle learned that procedural skill text can authorize a durable transition even when the tracked diff is documentation-only. The units modify skill prose, a schema template, a shared reference, two shell scripts, and a tracker row. U6 also writes one local file. No unit pushes to a remote. No unit creates a remote repository. No unit publishes to a registry. No unit creates a platform release. No unit changes repository visibility. No unit posts to an issue tracker. W4 adds one runtime behavior, a facilitator dispatch. That dispatch consumes budget. It persists no state between invocations. Every fixture mutation happens inside a disposable `mktemp -d` tree, and the owning case removes that tree.
 
-The heterogeneous review asked for a matrix, on the grounds that U6 serves an outward action. The planner declined. U6 produces a local file and a local ledger line. The human crosses the boundary at the Ship gate, and `shipping` owns that transition. Under the reviewer's reading every plan in this repository would need a matrix, because every loop ends in a push. The matrix rule targets a unit that crosses the boundary itself. This plan has none.
+The heterogeneous review asked for a matrix, on the grounds that U6 serves an outward action. The planner declined. U6 produces two local files and a local ledger line. Under the reviewer's reading every plan in this repository would need a matrix, because every loop ends in a push. The matrix rule targets a unit that crosses the boundary itself. This plan has none.
+
+No skill owns the issue-comment transition. `skills/shipping/SKILL.md` lists its outward steps as push, PR creation, thread operations, CI watch, and merge. An issue comment is not among them. The human therefore runs the prepared command at the Ship gate, and the ledger line from U6 step 9 is what surfaces it there. The plan states this rather than assigning the step to a skill that would not execute it (`enforces: P7`).
 
 ## Carry-forward trigger audit
 
