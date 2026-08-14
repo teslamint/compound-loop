@@ -11,7 +11,7 @@ The sealed plan states the W1 grammar in its Architecture notes:
 ```
 
 Plan step 1 repeats the same rule for the checker implementation.
-Both places name the section by the literal `## Measured vs. Declared`.
+Only Architecture notes line 34 carries the literal `## Measured vs. Declared`. Plan steps 1 and 10 repeat the W1 rule without naming a heading, so the divergent literal appears exactly once in the sealed plan.
 
 ## Discovered contradiction
 
@@ -81,7 +81,7 @@ Existing review and merge gates remain unchanged.
 
 - Approved specification: `docs/specs/2026-08-14-retro-interview-integrity-design.md`.
 - Approved plan: `docs/plans/2026-08-14-001-fix-retro-interview-integrity-plan.md`.
-- Divergent plan text: Architecture notes line 34, repeated at step 1 and step 10.
+- Divergent plan text: Architecture notes line 34 only. Plan steps 1 and 10 repeat the W1 rule without naming a heading.
 - Decision authority: the user, at the U4 review gate, 2026-08-14.
 - Correction precedent: `docs/deviations/2026-08-05-worktree-assumption-table-pipe-007.md`.
 - Addendum authority: `docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md`.
