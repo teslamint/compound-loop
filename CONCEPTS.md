@@ -32,7 +32,7 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 
 - **Interview transcript** — the retro doc's record of every probed exchange between facilitator and respondent, accepted and rejected alike; the only content findings may cite beyond measured data.
 - **Transcript triple** — one probed exchange: probe, answer, evidence, carrying a facilitator-authored verdict recorded verbatim.
-- **Independence level** — the closed vocabulary describing how independent a retro's facilitator was from the respondent (heterogeneous, same-model fresh-context, in-thread approximated, self-checklist, not-probed (no narrative warranted)); recorded so a reader can judge the bias-guard's strength from the doc alone. *Avoid: tool names* — the level describes independence, not mechanism.
+- **Independence level** — the closed vocabulary describing how independent a retro's facilitator was from the respondent (heterogeneous, same-model fresh-context, in-thread (approximated independence), self-checklist, not-probed (no narrative warranted)); recorded so a reader can judge the bias-guard's strength from the doc alone. *Avoid: tool names* — the level describes independence, not mechanism.
 - **Self-attested** — a verdict authored by the same agent that produced the answer, in degraded modes with no independent facilitator; never to be read as acceptance.
 - **Backward check** — the audit a retro performs on the previous cycle's retro doc while reading it, from an execution independent of the one that wrote it; catches violations one cycle late but outside the writer's own discipline.
 
