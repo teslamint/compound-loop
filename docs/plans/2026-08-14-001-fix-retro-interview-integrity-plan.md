@@ -75,7 +75,7 @@ No contradictions and no unavailable evidence. Plan finalization is not blocked;
 | S5 | U3 | `integration` in U3: C5 rejects a `mode:headless` justification (`Covers S5`) |
 | S6 | U1 → U4 | `integration` in U4: C9 rejects an unmet criterion under `not-probed` (`Covers S6`) |
 
-Every S-ID completes through a unit chain and is walked by named evidence. S1 is the one row whose evidence is a rubric rather than a test; the spec declares SC6 as a judgment rubric for the same reason.
+Every S-ID completes through a unit chain and is walked by named evidence, and every row's evidence is a runnable command. S1 is the one row whose command is a `rg` assertion rather than a fixture case, because its change is prose; the spec declares SC6 a judgment rubric for that reason, and the `rg` command is the mechanically checkable half of that rubric rather than a replacement for it.
 
 ## Implementation Units
 
