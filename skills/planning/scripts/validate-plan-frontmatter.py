@@ -9,7 +9,7 @@ Exit codes:
     1 — validation failure (diagnostics on stderr)
     2 — usage error (bad arguments, missing file)
 
-Scope: this script checks two things, both required by schemas/plan-schema.md
+Scope: this script checks three things, all required by schemas/plan-schema.md
 (the `## Status lifecycle` section) and skills/planning/SKILL.md:
 
   1. Parser-safety — frontmatter that a strict YAML parser would silently
@@ -22,8 +22,9 @@ Scope: this script checks two things, both required by schemas/plan-schema.md
      `status: done` requires non-empty `completed_by`; `status: superseded`
      requires `superseded_by` resolving to an existing file; `origin`, when
      present, resolves to an existing file. Unknown fields are always valid.
-  3. Body seal verification (new) — when a plan has a `body_seal` field,
-     verify it matches the canonical extraction and SHA-256 hash of the body.
+  3. Body seal verification — when a plan has a `body_seal` field, verify it
+     matches the canonical extraction and SHA-256 hash of the body. Guard
+     against ambiguous extraction when frontmatter contains '---' delimiters.
 
 Path resolution for `superseded_by:` / `origin:` is repo-root-relative, where
 the root is derived by ascending from the plan file's directory to the
@@ -118,25 +119,57 @@ def compute_body_seal(text: str) -> "str | None":
 
 
 def check_delimiter_alignment(text: str) -> "str | None":
-    """Guard: reject closing delimiter lines that are not exactly '---'
-    (e.g., trailing whitespace, CRLF). This prevents ambiguous extraction."""
+    """Guard: verify that the substring-split '---' delimiter positions match
+    the line-based frontmatter parsing. If a frontmatter value contains '---'
+    (ambiguous delimiter), this detects it and returns an error message.
+    Otherwise returns None (no error).
+    
+    The check compares byte offsets: the second '---' from substring-split
+    should align with the closing delimiter line found by line-based parsing.
+    """
     lines = text.split("\n")
     if not lines or lines[0].rstrip() != "---":
         return None  # Opening delimiter checked elsewhere
     
-    # Find closing delimiter
+    # Find the closing delimiter line using line-based parsing
+    closing_line_idx = None
     for i in range(1, len(lines)):
         if lines[i].rstrip() == "---":
-            closing_line = lines[i]
-            # Check it's exactly '---' (no trailing space/tab)
-            if closing_line != "---":
-                return (
-                    "Closing frontmatter delimiter has trailing whitespace. "
-                    "Ensure the closing `---` is exactly that, with no spaces or tabs after it."
-                )
-            return None  # OK
+            closing_line_idx = i
+            break
     
-    return None  # Closing delimiter not found; existing check will catch this
+    if closing_line_idx is None:
+        return None  # Existing extractor will catch this
+    
+    # Calculate byte offset of the closing line start
+    # (sum of lengths of all lines before it + newline chars between them)
+    expected_closing_byte_offset = sum(len(lines[i]) + 1 for i in range(closing_line_idx))
+    
+    # Find where the substring-split would find the second '---'
+    # Start searching after the first '---' (position 3: len("---") = 3)
+    second_delim_pos = text.find("---", 3)
+    
+    if second_delim_pos == -1:
+        return None  # No second '---' found; existing check will catch this
+    
+    # They should match (within the bounds of the closing line)
+    # Tolerance: allow the position to be anywhere within the closing line
+    closing_line_end = expected_closing_byte_offset + len(lines[closing_line_idx])
+    
+    if not (expected_closing_byte_offset <= second_delim_pos < closing_line_end):
+        return (
+            "Frontmatter contains '---' delimiters inside a value, ambiguously delimiting the body. "
+            "Rewrite the value to remove or escape the '---' delimiters."
+        )
+    
+    # Also check that the closing line is exactly '---' (no trailing whitespace)
+    if lines[closing_line_idx] != "---":
+        return (
+            "Closing frontmatter delimiter has trailing whitespace. "
+            "Ensure the closing `---` is exactly that, with no trailing spaces, tabs, or CRLF."
+        )
+    
+    return None
 
 
 def check_parser_safety(fm_lines: list[str]) -> list[str]:
