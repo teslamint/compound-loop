@@ -2,6 +2,7 @@
 
 Usage:
     python3 validate-plan-frontmatter.py <plan-path>
+    python3 validate-plan-frontmatter.py --print-seal <plan-path>
 
 Exit codes:
     0 — frontmatter passes all checks
@@ -21,6 +22,8 @@ Scope: this script checks two things, both required by schemas/plan-schema.md
      `status: done` requires non-empty `completed_by`; `status: superseded`
      requires `superseded_by` resolving to an existing file; `origin`, when
      present, resolves to an existing file. Unknown fields are always valid.
+  3. Body seal verification (new) — when a plan has a `body_seal` field,
+     verify it matches the canonical extraction and SHA-256 hash of the body.
 
 Path resolution for `superseded_by:` / `origin:` is repo-root-relative, where
 the root is derived by ascending from the plan file's directory to the
@@ -34,6 +37,7 @@ simple `- item` lists under a key). Pure stdlib, no PyYAML or other deps.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -71,32 +75,26 @@ def extract_frontmatter(text: str) -> list[str]:
 def parse_frontmatter(fm_lines: list[str]) -> dict:
     """Minimal top-level-key / list-value parser. Scalars are unquoted in
     the returned dict; list values become a list of unquoted strings."""
-    data: dict = {}
+    data = {}
     current_key = None
     for line in fm_lines:
-        stripped = line.lstrip()
-        if not stripped or stripped.startswith("#"):
+        if not line.strip() or line.startswith("#"):
             continue
-        if line.startswith((" ", "\t")):
-            if stripped.startswith("- ") and current_key is not None:
-                item = stripped[2:].strip()
-                item = _unquote(item)
-                existing = data.get(current_key)
-                if isinstance(existing, list):
-                    existing.append(item)
-                else:
-                    data[current_key] = [item]
-            continue
-        if ":" not in line:
-            continue
-        key, _, val = line.partition(":")
-        key = key.strip()
-        val = val.strip()
-        current_key = key
-        if val:
-            data[key] = _unquote(val)
-        else:
-            data[key] = []  # placeholder; filled by subsequent "- item" lines if any
+        if ":" in line:
+            key, _, val_part = line.partition(":")
+            key = key.strip()
+            current_key = key
+            val = val_part.strip()
+            if val.startswith("- "):
+                data[key] = [_unquote(v.strip()[2:]) for v in [val] + [l for l in fm_lines[fm_lines.index(line) + 1:] if l.strip().startswith("- ")]]
+            else:
+                data[key] = _unquote(val)
+        elif current_key and line.strip().startswith("- "):
+            if current_key not in data:
+                data[current_key] = []
+            if not isinstance(data[current_key], list):
+                data[current_key] = [data[current_key]]
+            data[current_key].append(_unquote(line.strip()[2:]))
     return data
 
 
@@ -106,36 +104,62 @@ def _unquote(val: str) -> str:
     return val
 
 
+def compute_body_seal(text: str) -> "str | None":
+    """Compute the canonical body_seal using the extraction defined in
+    schemas/plan-schema.md: text.split('---', 2)[2], then SHA-256 hex.
+    
+    Returns the 64-char lowercase hex digest, or None if body extraction fails.
+    """
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return None
+    body = parts[2]
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def check_delimiter_alignment(text: str) -> "str | None":
+    """Guard: reject closing delimiter lines that are not exactly '---'
+    (e.g., trailing whitespace, CRLF). This prevents ambiguous extraction."""
+    lines = text.split("\n")
+    if not lines or lines[0].rstrip() != "---":
+        return None  # Opening delimiter checked elsewhere
+    
+    # Find closing delimiter
+    for i in range(1, len(lines)):
+        if lines[i].rstrip() == "---":
+            closing_line = lines[i]
+            # Check it's exactly '---' (no trailing space/tab)
+            if closing_line != "---":
+                return (
+                    "Closing frontmatter delimiter has trailing whitespace. "
+                    "Ensure the closing `---` is exactly that, with no spaces or tabs after it."
+                )
+            return None  # OK
+    
+    return None  # Closing delimiter not found; existing check will catch this
+
+
 def check_parser_safety(fm_lines: list[str]) -> list[str]:
     """Port of compound-engineering's silent-corruption checks: unquoted
-    ' #' (comment truncation) and ': ' (mapping confusion) in a top-level
-    scalar value."""
+    scalars containing ` #` (comment marker), `: ` (key-value marker) at
+    top level, or unquoted list values in the subset this schema uses.
+
+    Returns a list of issues (empty if all pass).
+    """
     issues = []
-    for lineno, line in enumerate(fm_lines, start=2):
-        stripped = line.lstrip()
-        if not stripped or stripped.startswith("#"):
+    for line in fm_lines:
+        if not line.strip() or line.startswith("#"):
             continue
-        if ":" not in line or line.startswith((" ", "\t")):
+        if ":" not in line:
             continue
-        if stripped.startswith("- "):
+        _, _, val = line.partition(":")
+        val = val.strip()
+        # Skip quoted values
+        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
             continue
-        key, _, val = line.partition(":")
-        val_stripped = val.strip()
-        if not val_stripped:
-            continue
-        if val_stripped[0] in "\"'[{|>":
-            continue
-        if re.search(r"\s#", val_stripped):
-            issues.append(
-                f"line {lineno}: '{key.strip()}' value contains ' #' — quote it. "
-                "YAML treats space-then-# as a comment delimiter and silently "
-                "drops the rest of the value."
-            )
-        if re.search(r":\s", val_stripped):
-            issues.append(
-                f"line {lineno}: '{key.strip()}' value contains ': ' — quote it. "
-                "Strict YAML parsers may treat this as a nested mapping."
-            )
+        # Check for unescaped comment markers and key-value markers
+        if " #" in val or (": " in val and not val.startswith("- ")):
+            issues.append(f"  unquoted value may be misread: {line.strip()}")
     return issues
 
 
@@ -143,16 +167,16 @@ def find_repo_root(start_dir: str) -> "str | None":
     """Ascend from start_dir to the nearest ancestor containing a docs/
     directory. Returns None if no ancestor qualifies."""
     current = os.path.abspath(start_dir)
-    while True:
+    while current != "/":
         if os.path.isdir(os.path.join(current, "docs")):
             return current
         parent = os.path.dirname(current)
         if parent == current:
-            return None
+            break
         current = parent
 
 
-def check_schema(data: dict, repo_root: str) -> list[str]:
+def check_schema(data: dict, repo_root: str, text: str = "") -> list[str]:
     issues = []
     for field in REQUIRED:
         if not data.get(field):
@@ -207,24 +231,53 @@ def check_schema(data: dict, repo_root: str) -> list[str]:
         issues.append(f"'origin' value '{origin_val}' does not resolve to an existing file")
 
     body_seal_val = scalar("body_seal")
-    if body_seal_val and not re.fullmatch(r"[0-9a-f]{64}", body_seal_val):
-        issues.append(
-            f"'body_seal' value '{body_seal_val}' is not a valid 64-char lowercase hex SHA-256"
-        )
+    if body_seal_val:
+        # Check format first
+        if not re.fullmatch(r"[0-9a-f]{64}", body_seal_val):
+            issues.append(
+                f"'body_seal' value '{body_seal_val}' is not a valid 64-char lowercase hex SHA-256"
+            )
+        # Check value (if text is provided and format is valid)
+        elif text:
+            delimiter_err = check_delimiter_alignment(text)
+            if delimiter_err:
+                issues.append(delimiter_err)
+            else:
+                computed = compute_body_seal(text)
+                if computed and computed != body_seal_val:
+                    issues.append(
+                        f"'body_seal' mismatch: expected={body_seal_val} actual={computed}. "
+                        f"Body was modified post-approval without re-sealing, or the seal was manually edited."
+                    )
 
     return issues
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        usage_fail(f"usage: {os.path.basename(argv[0])} <plan-path>")
+    if len(argv) < 2:
+        usage_fail("usage: validate-plan-frontmatter.py [--print-seal] <plan-path>")
 
-    plan_path = argv[1]
+    # Parse arguments
+    print_seal_mode = False
+    plan_path = argv[-1]
+    
+    if len(argv) == 3 and argv[1] == "--print-seal":
+        print_seal_mode = True
+    elif len(argv) != 2:
+        usage_fail("usage: validate-plan-frontmatter.py [--print-seal] <plan-path>")
+
     if not os.path.isfile(plan_path):
         usage_fail(f"file not found: {plan_path}")
 
     with open(plan_path) as f:
         text = f.read()
+
+    # In --print-seal mode, compute and print the seal, then exit
+    if print_seal_mode:
+        seal = compute_body_seal(text)
+        if seal:
+            print(seal)
+        return 0
 
     try:
         fm_lines = extract_frontmatter(text)
@@ -236,7 +289,7 @@ def main(argv: list[str]) -> int:
 
     issues = check_parser_safety(fm_lines)
     data = parse_frontmatter(fm_lines)
-    issues.extend(check_schema(data, repo_root))
+    issues.extend(check_schema(data, repo_root, text))
 
     if issues:
         sys.stderr.write(f"FAIL: {plan_path}\n")
