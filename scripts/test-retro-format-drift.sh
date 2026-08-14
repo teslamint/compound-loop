@@ -58,6 +58,126 @@ assert_fail_naming() {
   return 1
 }
 
+# --- Phase 8 pre-commit checker -------------------------------------------
+# A second implementation of the Phase 8 pre-commit rule that
+# skills/retrospective/SKILL.md states in prose. It reads a disposable
+# fixture retro document only; it never reads docs/retros/ and is not a
+# repository linter.
+#
+#   check_retro_doc <retro-doc-path>
+#     exit 0 -> accept
+#     exit 1 -> reject; prints exactly one condition name on stdout
+#     exit 2 -> document missing or unreadable; prints no condition name
+#
+# Conditions evaluate in RETRO_CONDITIONS order and the first failure is the
+# one reported. Adding a condition is one array entry plus one
+# cond_<name-with-underscores> function; nothing else changes.
+RETRO_CONDITIONS=(phase8-headless phase8-capability)
+
+# Level values are the case-sensitivity exception: they match exactly.
+RETRO_DEGRADED_LEVELS=("in-thread (approximated independence)" "self-checklist")
+
+RETRO_LEVEL=""
+RETRO_ROUNDS_LINE=""
+RETRO_DEGRADED=0
+
+retro_parse_doc() {
+  local doc="$1" lvl
+  RETRO_LEVEL=""
+  RETRO_ROUNDS_LINE=""
+  RETRO_DEGRADED=0
+  [[ -r "$doc" ]] || return 1
+  RETRO_LEVEL="$(sed -n 's/^- Independence level:[[:space:]]*//p' "$doc" | head -n 1)"
+  RETRO_ROUNDS_LINE="$(sed -n '/^- Rounds used:/p' "$doc" | head -n 1)"
+  for lvl in "${RETRO_DEGRADED_LEVELS[@]}"; do
+    [[ "$RETRO_LEVEL" == "$lvl" ]] && RETRO_DEGRADED=1
+  done
+  return 0
+}
+
+# `headless` as a token on the rounds-used line, when the level is degraded.
+cond_phase8_headless() {
+  local _doc="$1"
+  [[ $RETRO_DEGRADED -eq 1 ]] || return 0
+  grep -Eqi '(^|[^[:alnum:]_-])headless([^[:alnum:]_-]|$)' <<<"$RETRO_ROUNDS_LINE" && return 1
+  return 0
+}
+
+# Both facilitator-channel anchors on the rounds-used line, case-insensitively,
+# when the level is degraded.
+cond_phase8_capability() {
+  local _doc="$1" line
+  [[ $RETRO_DEGRADED -eq 1 ]] || return 0
+  line="$(tr '[:upper:]' '[:lower:]' <<<"$RETRO_ROUNDS_LINE")"
+  [[ "$line" == *"no subagent primitive"* ]] || return 1
+  [[ "$line" == *"no external facilitator cli"* ]] || return 1
+  return 0
+}
+
+check_retro_doc() {
+  local doc="$1" name fn
+  retro_parse_doc "$doc" || return 2
+  for name in "${RETRO_CONDITIONS[@]}"; do
+    fn="cond_${name//-/_}"
+    if ! "$fn" "$doc"; then
+      printf '%s\n' "$name"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# Section scope: the text from a named `## ` heading up to the next `## `.
+extract_section() {
+  local file="$1" heading="$2"
+  awk -v h="$heading" '
+    $0 == h { inside = 1; print; next }
+    inside && /^## / { exit }
+    inside { print }
+  ' "$file"
+}
+
+# Couples the checker to the prose that owns the rule. Scoped to the Phase 8
+# section: two of these anchors also occur in the Phase 5 dispatch prose, so a
+# file-wide check would stay green after the Phase 8 clause moved or weakened.
+assert_phase8_anchors() {
+  local dir="$1" section anchor
+  section="$(extract_section "$dir/skills/retrospective/SKILL.md" "## Phase 8: Commit & Report")"
+  if [[ -z "$section" ]]; then
+    echo "  assertion failed (phase 8 anchors): Phase 8 section not found"
+    return 1
+  fi
+  for anchor in "not an absent capability" "no subagent primitive" "no external facilitator CLI"; do
+    if [[ "$section" != *"$anchor"* ]]; then
+      echo "  assertion failed (phase 8 anchors): Phase 8 section missing anchor: $anchor"
+      return 1
+    fi
+  done
+  return 0
+}
+
+write_fixture_retro() {
+  local doc="$1" level="$2" rounds="$3"
+  cat >"$doc" <<MD
+## Interview Transcript
+
+- Independence level: $level
+- Rounds used: $rounds
+
+| ID | Round | Phase | Probe | Answer | Evidence | Verdict (verbatim) |
+|---|---|---|---|---|---|---|
+MD
+}
+
+assert_condition_name() {
+  local actual="$1" expected="$2"
+  if [[ "$actual" == "$expected" ]]; then
+    return 0
+  fi
+  echo "  assertion failed (condition name): expected $expected, got: $actual"
+  return 1
+}
+
 run_case() {
   local name="$1"
   shift
@@ -383,6 +503,57 @@ case_c4() {
   return $result
 }
 
+# --- Case C5: degraded level justified by `mode:headless` ---
+# The rounds-used line cites the flag instead of an absent capability. The
+# checker must reject with `phase8-headless`.
+case_c5() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "self-checklist" \
+    "0 (mode:headless, so no facilitator was dispatched)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase8-headless" || result=1
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C6: degraded level naming both absent facilitator channels ---
+# The canonical accepted justification. The checker must accept.
+case_c6() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "self-checklist" \
+    "0 (no subagent primitive and no external facilitator CLI reachable in this harness)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C7: degraded level naming only one absent channel ---
+# Discrimination case: rung 1 of the dispatch ladder names an external CLI
+# facilitator that does not depend on the subagent primitive, so an absent
+# subagent primitive alone does not warrant `self-checklist`. The checker must
+# reject with `phase8-capability`.
+case_c7() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "self-checklist" \
+    "0 (no subagent primitive in this harness)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase8-capability" || result=1
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -397,6 +568,9 @@ run_case C1 case_c1
 run_case C2 case_c2
 run_case C3 case_c3
 run_case C4 case_c4
+run_case C5 case_c5
+run_case C6 case_c6
+run_case C7 case_c7
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
