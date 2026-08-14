@@ -45,6 +45,14 @@ The Measured result cell uses the binary completion report form — `verified: <
 (Every item from the previous retro appears here — silent drops are a defect.
 Rows probed during the interview append `(T<n>)` to their Evidence cell.)
 
+- Reconciliation: registered <N>, accounted for <M>
+
+(N is the number of data rows in the previous retro's `Carry-forward items registered` table;
+M is the number of data rows in the table above. A previous retro that carries no registration
+table yields the degraded form of the same bullet:
+`- Reconciliation: registered 0, accounted for 0 — degraded: previous retro has no registration table`.
+Both forms are bullets — never table rows, which would read as carry-forward items.)
+
 - Previous doc shape: conformant | violations recorded as findings | pre-schema, exempt | no previous retro doc
 
 (the backward check's result on the previous retro doc; `no previous retro doc` is for the

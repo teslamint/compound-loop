@@ -47,6 +47,13 @@ One row per criterion — vague summarization across criteria is banned. **If no
 
 Read the previous retro doc (most recent under `docs/retros/`), if any. For every item it registered, classify its trigger class — edit-based (fires on a named file or section edit), drift-based (fires on a named record deviating), or event-based (fires on a future occurrence) — before classifying its status as Done / In progress / Not started, citing the commit, PR, or file that proves it. An item from the previous retro that goes unmentioned here is a silent drop, which is itself a defect to report.
 
+Reconcile mechanically, in four steps:
+
+1. Read the previous retro's `Carry-forward items registered` table, never its narrative. Its data-row count is registered N. A previous doc that carries no such table yields registered N = 0 and the degraded suffix on the reconciliation bullet: `— degraded: previous retro has no registration table`.
+2. Reconcile row by row, by name. Match each registered item name against the `Carry-forward from previous retro` table of this doc, ignoring case and surrounding whitespace. Counts that agree while the names do not are not a reconciliation.
+3. Record both counts in the template's reconciliation bullet — `- Reconciliation: registered <N>, accounted for <M>` — where M is this doc's row count. Both numbers are recorded, never only their agreement.
+4. A row naming an item the previous retro never registered is itself a defect, reported like a silent drop. It inflates M, and an inflated M can conceal an item that was dropped.
+
 **Backward check** (`enforces: P3`): while reading the previous retro doc, verify its shape — an Interview Transcript section with a valid independence level, and no uncited findings. Record the result as this doc's `Previous doc shape` bullet: `conformant`, `violations recorded as findings`, or `pre-schema, exempt`. A violation becomes a finding in the current retro, never a silent repair; a previous doc predating the transcript schema is marked `pre-schema, exempt` and skipped. Running in a different execution than the one that wrote the doc, this check catches violations one cycle late but reliably.
 
 Register this cycle's new carry-forward items: type (architecture / performance / feature / edge-case / process) × priority (P1–P4). Push every item to a durable tracker (ROADMAP, issue tracker, or equivalent) — **never PR comments alone**, which are lost after merge.
