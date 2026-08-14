@@ -19,7 +19,7 @@ Source issues: #6, #7, #8, #9, #10.
 
 ### S1: Headless run on a harness that has subagents
 
-A retro runs with `mode:headless` on Claude Code, where a subagent tool and a Codex CLI are both available. Today the dispatch ladder's fourth rung reads `headless/single-agent`, and the slash reads as "or", so the run legally takes the self-checklist floor. After this change the ladder names rung 4 by capability only, and `mode:headless` is stated as a non-qualifying condition. The run dispatches a same-model fresh-context facilitator instead.
+A retro runs with `mode:headless` on Claude Code, where a subagent tool and a Codex CLI are both available. Today the dispatch ladder's fourth rung reads `headless/single-agent`, and the slash reads as "or", so the run legally takes the self-checklist floor. After this change the ladder names rung 4 by capability only, and `mode:headless` is stated as a non-qualifying condition. The run dispatches a heterogeneous facilitator instead.
 
 ### S2: Run whose subagent primitive dies mid-session
 
