@@ -431,6 +431,36 @@ assert_no_spec_boilerplate_anchor() {
   return 0
 }
 
+# Couples `RETRO_LEVELS` to the template that owns the closed level vocabulary
+# (schemas/retro-template.md line 63). `cond_level_unrecognized` and every
+# fixture that writes a level read the same array, so they agree with each other
+# whatever it holds; only this assertion can catch the pair drifting away from
+# the real template — after which a sixth level published through the sanctioned
+# flow would make the level guard reject honest documents. Compared as a set,
+# because the guard scans the whole array and the template's ordering carries no
+# meaning for it.
+assert_levels_anchor() {
+  local dir="$1" line have want
+  line="$(sed -n 's/^- Independence level:[[:space:]]*//p' \
+    "$dir/schemas/retro-template.md" | head -n 1)"
+  if [[ -z "$line" ]]; then
+    echo "  assertion failed (levels anchor): template lacks the independence-level line"
+    return 1
+  fi
+  have="$(awk -F'\\|' '{
+    for (i = 1; i <= NF; i++) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+      if ($i != "") print $i
+    }
+  }' <<<"$line" | LC_ALL=C sort)"
+  want="$(printf '%s\n' "${RETRO_LEVELS[@]}" | LC_ALL=C sort)"
+  if [[ "$have" != "$want" ]]; then
+    echo "  assertion failed (levels anchor): template levels differ from RETRO_LEVELS"
+    return 1
+  fi
+  return 0
+}
+
 # Couples `cond_W2`'s literals to the template that owns the reconciliation
 # bullet (schemas/retro-template.md lines 48 and 53). W2's fixtures and W2's
 # parse share one copy of that text, so they agree with each other whatever it
@@ -1389,6 +1419,7 @@ case_c27() {
   out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
   [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
   assert_condition_name "$out" "level-unrecognized" || result=1
+  assert_levels_anchor "$dir" || result=1
   rm -rf "$dir"
   return $result
 }
