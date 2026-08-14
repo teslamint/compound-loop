@@ -2,7 +2,8 @@
 schema: plan/v1
 title: Retro Interview Integrity
 type: fix
-status: approved
+status: done
+completed_by: 0086cffcaf9f7fa128ae30f044da9b8644297e9a
 date: 2026-08-14
 execution: code
 origin: docs/specs/2026-08-14-retro-interview-integrity-design.md
