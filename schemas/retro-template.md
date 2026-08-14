@@ -71,7 +71,8 @@ first retro in a repo where no prior doc exists under `docs/retros/`)
 Verdict cell values: `accepted` | `no evidenced answer (3 rejections): <verbatim>` | `self-attested` | `no evidenced answer (dispatch cap): <verbatim>`
 
 (`self-attested` is for degraded modes only; in `self-checklist` mode the rows are the
-checklist answers; a zero-row table under a valid header is valid.
+checklist answers; under `not-probed (no narrative warranted)` a zero-row table
+under a valid header is valid on the no-channel path.
 `no evidenced answer (dispatch cap): <verbatim>` is for exchanges terminated because the
 5-dispatch global cap was exhausted before the 3-rejection limit was reached — the
 facilitator's last probe text is recorded verbatim.
