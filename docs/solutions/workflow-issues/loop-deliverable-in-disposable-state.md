@@ -95,6 +95,9 @@ an all-clear.
 - When a retro cites evidence by a path that `git log` cannot resolve.
 - When a carry-forward row's trigger describes a file edit but the risk it names
   is operational.
+- A phase deliverable was committed inside the worktree rather than left in loop
+  state — that is the committed-work counterpart, covered by
+  `docs/solutions/workflow-issues/unmerged-branch-work-invisible-to-audit.md`.
 
 ## Examples
 
