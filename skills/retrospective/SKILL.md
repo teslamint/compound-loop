@@ -47,6 +47,13 @@ One row per criterion — vague summarization across criteria is banned. **If no
 
 Read the previous retro doc (most recent under `docs/retros/`), if any. For every item it registered, classify its trigger class — edit-based (fires on a named file or section edit), drift-based (fires on a named record deviating), or event-based (fires on a future occurrence) — before classifying its status as Done / In progress / Not started, citing the commit, PR, or file that proves it. An item from the previous retro that goes unmentioned here is a silent drop, which is itself a defect to report.
 
+Reconcile mechanically, in four steps:
+
+1. Read the previous retro's `Carry-forward items registered` table, never its narrative. Its data-row count is registered N. A previous doc that carries no such table yields registered N = 0 and the degraded suffix on the reconciliation bullet: `— degraded: previous retro has no registration table`.
+2. Reconcile row by row, by name. Match each registered item name against the `Carry-forward from previous retro` table of this doc, ignoring case and surrounding whitespace. Counts that agree while the names do not are not a reconciliation.
+3. Record both counts in the template's reconciliation bullet — `- Reconciliation: registered <N>, accounted for <M>` — where M is this doc's row count. Both numbers are recorded, never only their agreement.
+4. A row naming an item the previous retro never registered is itself a defect, reported like a silent drop. It inflates M, and an inflated M can conceal an item that was dropped.
+
 **Backward check** (`enforces: P3`): while reading the previous retro doc, verify its shape — an Interview Transcript section with a valid independence level, and no uncited findings. Record the result as this doc's `Previous doc shape` bullet: `conformant`, `violations recorded as findings`, or `pre-schema, exempt`. A violation becomes a finding in the current retro, never a silent repair; a previous doc predating the transcript schema is marked `pre-schema, exempt` and skipped. Running in a different execution than the one that wrote the doc, this check catches violations one cycle late but reliably.
 
 Register this cycle's new carry-forward items: type (architecture / performance / feature / edge-case / process) × priority (P1–P4). Push every item to a durable tracker (ROADMAP, issue tracker, or equivalent) — **never PR comments alone**, which are lost after merge.
@@ -64,9 +71,9 @@ The narrative half of a retro is where self-assessment bias lives: the agent tha
 
 **Verbatim rule**: facilitator verdict text — acceptances and rejections both — is recorded verbatim, never summarized by the respondent. In degraded modes where one agent authors probe, answer, and verdict, the Verdict cell records `self-attested`, never `accepted` — a reader must never mistake self-attestation for facilitator acceptance.
 
-**Independence-level recording**: the transcript header carries exactly one of the four closed level values — `heterogeneous`, `same-model fresh-context`, `in-thread (approximated independence)`, `self-checklist`. Tool names are optional free text; the level vocabulary is closed.
+**Independence-level recording**: the transcript header carries exactly one of the five closed level values — `heterogeneous`, `same-model fresh-context`, `in-thread (approximated independence)`, `self-checklist`, `not-probed (no narrative warranted)`. Tool names are optional free text; the level vocabulary is closed.
 
-**Facilitator model selection**: fresh context is the minimum; a *heterogeneous* model is better when the environment offers one (from Claude Code, `codex exec` for a GPT-family facilitator; from Codex, a Claude subagent) — shared model biases produce shared blind spots, so heterogeneity adds a defense self-review cannot. Degrade per `references/dispatch-degradation.md` (plugin root): heterogeneous facilitator → same-model fresh-context subagent → sequential passes (facilitator pass generates probes from artifacts, respondent pass answers, facilitator pass critiques the evidence) → headless/single-agent: skip the interview and run the probe list as a fixed self-checklist. `enforces: P9`
+**Facilitator model selection**: fresh context is the minimum; a *heterogeneous* model is better when the environment offers one (from Claude Code, `codex exec` for a GPT-family facilitator; from Codex, a Claude subagent) — shared model biases produce shared blind spots, so heterogeneity adds a defense self-review cannot. Degrade per `references/dispatch-degradation.md` (plugin root): heterogeneous facilitator → same-model fresh-context subagent → sequential passes (facilitator pass generates probes from artifacts, respondent pass answers, facilitator pass critiques the evidence) → no subagent primitive and no external facilitator CLI: skip the interview and run the probe list as a fixed self-checklist. `mode:headless` qualifies for no rung of this ladder — the flag governs whether the user is asked blocking questions, not which worker dispatch the harness can perform. `enforces: P9`
 
 The dispatch cap is the only exchange limit — when the fifth dispatch returns, the interview is over. Phase 5's raw material is transcript rows, cited by T-ID, never the working conversation's memory of what was said. Data collection (Phase 2) and measurement (Phase 3) are never interviewed — they are commands, not narratives (`enforces: P4`).
 
@@ -76,6 +83,17 @@ The dispatch cap is the only exchange limit — when the fifth dispatch returns,
 - **Findings check**: every finding — the `**What happened**:` list item, not the bucket heading — cites at least one transcript T-ID or Phase 2–3 data. An uncited finding goes back to the interview if dispatches remain under the cap; otherwise it is dropped.
 
 **Known limit**: this protocol is a procedural gate, not a hard barrier — a respondent could fabricate transcript rows, and full mechanical enforcement would require the facilitator to own the file write, which no current harness contract guarantees. The citation checks and Phase 4's backward check are the backstop.
+
+## Warrant for not-probed
+
+`not-probed (no narrative warranted)` is the only level reachable with no facilitator dispatch, so it carries a warrant rather than a justification. All four conditions below must hold. Any one of them failing blocks the level, and the retro records a probed level instead.
+
+- **W1 — nothing measured short.** No Phase 3 criterion reads `Partially met` or `Not met`, or the document states that no spec exists. A criterion the cycle missed is narrative material by definition.
+- **W2 — carry-forward reconciles exactly.** The Phase 4 reconciliation records registered N equal to accounted-for M, with no unregistered row. The degraded no-table fallback never satisfies W2: a `registered 0, accounted for 0` result produced by a previous retro that has no registration table is an absent measurement, not a clean one, so it does not authorize `not-probed`.
+- **W3 — findings sit in one bucket.** The Findings section carries no entry outside What Worked Well. An entry under What to Improve or Process Observations is a narrative the retro has already written.
+- **W4 — the judgment is confirmed, not asserted.** Two paths, and exactly one applies. On the first path a facilitator channel is reachable: one facilitator dispatch confirms the judgment, and the transcript records that confirmation as a row whose Verdict cell reads `accepted`. `self-attested` is never a valid `not-probed` verdict — the claimant confirming its own claim is the shape this warrant exists to block. On the second path no channel is reachable, and `not-probed` then carries the same absent-capability claim that `self-checklist` carries, naming both `no subagent primitive` and `no external facilitator CLI` on the `- Rounds used:` line. A zero-row table under a valid header is valid — nothing warranted probing — on this second path.
+
+W1 through W4 raise the cost of a false `not-probed` claim; they do not remove it. That residual is the Known limit the protocol already declares — a procedural gate, not a hard barrier.
 
 ## Phase 5: Findings & Lessons
 
@@ -95,7 +113,7 @@ When invoked, pass the qualifying finding as context and expect `compound`'s exa
 
 ## Phase 8: Commit & Report
 
-**Pre-commit check** (`enforces: P8`): the doc contains an Interview Transcript section with a valid independence level and a rounds-used count; in `self-checklist` mode the rows are the checklist answers. A zero-row table under a valid header is valid — nothing warranted probing. A missing section blocks the commit.
+**Pre-commit check** (`enforces: P8`): the doc contains an Interview Transcript section with a valid independence level and a rounds-used count; in `self-checklist` mode the rows are the checklist answers. A missing section blocks the commit. A degraded level — `in-thread (approximated independence)` or `self-checklist` — must also name the capability that was absent, on the same `- Rounds used:` line; an unnamed capability blocks the commit. `mode:headless` is not an absent capability: the flag governs whether the user is asked blocking questions, not which worker dispatch the harness can perform. A strict dispatch budget is not an absent capability either: a budget is a choice about spend, not a missing primitive. A `self-checklist` claim names both facilitator channels of the ladder as absent — `no subagent primitive` and `no external facilitator CLI` — because rung 1 of `references/dispatch-degradation.md` (plugin root) names an external CLI facilitator that does not depend on the subagent primitive, so an absent subagent primitive alone still leaves a reachable facilitator. An `in-thread (approximated independence)` claim names why fresh context was unavailable.
 
 Commit the retro doc (and any durable-tracker updates from Phase 4) as its own commit, separate from other work in flight.
 

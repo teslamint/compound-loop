@@ -58,6 +58,678 @@ assert_fail_naming() {
   return 1
 }
 
+# --- Phase 8 pre-commit checker -------------------------------------------
+# A second implementation of the Phase 8 pre-commit rule that
+# skills/retrospective/SKILL.md states in prose. It reads a disposable
+# fixture retro document only; it never reads docs/retros/ and is not a
+# repository linter.
+#
+#   check_retro_doc <retro-doc-path> [previous-retro-doc-path]
+#     exit 0 -> accept
+#     exit 1 -> reject; prints exactly one condition name on stdout
+#     exit 2 -> document missing or unreadable; prints no condition name
+#
+# The optional second path is the previous retro document. Every condition
+# function receives it as `$2`; the six conditions that only read the current
+# document ignore it. An omitted or unreadable previous document leaves
+# `phase4-unregistered` with nothing to compare, which it treats as satisfied.
+#
+# Conditions evaluate in RETRO_CONDITIONS order and the first failure is the
+# one reported. Adding a condition is one array entry plus one
+# cond_<name-with-underscores> function; nothing else changes.
+RETRO_CONDITIONS=(level-unrecognized phase8-headless phase8-capability W1 W2 W3 W4 phase4-unregistered)
+
+# Level values are the case-sensitivity exception: they match exactly.
+RETRO_INTHREAD_LEVEL="in-thread (approximated independence)"
+RETRO_SELFCHECKLIST_LEVEL="self-checklist"
+RETRO_DEGRADED_LEVELS=("$RETRO_INTHREAD_LEVEL" "$RETRO_SELFCHECKLIST_LEVEL")
+RETRO_NOTPROBED_LEVEL="not-probed (no narrative warranted)"
+RETRO_LEVELS=(
+  "heterogeneous"
+  "same-model fresh-context"
+  "$RETRO_INTHREAD_LEVEL"
+  "$RETRO_SELFCHECKLIST_LEVEL"
+  "$RETRO_NOTPROBED_LEVEL"
+)
+
+# The template's instructional parenthetical (schemas/retro-template.md line
+# 37). It is guidance addressed to the author, not a statement about this
+# cycle, so leaving it in place claims nothing and `cond_W1` excludes it.
+RETRO_NO_SPEC_BOILERPLATE='(If no spec exists, state that explicitly and skip this section — do not reconstruct criteria after the fact.)'
+
+RETRO_LEVEL=""
+RETRO_ROUNDS_LINE=""
+RETRO_DEGRADED=0
+RETRO_NOTPROBED=0
+
+retro_parse_doc() {
+  local doc="$1" lvl
+  RETRO_LEVEL=""
+  RETRO_ROUNDS_LINE=""
+  RETRO_DEGRADED=0
+  RETRO_NOTPROBED=0
+  [[ -r "$doc" ]] || return 1
+  RETRO_LEVEL="$(sed -n 's/^- Independence level:[[:space:]]*//p' "$doc" | head -n 1)"
+  RETRO_LEVEL="${RETRO_LEVEL%"${RETRO_LEVEL##*[![:space:]]}"}"
+  RETRO_ROUNDS_LINE="$(sed -n '/^- Rounds used:/p' "$doc" | head -n 1)"
+  for lvl in "${RETRO_DEGRADED_LEVELS[@]}"; do
+    [[ "$RETRO_LEVEL" == "$lvl" ]] && RETRO_DEGRADED=1
+  done
+  [[ "$RETRO_LEVEL" == "$RETRO_NOTPROBED_LEVEL" ]] && RETRO_NOTPROBED=1
+  return 0
+}
+
+# Data rows of a markdown table read from stdin: the pipe rows that follow the
+# `---` separator row, which drops the header-label row by construction. A
+# blank line ends the table.
+table_data_rows() {
+  awk '
+    /^\|/ {
+      if ($0 ~ /^\|[[:space:]:|-]+\|[[:space:]]*$/) { after = 1; next }
+      if (after) print
+      next
+    }
+    { after = 0 }
+  '
+}
+
+# The data-row count of the table under a named section heading. A missing
+# section, or a section carrying no table, counts zero.
+count_data_rows() {
+  local file="$1" heading="$2" rows
+  rows="$(extract_section "$file" "$heading" | table_data_rows)"
+  [[ -n "$rows" ]] || { printf '0\n'; return 0; }
+  grep -c . <<<"$rows"
+}
+
+# The last cell of a pipe row, trimmed.
+last_cell() {
+  local row="$1"
+  row="${row%"${row##*[![:space:]]}"}"
+  row="${row%|}"
+  row="${row##*|}"
+  row="${row#"${row%%[![:space:]]*}"}"
+  row="${row%"${row##*[![:space:]]}"}"
+  printf '%s\n' "$row"
+}
+
+# The first cell of a pipe row, trimmed.
+first_cell() {
+  local row="$1"
+  row="${row#"${row%%[![:space:]]*}"}"
+  row="${row#|}"
+  row="${row%%|*}"
+  row="${row#"${row%%[![:space:]]*}"}"
+  row="${row%"${row##*[![:space:]]}"}"
+  printf '%s\n' "$row"
+}
+
+# The independence level is one of the five the template publishes. Surrounding
+# whitespace is trimmed before the comparison, so a trailing space no longer
+# makes every level-gated condition vacuous. An unrecognized level is a content
+# defect of the document, not an unreadable file, so it rejects through the
+# ordinary exit-1 path and names itself like every other condition; exit 2 stays
+# reserved for a document the checker could not read at all.
+cond_level_unrecognized() {
+  local _doc="$1" lvl
+  for lvl in "${RETRO_LEVELS[@]}"; do
+    [[ "$RETRO_LEVEL" == "$lvl" ]] && return 0
+  done
+  return 1
+}
+
+# `headless` as a token on the rounds-used line, when the level is degraded.
+cond_phase8_headless() {
+  local _doc="$1"
+  [[ $RETRO_DEGRADED -eq 1 ]] || return 0
+  grep -Eqi '(^|[^[:alnum:]_-])headless([^[:alnum:]_-]|$)' <<<"$RETRO_ROUNDS_LINE" && return 1
+  return 0
+}
+
+# The absent-capability claim on the rounds-used line, scoped by level, because
+# the two degraded levels carry two different claims
+# (docs/specs/2026-08-14-retro-interview-integrity-design.md line 147,
+# skills/retrospective/SKILL.md line 116; see
+# docs/deviations/2026-08-14-in-thread-capability-scope-009.md).
+#
+#   self-checklist -> both facilitator-channel anchors, case-insensitively.
+#   in-thread      -> a reason clause is present after the round count. The
+#                     shipped prose asks the claim to name why fresh context was
+#                     unavailable; a fixed phrase cannot be required of a reason
+#                     the author writes in their own words, so the mechanical
+#                     test is presence, not wording.
+cond_phase8_capability() {
+  local _doc="$1" line reason
+  [[ $RETRO_DEGRADED -eq 1 ]] || return 0
+  if [[ "$RETRO_LEVEL" == "$RETRO_INTHREAD_LEVEL" ]]; then
+    reason="${RETRO_ROUNDS_LINE#*:}"
+    reason="$(sed -E 's/^[[:space:]]*[0-9]+//' <<<"$reason")"
+    [[ "$reason" == *[[:alnum:]]* ]] || return 1
+    return 0
+  fi
+  line="$(tr '[:upper:]' '[:lower:]' <<<"$RETRO_ROUNDS_LINE")"
+  [[ "$line" == *"no subagent primitive"* ]] || return 1
+  [[ "$line" == *"no external facilitator cli"* ]] || return 1
+  return 0
+}
+
+# --- not-probed warrant conditions W1-W4 ----------------------------------
+# All four gate on the exact level `not-probed (no narrative warranted)`: they
+# are the warrant for that level alone, so any other level satisfies them
+# vacuously. An absent field fails the condition it belongs to — absence of
+# evidence never authorizes the cheapest level.
+
+# W1: no Verdict cell of the Phase 3 table reads `Partially met` or `Not met`
+# (casing of schemas/retro-template.md line 35, matched case-insensitively), or
+# that same section states that no spec exists.
+#
+# The verdict rows are read FIRST and an unmet criterion rejects unconditionally:
+# a document that measured a criterion and found it unmet has narrative material
+# whatever else the section says, so no statement can excuse it. The no-spec
+# escape hatch speaks only for a section that measured nothing.
+#
+# The escape hatch is scoped to the section, like every other condition's read:
+# an incidental sentence elsewhere in the document does not license the cheapest
+# level. The template's own instructional parenthetical is excluded by exact
+# line, because boilerplate an author never deleted states nothing about this
+# cycle. An absent section, and a present section carrying no data row, both fail
+# when a real statement is absent.
+cond_W1() {
+  local doc="$1" section rows row cell
+  [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
+  section="$(extract_section "$doc" "## Success criteria: measured vs declared")"
+  [[ -n "$section" ]] || return 1
+  rows="$(table_data_rows <<<"$section")"
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    cell="$(last_cell "$row")"
+    grep -Eqi 'partially met|not met' <<<"$cell" && return 1
+  done <<<"$rows"
+  grep -vxF -- "$RETRO_NO_SPEC_BOILERPLATE" <<<"$section" \
+    | grep -qi 'no spec exists' && return 0
+  [[ -n "$rows" ]] || return 1
+  return 0
+}
+
+# W2: the Phase 4 reconciliation bullet records registered N equal to
+# accounted-for M. The degraded no-table fallback never satisfies W2, so a
+# `registered 0, accounted for 0` produced by a missing table is a failure.
+#
+# Both numbers are also checked against the tables they describe, because the
+# shipped contract defines them as row counts (skills/retrospective/SKILL.md
+# Phase 4, steps 1 and 3): N is the previous doc's registration-table row count,
+# M is this doc's carry-forward row count. Reading the bullet alone tests only
+# that the author wrote two equal numbers, which a document whose tables
+# disagree with them satisfies for free. N is checked only when a previous
+# document is readable; with none there is nothing to count, and the author's
+# figure stands.
+cond_W2() {
+  local doc="$1" prev="${2:-}" line n m
+  [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
+  line="$(extract_section "$doc" "## Carry-forward from previous retro" \
+    | grep -i '^- Reconciliation:' | head -n 1 | tr '[:upper:]' '[:lower:]')"
+  [[ -n "$line" ]] || return 1
+  [[ "$line" == *"degraded: previous retro has no registration table"* ]] && return 1
+  [[ "$line" =~ registered\ ([0-9]+),\ accounted\ for\ ([0-9]+) ]] || return 1
+  n="${BASH_REMATCH[1]}"
+  m="${BASH_REMATCH[2]}"
+  [[ "$n" -eq "$m" ]] || return 1
+  [[ "$m" -eq "$(count_data_rows "$doc" "## Carry-forward from previous retro")" ]] || return 1
+  if [[ -n "$prev" && -r "$prev" ]]; then
+    [[ "$n" -eq "$(count_data_rows "$prev" "## Carry-forward items registered")" ]] || return 1
+  fi
+  return 0
+}
+
+# W3: the Findings section carries no entry outside the What Worked Well
+# bucket. A `### ` sub-heading opens a bucket; a list item is an entry. An
+# absent section fails: a document with no findings at all has not shown that
+# it has no narrative, it has only declined to say.
+cond_W3() {
+  local doc="$1" section
+  [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
+  section="$(extract_section "$doc" "## Findings")"
+  [[ -n "$section" ]] || return 1
+  awk '
+    /^### / { bucket = tolower($0); sub(/^###[[:space:]]*/, "", bucket); next }
+    /^[[:space:]]*[-*][[:space:]]/ { if (bucket != "what worked well") { found = 1; exit } }
+    END { exit(found ? 1 : 0) }
+  ' <<<"$section"
+}
+
+# W4, two paths. Zero transcript rows require both capability anchors on the
+# rounds-used line — the same absent-capability claim `self-checklist` carries.
+# A row-bearing transcript is the reachable-channel path, where the shipped
+# contract asks the confirming dispatch to land as a row whose Verdict cell
+# reads `accepted` (skills/retrospective/SKILL.md, warrant W4). So the path
+# requires a confirmation, not merely the absence of one bad verdict: at least
+# one row must read `accepted`, and no row may record `self-attested`. Without
+# the positive requirement a transcript whose only row is a terminal rejection
+# — `no evidenced answer (3 rejections)` — would confirm the judgment by
+# carrying no `self-attested` cell.
+#
+# `accepted` is matched as the whole trimmed cell, the bare form the template
+# publishes (schemas/retro-template.md line 71). A substring test would accept
+# a cell reading `not accepted`.
+cond_W4() {
+  local doc="$1" rows row cell accepted=0
+  [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
+  rows="$(extract_section "$doc" "## Interview Transcript" | table_data_rows)"
+  if [[ -z "$rows" ]]; then
+    local line
+    line="$(tr '[:upper:]' '[:lower:]' <<<"$RETRO_ROUNDS_LINE")"
+    [[ "$line" == *"no subagent primitive"* ]] || return 1
+    [[ "$line" == *"no external facilitator cli"* ]] || return 1
+    return 0
+  fi
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    cell="$(last_cell "$row" | tr '[:upper:]' '[:lower:]')"
+    [[ "$cell" == *"self-attested"* ]] && return 1
+    [[ "$cell" == "accepted" ]] && accepted=1
+  done <<<"$rows"
+  [[ $accepted -eq 1 ]] || return 1
+  return 0
+}
+
+# --- phase4-unregistered --------------------------------------------------
+# Reconciliation by name, not by count. The registered set is the first cell of
+# every data row of `## Carry-forward items registered` in the previous
+# document; the accounted-for set is the first cell of every data row of
+# `## Carry-forward from previous retro` in the current one. A current row
+# naming an item the previous document never registered fails: it inflates the
+# accounted-for count, and an inflated count can conceal a dropped item.
+# Whitespace is stripped and the comparison is case-insensitive. With no
+# previous document there is nothing to compare, so the condition is satisfied;
+# a previous document that carries no registration table registers nothing, so
+# any current data row fails.
+#
+# The match runs both ways, because the contract asks for a row-by-row match by
+# name (skills/retrospective/SKILL.md Phase 4, step 2) and a one-directional
+# check sees only half of a substitution. Three failures:
+#
+#   unregistered — a current row the previous document never registered;
+#   duplicate    — one name on two current rows, which fills the count a
+#                  dropped item left behind;
+#   dropped      — a registered item no current row names, the silent drop
+#                  Phase 4 calls a defect in its own right.
+#
+# The reviewer's example needs all three to be caught: previous registers `A`
+# and `B`, the current table lists `A` and `A`. Every current name is
+# registered and both counts read 2, so only the duplicate and dropped checks
+# can see that `B` disappeared.
+cond_phase4_unregistered() {
+  local doc="$1" prev="${2:-}" registered rows row name reg_names="" cur_names=""
+  [[ -n "$prev" && -r "$prev" ]] || return 0
+  rows="$(extract_section "$doc" "## Carry-forward from previous retro" | table_data_rows)"
+  registered="$(extract_section "$prev" "## Carry-forward items registered" | table_data_rows)"
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    name="$(first_cell "$row" | tr '[:upper:]' '[:lower:]')"
+    [[ -n "$name" ]] || continue
+    reg_names+="$name"$'\n'
+  done <<<"$registered"
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    name="$(first_cell "$row" | tr '[:upper:]' '[:lower:]')"
+    [[ -n "$name" ]] || continue
+    grep -qxF -- "$name" <<<"$reg_names" || return 1
+    grep -qxF -- "$name" <<<"$cur_names" && return 1
+    cur_names+="$name"$'\n'
+  done <<<"$rows"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    grep -qxF -- "$name" <<<"$cur_names" || return 1
+  done <<<"$reg_names"
+  return 0
+}
+
+check_retro_doc() {
+  local doc="$1" prev="${2:-}" name fn
+  retro_parse_doc "$doc" || return 2
+  for name in "${RETRO_CONDITIONS[@]}"; do
+    fn="cond_${name//-/_}"
+    if ! "$fn" "$doc" "$prev"; then
+      printf '%s\n' "$name"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# Section scope: the text from a named `## ` heading up to the next `## `.
+extract_section() {
+  local file="$1" heading="$2"
+  awk -v h="$heading" '
+    $0 == h { inside = 1; print; next }
+    inside && /^## / { exit }
+    inside { print }
+  ' "$file"
+}
+
+# Couples the checker to the prose that owns the rule. Scoped to the Phase 8
+# section: two of these anchors also occur in the Phase 5 dispatch prose, so a
+# file-wide check would stay green after the Phase 8 clause moved or weakened.
+assert_phase8_anchors() {
+  local dir="$1" section anchor
+  section="$(extract_section "$dir/skills/retrospective/SKILL.md" "## Phase 8: Commit & Report")"
+  if [[ -z "$section" ]]; then
+    echo "  assertion failed (phase 8 anchors): Phase 8 section not found"
+    return 1
+  fi
+  for anchor in "not an absent capability" "no subagent primitive" "no external facilitator CLI"; do
+    if [[ "$section" != *"$anchor"* ]]; then
+      echo "  assertion failed (phase 8 anchors): Phase 8 section missing anchor: $anchor"
+      return 1
+    fi
+  done
+  return 0
+}
+
+write_fixture_retro() {
+  local doc="$1" level="$2" rounds="$3"
+  cat >"$doc" <<MD
+## Interview Transcript
+
+- Independence level: $level
+- Rounds used: $rounds
+
+| ID | Round | Phase | Probe | Answer | Evidence | Verdict (verbatim) |
+|---|---|---|---|---|---|---|
+MD
+}
+
+# Couples the warrant conditions to the prose that owns them. Scoped to the
+# warrant section: `W1` through `W4` are short tokens that a file-wide check
+# would find elsewhere, and the coupling must break when the operative clause
+# moves or weakens.
+assert_warrant_anchors() {
+  local dir="$1" section anchor
+  section="$(extract_section "$dir/skills/retrospective/SKILL.md" "## Warrant for not-probed")"
+  if [[ -z "$section" ]]; then
+    echo "  assertion failed (warrant anchors): warrant section not found"
+    return 1
+  fi
+  for anchor in W1 W2 W3 W4; do
+    if [[ "$section" != *"$anchor"* ]]; then
+      echo "  assertion failed (warrant anchors): warrant section missing anchor: $anchor"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# Couples `cond_W1`'s section literal to the template that owns the heading
+# (schemas/retro-template.md line 25). W1's fixtures and W1's extract call share
+# one literal, so they agree with each other whatever that literal says; only
+# this assertion can catch the two drifting away from the real template.
+assert_measured_heading_anchor() {
+  local dir="$1"
+  if ! grep -qxF '## Success criteria: measured vs declared' "$dir/schemas/retro-template.md"; then
+    echo "  assertion failed (measured heading anchor): template lacks the heading cond_W1 extracts"
+    return 1
+  fi
+  return 0
+}
+
+# Couples the line `cond_W1` excludes to the template that owns it
+# (schemas/retro-template.md line 37). The exclusion literal and the fixture
+# that writes it are one variable, so they agree with each other whatever that
+# variable says; only this assertion can catch the pair drifting away from the
+# real template — after which the exclusion would guard a line no template
+# publishes, and live boilerplate would satisfy W1 again.
+assert_no_spec_boilerplate_anchor() {
+  local dir="$1"
+  if ! grep -qxF -- "$RETRO_NO_SPEC_BOILERPLATE" "$dir/schemas/retro-template.md"; then
+    echo "  assertion failed (no-spec boilerplate anchor): template lacks the line cond_W1 excludes"
+    return 1
+  fi
+  return 0
+}
+
+# Couples `RETRO_LEVELS` to the template that owns the closed level vocabulary
+# (schemas/retro-template.md line 63). `cond_level_unrecognized` and every
+# fixture that writes a level read the same array, so they agree with each other
+# whatever it holds; only this assertion can catch the pair drifting away from
+# the real template — after which a sixth level published through the sanctioned
+# flow would make the level guard reject honest documents. Compared as a set,
+# because the guard scans the whole array and the template's ordering carries no
+# meaning for it.
+assert_levels_anchor() {
+  local dir="$1" line have want
+  line="$(sed -n 's/^- Independence level:[[:space:]]*//p' \
+    "$dir/schemas/retro-template.md" | head -n 1)"
+  if [[ -z "$line" ]]; then
+    echo "  assertion failed (levels anchor): template lacks the independence-level line"
+    return 1
+  fi
+  have="$(awk -F'\\|' '{
+    for (i = 1; i <= NF; i++) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+      if ($i != "") print $i
+    }
+  }' <<<"$line" | LC_ALL=C sort)"
+  want="$(printf '%s\n' "${RETRO_LEVELS[@]}" | LC_ALL=C sort)"
+  if [[ "$have" != "$want" ]]; then
+    echo "  assertion failed (levels anchor): template levels differ from RETRO_LEVELS"
+    return 1
+  fi
+  return 0
+}
+
+# Couples `cond_W2`'s literals to the template that owns the reconciliation
+# bullet (schemas/retro-template.md lines 48 and 53). W2's fixtures and W2's
+# parse share one copy of that text, so they agree with each other whatever it
+# says; only this assertion can catch the pair drifting away from the real
+# template. Scoped to the carry-forward section, and fixed-string throughout so
+# a reworded bullet cannot be satisfied by a substring of a neighbouring one.
+assert_reconciliation_bullet_anchor() {
+  local dir="$1" section
+  section="$(extract_section "$dir/schemas/retro-template.md" "## Carry-forward from previous retro")"
+  if [[ -z "$section" ]]; then
+    echo "  assertion failed (reconciliation bullet anchor): carry-forward section not found"
+    return 1
+  fi
+  if ! grep -qxF -e '- Reconciliation: registered <N>, accounted for <M>' <<<"$section"; then
+    echo "  assertion failed (reconciliation bullet anchor): template lacks the live bullet cond_W2 parses"
+    return 1
+  fi
+  if ! grep -qF -e '- Reconciliation: registered 0, accounted for 0 — degraded: previous retro has no registration table' <<<"$section"; then
+    echo "  assertion failed (reconciliation bullet anchor): template lacks the degraded string cond_W2 rejects"
+    return 1
+  fi
+  return 0
+}
+
+# A full retro fixture: the measured-criteria table under the heading
+# schemas/retro-template.md line 25 carries, carry-forward section with the
+# reconciliation bullet, Findings buckets, and the Interview Transcript.
+# Defaults satisfy all four warrant conditions; each case perturbs one field,
+# which is what makes a rejection attributable to the condition it names.
+#   --no-measured    omit the measured-criteria section entirely
+#   --no-table       omit the measured table, keeping the section heading
+#   --no-spec-line   state in the section that no spec exists, in an author's
+#                    own words rather than the template's instructional line
+#   --boilerplate    leave the template's instructional parenthetical
+#                    (schemas/retro-template.md line 37) in the section
+#   --no-spec        the genuine no-spec document: --no-table --no-spec-line
+#   --stray-no-spec  append the no-spec statement OUTSIDE the measured section
+#   --no-findings    omit the Findings section entirely
+write_fixture_retro_full() {
+  local doc="$1"; shift
+  local level="not-probed (no narrative warranted)"
+  local rounds="1 (one facilitator dispatch confirmed the judgment)"
+  local measured="Met"
+  local recon="registered 1, accounted for 1"
+  local row_verdict="accepted"
+  local extra_finding=0
+  local no_measured=0 no_table=0 no_spec_line=0 boilerplate=0 stray_no_spec=0 no_findings=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --level) level="$2"; shift 2 ;;
+      --rounds) rounds="$2"; shift 2 ;;
+      --measured) measured="$2"; shift 2 ;;
+      --recon) recon="$2"; shift 2 ;;
+      --rows) row_verdict="$2"; shift 2 ;;
+      --extra-finding) extra_finding=1; shift ;;
+      --no-measured) no_measured=1; shift ;;
+      --no-table) no_table=1; shift ;;
+      --no-spec-line) no_spec_line=1; shift ;;
+      --boilerplate) boilerplate=1; shift ;;
+      --no-spec) no_table=1; no_spec_line=1; shift ;;
+      --stray-no-spec) stray_no_spec=1; shift ;;
+      --no-findings) no_findings=1; shift ;;
+      *) echo "  harness error: unknown fixture option: $1" >&2; return 1 ;;
+    esac
+  done
+  {
+    if [[ $no_measured -eq 0 ]]; then
+      cat <<MD
+## Success criteria: measured vs declared
+
+MD
+      if [[ $no_table -eq 0 ]]; then
+        cat <<MD
+| # | Declared criterion | Measurement (command / rubric) | Measured result | Verdict |
+|---|---|---|---|---|
+| 1 | the warrant gates the fifth level | scripts/test-retro-format-drift.sh | verified: seven cases | $measured |
+
+MD
+      fi
+      if [[ $no_spec_line -eq 1 ]]; then
+        cat <<MD
+No spec exists for this cycle, so this section records no criteria.
+
+MD
+      fi
+      if [[ $boilerplate -eq 1 ]]; then
+        printf '%s\n\n' "$RETRO_NO_SPEC_BOILERPLATE"
+      fi
+    fi
+    cat <<MD
+## Carry-forward from previous retro
+
+| Item | Status | Evidence |
+|---|---|---|
+| previous item | Done | commit abc1234 |
+
+- Reconciliation: $recon
+MD
+    if [[ $no_findings -eq 0 ]]; then
+      cat <<MD
+
+## Findings
+
+### What worked well
+- **What happened**: the warrant gated the fifth level
+  **Cites**: T1
+MD
+      if [[ $extra_finding -eq 1 ]]; then
+        cat <<MD
+
+### Process observations
+- **What happened**: the checker grew four conditions
+  **Cites**: T1
+MD
+      fi
+    fi
+    cat <<MD
+
+## Interview Transcript
+
+- Independence level: $level
+- Rounds used: $rounds
+
+| ID | Round | Phase | Probe | Answer | Evidence | Verdict (verbatim) |
+|---|---|---|---|---|---|---|
+MD
+    if [[ "$row_verdict" != "none" ]]; then
+      printf '| T1 | 1 | 5 | probe | answer | commit abc1234 | %s |\n' "$row_verdict"
+    fi
+    if [[ $stray_no_spec -eq 1 ]]; then
+      printf '\n(An interview answer said no spec exists for the tooling.)\n'
+    fi
+  } >"$doc"
+}
+
+# Couples `cond_phase4_unregistered` to the prose that owns the rule. Scoped to
+# the Phase 4 section: `registered` and `accounted for` also occur in the
+# warrant section, so a file-wide check would stay green after the Phase 4
+# clause moved or weakened.
+assert_phase4_anchors() {
+  local dir="$1" section anchor
+  section="$(extract_section "$dir/skills/retrospective/SKILL.md" "## Phase 4: Carry-Forward Reconciliation")"
+  if [[ -z "$section" ]]; then
+    echo "  assertion failed (phase 4 anchors): Phase 4 section not found"
+    return 1
+  fi
+  for anchor in "row by row, by name" "registered" "accounted for"; do
+    if [[ "$section" != *"$anchor"* ]]; then
+      echo "  assertion failed (phase 4 anchors): Phase 4 section missing anchor: $anchor"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# The previous retro document: a registration table only, one row per name.
+write_fixture_prev_retro() {
+  local doc="$1"; shift
+  {
+    cat <<MD
+## Carry-forward items registered
+
+| Item | Type | Priority | Tracked at |
+|---|---|---|---|
+MD
+    local item
+    for item in "$@"; do
+      printf '| %s | process | P2 | ROADMAP.md |\n' "$item"
+    done
+  } >"$doc"
+}
+
+# The current retro document, at a probed level so that only
+# `phase4-unregistered` can speak: one carry-forward row per name, plus the
+# reconciliation bullet.
+write_fixture_current_retro() {
+  local doc="$1" recon="$2"; shift 2
+  {
+    cat <<MD
+## Carry-forward from previous retro
+
+| Item | Status | Evidence |
+|---|---|---|
+MD
+    local item
+    for item in "$@"; do
+      printf '| %s | Done | commit abc1234 |\n' "$item"
+    done
+    cat <<MD
+
+- Reconciliation: $recon
+
+## Interview Transcript
+
+- Independence level: heterogeneous
+- Rounds used: 1 (one facilitator dispatch)
+
+| ID | Round | Phase | Probe | Answer | Evidence | Verdict (verbatim) |
+|---|---|---|---|---|---|---|
+| T1 | 1 | 4 | probe | answer | commit abc1234 | accepted |
+MD
+  } >"$doc"
+}
+
+assert_condition_name() {
+  local actual="$1" expected="$2"
+  if [[ "$actual" == "$expected" ]]; then
+    return 0
+  fi
+  echo "  assertion failed (condition name): expected $expected, got: $actual"
+  return 1
+}
+
 run_case() {
   local name="$1"
   shift
@@ -236,7 +908,7 @@ PY
   return $result
 }
 
-# --- Case H: template has only 3 independence levels (malformation guard) ---
+# --- Case H: template has only 4 independence levels (malformation guard) ---
 case_h() {
   local dir out code result=0
   dir="$(setup_copy)" || return 1
@@ -250,7 +922,7 @@ open(path, "w", encoding="utf-8").write(text)
 PY
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
-  assert_fail_naming "$out" "expected 4 distinct independence levels" "FAIL names the level-count guard" || result=1
+  assert_fail_naming "$out" "expected 5 distinct independence levels" "FAIL names the level-count guard" || result=1
   rm -rf "$dir"
   return $result
 }
@@ -293,6 +965,663 @@ PY
   return $result
 }
 
+# --- Case C1: `not-probed (no narrative warranted)` deleted from the skill prose ---
+# Removes the backticked occurrence (backticks included — dropping only the
+# inner text would leave an empty backtick pair that de-pairs the file's
+# remaining spans and trips pre-existing check 6 instead) from
+# skills/retrospective/SKILL.md. Regression guard for the fifth level value:
+# check 9 must name the skill file and the missing level.
+case_c1() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir/skills/retrospective/SKILL.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+assert "`not-probed (no narrative warranted)`" in text, "fixture assumption broken: backticked not-probed level not found in skill prose"
+text = text.replace("`not-probed (no narrative warranted)`", "")
+assert "not-probed (no narrative warranted)" not in text, "fixture assumption broken: a non-backticked not-probed level occurrence remains"
+open(path, "w", encoding="utf-8").write(text)
+PY
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "skills/retrospective/SKILL.md" "FAIL line names the skill file" || result=1
+  assert_fail_naming "$out" "not-probed (no narrative warranted)" "FAIL line names the missing level value" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C2: `not-probed (no narrative warranted)` deleted from the probes contract ---
+# Same removal against skills/retrospective/references/interview-probes.md.
+# Regression guard for the fifth level value on the probes side.
+case_c2() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir/skills/retrospective/references/interview-probes.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+assert "not-probed (no narrative warranted)" in text, "fixture assumption broken: not-probed level not found in the probes contract"
+text = text.replace("not-probed (no narrative warranted)", "")
+open(path, "w", encoding="utf-8").write(text)
+PY
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "skills/retrospective/references/interview-probes.md" "FAIL line names the probes file" || result=1
+  assert_fail_naming "$out" "not-probed (no narrative warranted)" "FAIL line names the missing level value" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C3: a non-final level deleted from the probes contract ---
+# Removes `in-thread (approximated independence)` from
+# skills/retrospective/references/interview-probes.md. The list-final level
+# stays intact, so a positional rule that inspects only the last value passes
+# the mutated tree. Discrimination case: check 9 must assert every level
+# against the probes contract, not the final one.
+case_c3() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir/skills/retrospective/references/interview-probes.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+assert "in-thread (approximated independence)" in text, "fixture assumption broken: in-thread level not found in the probes contract"
+text = text.replace("in-thread (approximated independence)", "in-thread")
+open(path, "w", encoding="utf-8").write(text)
+PY
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "skills/retrospective/references/interview-probes.md" "FAIL line names the probes file" || result=1
+  assert_fail_naming "$out" "in-thread (approximated independence)" "FAIL line names the missing level value" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C4: clean repo carrying five levels, no mutation ---
+# Check 9 passes an unmutated tree once the fifth level exists in every
+# consumer file.
+case_c4() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code"; result=1; }
+  assert_contains "$out" "ok:   retro interview format: template and skill prose agree" "ok-line" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C5: degraded level justified by `mode:headless` ---
+# The rounds-used line cites the flag instead of an absent capability. The
+# checker must reject with `phase8-headless`.
+case_c5() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "self-checklist" \
+    "0 (mode:headless, so no facilitator was dispatched)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase8-headless" || result=1
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C6: degraded level naming both absent facilitator channels ---
+# The canonical accepted justification. The checker must accept.
+case_c6() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "self-checklist" \
+    "0 (no subagent primitive and no external facilitator CLI reachable in this harness)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C7: degraded level naming only one absent channel ---
+# Discrimination case: rung 1 of the dispatch ladder names an external CLI
+# facilitator that does not depend on the subagent primitive, so an absent
+# subagent primitive alone does not warrant `self-checklist`. The checker must
+# reject with `phase8-capability`.
+case_c7() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "self-checklist" \
+    "0 (no subagent primitive in this harness)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase8-capability" || result=1
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C8: not-probed on the dispatch path ---
+# One confirmation row with verdict `accepted`, no degraded Phase 3 verdict, an
+# agreeing reconciliation, and no finding outside What Worked Well. The
+# checker must accept.
+case_c8() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C9: not-probed claimed over a `Not met` criterion ---
+# A criterion the cycle did not meet is narrative material by definition. The
+# checker must reject with `W1`.
+case_c9() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --measured "Not met — the checker never rejected a bare claim" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C10: not-probed claimed over an unreconciled carry-forward ---
+# Four items registered, three accounted for: the missing item is exactly what
+# a probe would surface. The checker must reject with `W2`.
+case_c10() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --recon "registered 4, accounted for 3" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W2" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_reconciliation_bullet_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C12: not-probed with no dispatch and no capability claim ---
+# The load-bearing case. Zero transcript rows and a rounds-used line carrying
+# neither capability anchor is the incentive shape the fifth value risks
+# creating: nothing to probe, asserted by the party who benefits from
+# asserting it. The checker must reject with `W4`.
+case_c12() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --rows none --rounds "0 (nothing warranted probing)" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W4" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C13: not-probed on the no-channel path ---
+# Zero transcript rows, but the rounds-used line carries both capability
+# anchors — the same absent-capability claim `self-checklist` carries. The
+# checker must accept.
+case_c13() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" --rows none \
+    --rounds "0 (no subagent primitive and no external facilitator CLI reachable in this harness)" \
+    || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C14: not-probed confirmed by a self-attested row ---
+# Discrimination case: a row exists, so the zero-row path never applies, but
+# the row is the claimant's own verdict. The checker must reject with `W4`.
+case_c14() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --rows "self-attested" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W4" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C15: not-probed claimed alongside a Process Observations finding ---
+# A finding outside What Worked Well is a narrative the retro already wrote.
+# The checker must reject with `W3`.
+case_c15() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --extra-finding || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W3" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C16: not-probed with the measured-criteria section absent ---
+# Deleting the section is the cheapest way to hold no `Partially met` or
+# `Not met` cell. An absent field fails the condition it belongs to, so the
+# checker must reject with `W1` rather than pass vacuously.
+case_c16() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --no-measured || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C17: not-probed with the Findings section absent ---
+# Same vacuity on the other side: a document that records no finding has not
+# shown it has no narrative. The checker must reject with `W3`.
+case_c17() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --no-findings || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W3" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C18: `Not met` cell plus a stray no-spec sentence ---
+# The no-spec escape hatch belongs to the measured-criteria section. This
+# fixture is C9 with the sentence appended after the transcript, where it
+# cannot speak for the criteria table. The checker must still reject with `W1`.
+case_c18() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --measured "Not met — the checker never rejected a bare claim" \
+    --stray-no-spec || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C19: no-spec statement inside the measured-criteria section ---
+# The escape hatch itself, written in the author's own words: the section exists
+# and carries no table. Discrimination case against C16 and C18 — scoping the
+# check must not kill it. The fixture states the fact rather than reproducing the
+# template's instructional line, which C26 now proves is not a statement at all.
+case_c19() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --no-spec || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C11: a carry-forward row the previous retro never registered ---
+# The previous document registers four items and the current table holds four
+# rows, so every count agrees. One registered name has been replaced by an
+# unregistered one, which a count-only reconciliation cannot see. The checker
+# must reject with `phase4-unregistered`.
+case_c11() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" \
+    "checker grammar" "dispatch cap" "template drift" "warrant wording"
+  write_fixture_current_retro "$dir/fixture-retro.md" "registered 4, accounted for 4" \
+    "checker grammar" "dispatch cap" "template drift" "report formatting"
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase4-unregistered" || result=1
+  assert_phase4_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C20: every current row reproduces a registered name ---
+# The accepting counterpart of C11, with the same four registered items and no
+# substitution. Discrimination case: the by-name comparison must not reject a
+# reconciliation that is correct.
+case_c20() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" \
+    "checker grammar" "dispatch cap" "template drift" "warrant wording"
+  write_fixture_current_retro "$dir/fixture-retro.md" "registered 4, accounted for 4" \
+    "Checker Grammar" "dispatch cap " " template drift" "warrant wording"
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C21: the degraded reconciliation bullet under not-probed ---
+# The template's degraded form records `registered 0, accounted for 0` with the
+# suffix naming the missing registration table. An absent measurement is not a
+# clean one, so the checker must reject with `W2`.
+case_c21() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --recon "registered 0, accounted for 0 — degraded: previous retro has no registration table" \
+    || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W2" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_reconciliation_bullet_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C22: in-thread naming why fresh context was unavailable ---
+# The shipped prose (skills/retrospective/SKILL.md line 116) asks an
+# `in-thread` claim to name why fresh context was unavailable, not to name both
+# facilitator channels. This document follows that prose exactly, so the
+# checker must accept.
+case_c22() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "in-thread (approximated independence)" \
+    "2 (fresh context was unavailable: the only reachable worker shares this thread's transcript)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C23: in-thread with a bare round count and no reason ---
+# Discrimination case for C22: the level is degraded and the line carries the
+# count alone, so nothing states why fresh context was unavailable. The checker
+# must reject with `phase8-capability`.
+case_c23() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "in-thread (approximated independence)" "2"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase8-capability" || result=1
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C24: `Not met` cell beside the template's instructional line ---
+# The cheapest evasion of the no-spec escape hatch: leave the boilerplate the
+# template ships and record an unmet criterion anyway. Two independent guards
+# reject it — the verdict rows are read before any statement, and the
+# instructional line is not a statement. The checker must reject with `W1`.
+case_c24() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --measured "Not met — the checker never rejected a bare claim" \
+    --boilerplate || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  assert_no_spec_boilerplate_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C25: `Not met` cell beside a genuine no-spec statement ---
+# Discrimination case for the ordering alone: the statement is real, so the
+# boilerplate exclusion never speaks, and only reading the verdict rows first
+# rejects the document. A measured criterion that came out unmet is narrative
+# material whatever the section says beside it. The checker must reject with `W1`.
+case_c25() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --measured "Not met — the checker never rejected a bare claim" \
+    --no-spec-line || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C26: the template's instructional line and nothing else ---
+# Discrimination case for the exclusion alone: no verdict row exists, so the
+# ordering never speaks. Boilerplate an author never deleted is guidance
+# addressed to the author, not a claim that this cycle had no spec. Paired with
+# C19, which accepts the same shape once a real statement replaces the line.
+# The checker must reject with `W1`.
+case_c26() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --no-table --boilerplate || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_no_spec_boilerplate_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C27: an independence level outside the template's five ---
+# A level the template never publishes satisfies no level-gated condition, so an
+# unchecked one would pass every condition vacuously. The checker must reject
+# with `level-unrecognized`.
+case_c27() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "self-review" \
+    "0 (nothing warranted probing)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "level-unrecognized" || result=1
+  assert_levels_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C28: a degraded level carrying a trailing space ---
+# Discrimination case for the level trim: the claim is C7's insufficient one, so
+# the document must reject exactly as C7 does. Without the trim the level matches
+# nothing, every condition passes vacuously, and one invisible character buys an
+# acceptance. The checker must reject with `phase8-capability`.
+case_c28() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "self-checklist " \
+    "0 (no subagent primitive in this harness)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase8-capability" || result=1
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C29: not-probed confirmed by a terminal rejection row ---
+# Discrimination case for W4's positive requirement: a row exists and it is not
+# `self-attested`, so the two pre-existing guards both stay silent, yet the row
+# records `no evidenced answer (3 rejections)` — the dispatch reached a
+# facilitator and got no evidenced answer, which confirms nothing. The checker
+# must reject with `W4`.
+case_c29() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --rows "no evidenced answer (3 rejections)" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W4" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C30: the accounted-for figure exceeds the carry-forward table ---
+# The bullet reads `registered 2, accounted for 2` while the table it describes
+# holds one row. The two numbers agree with each other, so a bullet-only parse
+# passes; only counting M off the table sees the second item that was never
+# reconciled. The checker must reject with `W2`.
+case_c30() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --recon "registered 2, accounted for 2" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W2" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_reconciliation_bullet_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C31: the registered figure understates the previous document ---
+# The other half of the derivation: the previous retro registered two items and
+# the bullet reads `registered 1, accounted for 1`. Both numbers agree with each
+# other and with this doc's one-row table, so only counting N off the previous
+# registration table sees the understatement. `W2` precedes `phase4-unregistered`
+# in RETRO_CONDITIONS, so `W2` is the name reported even though the dropped item
+# would also fail the later condition.
+case_c31() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" "previous item" "dispatch cap"
+  write_fixture_retro_full "$dir/fixture-retro.md" || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W2" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_reconciliation_bullet_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C32: the reviewer's worked example, one name filling two rows ---
+# The previous retro registers two items; the current table lists the first one
+# twice. Every current name is registered and both counts read 2, so the
+# one-directional check and the bullet parse are both satisfied while the second
+# registered item has vanished. The checker must reject with
+# `phase4-unregistered`. Two of the new guards can see this shape, so C33 and
+# C34 isolate them one at a time.
+case_c32() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" "checker grammar" "dispatch cap"
+  write_fixture_current_retro "$dir/fixture-retro.md" "registered 2, accounted for 2" \
+    "checker grammar" "checker grammar"
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase4-unregistered" || result=1
+  assert_phase4_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C33: a duplicated name with nothing dropped ---
+# Isolates the duplicate guard: both registered items appear, so no item was
+# dropped and every name is registered — the only defect is the first name
+# occupying two rows. The checker must reject with `phase4-unregistered`.
+case_c33() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" "checker grammar" "dispatch cap"
+  write_fixture_current_retro "$dir/fixture-retro.md" "registered 2, accounted for 3" \
+    "checker grammar" "checker grammar" "dispatch cap"
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase4-unregistered" || result=1
+  assert_phase4_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C34: a registered item no current row names ---
+# Isolates the dropped-item guard: the one current row is registered and unique,
+# so neither the unregistered nor the duplicate guard speaks. The second
+# registered item is simply missing — the silent drop Phase 4 calls a defect.
+# The checker must reject with `phase4-unregistered`.
+case_c34() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" "checker grammar" "dispatch cap"
+  write_fixture_current_retro "$dir/fixture-retro.md" "registered 2, accounted for 1" \
+    "checker grammar"
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase4-unregistered" || result=1
+  assert_phase4_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -303,6 +1632,40 @@ run_case G case_g
 run_case H case_h
 run_case I case_i
 run_case J case_j
+run_case C1 case_c1
+run_case C2 case_c2
+run_case C3 case_c3
+run_case C4 case_c4
+run_case C5 case_c5
+run_case C6 case_c6
+run_case C7 case_c7
+run_case C8 case_c8
+run_case C9 case_c9
+run_case C10 case_c10
+run_case C11 case_c11
+run_case C12 case_c12
+run_case C13 case_c13
+run_case C14 case_c14
+run_case C15 case_c15
+run_case C16 case_c16
+run_case C17 case_c17
+run_case C18 case_c18
+run_case C19 case_c19
+run_case C20 case_c20
+run_case C21 case_c21
+run_case C22 case_c22
+run_case C23 case_c23
+run_case C24 case_c24
+run_case C25 case_c25
+run_case C26 case_c26
+run_case C27 case_c27
+run_case C28 case_c28
+run_case C29 case_c29
+run_case C30 case_c30
+run_case C31 case_c31
+run_case C32 case_c32
+run_case C33 case_c33
+run_case C34 case_c34
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then

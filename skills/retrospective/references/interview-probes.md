@@ -1,6 +1,6 @@
 # Retro Interview Probes
 
-The facilitator's question bank. Same grammar as `designing`'s rigor-gap probes: one gap = one open-ended probe, concrete enough to bite into, never a menu. Probes are starting points — follow the evidence, not the list. In headless/single-agent mode this file runs as a fixed self-checklist instead of a dialogue — transcript rows carry `self-attested` verdicts under the `self-checklist` independence level.
+The facilitator's question bank. Same grammar as `designing`'s rigor-gap probes: one gap = one open-ended probe, concrete enough to bite into, never a menu. Probes are starting points — follow the evidence, not the list. When the harness offers no subagent primitive and no external facilitator CLI, this file runs as a fixed self-checklist instead of a dialogue — transcript rows carry `self-attested` verdicts under the `self-checklist` independence level.
 
 ## Carry-forward probes (Phase 4)
 
@@ -41,5 +41,6 @@ Verdict forms by independence level:
 | heterogeneous / same-model fresh-context | `accepted`, `no evidenced answer (3 rejections): <verbatim>`, `no evidenced answer (dispatch cap): <verbatim>` |
 | in-thread (approximated independence) | `self-attested` (the respondent and facilitator share a context; `accepted` would misrepresent the independence) |
 | self-checklist | `self-attested` (the rows are the checklist answers) |
+| not-probed (no narrative warranted) | two paths — on the reachable-channel path the confirmation row carries `accepted`; on the no-channel path the table holds no verdict cells at all. `self-attested` is never a `not-probed` verdict: it marks a degraded probe, not an absent one. |
 
 Phase 5 findings may only cite evidence that appears in a triple — by T-ID — or in Phase 2–3 data; nothing enters a finding on narrative authority alone.

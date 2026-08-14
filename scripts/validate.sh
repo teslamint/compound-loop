@@ -330,9 +330,9 @@ if len(level_lines) != 1:
 else:
     levels = [v.strip() for v in level_lines[0][len(LEVEL_PREFIX):].split("|")]
     levels = [v for v in levels if v]
-    if len(set(levels)) != 4:
+    if len(set(levels)) != 5:
         fail(
-            f"{TEMPLATE}: expected 4 distinct independence levels on the "
+            f"{TEMPLATE}: expected 5 distinct independence levels on the "
             f"'{LEVEL_PREFIX}' line, found {len(set(levels))}: {levels!r}"
         )
         levels = []
@@ -364,15 +364,15 @@ if skill_text is not None:
         if not boundary_search(level, skill_text):
             fail(f"independence level '{level}' from {TEMPLATE} not found in {SKILL}")
 
-# The probes contract cites exactly one rung — the degraded self-checklist
-# mode, the list-final value. A template+SKILL co-rename of that rung would
-# otherwise pass while the probes contract keeps the stale name
-# (docs/deviations/2026-07-21-check9-probes-level-scope-003.md).
+# The probes contract carries the verdict forms of every rung, so every
+# template level is asserted against it — not the list-final value alone.
+# This supersedes the earlier list-final scope
+# (docs/plans/2026-08-14-001-fix-retro-interview-integrity-plan.md).
 probes_text = consumers.get(PROBES)
-if probes_text is not None and levels:
-    degraded = levels[-1]
-    if not boundary_search(degraded, probes_text):
-        fail(f"independence level '{degraded}' from {TEMPLATE} not found in {PROBES}")
+if probes_text is not None:
+    for level in levels:
+        if not boundary_search(level, probes_text):
+            fail(f"independence level '{level}' from {TEMPLATE} not found in {PROBES}")
 
 # The stable vocabulary anchor of a verdict form is its text before any
 # parenthetical (e.g. 'no evidenced answer (3 rejections): <verbatim>'

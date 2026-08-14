@@ -45,6 +45,14 @@ The Measured result cell uses the binary completion report form — `verified: <
 (Every item from the previous retro appears here — silent drops are a defect.
 Rows probed during the interview append `(T<n>)` to their Evidence cell.)
 
+- Reconciliation: registered <N>, accounted for <M>
+
+(N is the number of data rows in the previous retro's `Carry-forward items registered` table;
+M is the number of data rows in the table above. A previous retro that carries no registration
+table yields the degraded form of the same bullet:
+`- Reconciliation: registered 0, accounted for 0 — degraded: previous retro has no registration table`.
+Both forms are bullets — never table rows, which would read as carry-forward items.)
+
 - Previous doc shape: conformant | violations recorded as findings | pre-schema, exempt | no previous retro doc
 
 (the backward check's result on the previous retro doc; `no previous retro doc` is for the
@@ -52,7 +60,7 @@ first retro in a repo where no prior doc exists under `docs/retros/`)
 
 ## Interview Transcript
 
-- Independence level: heterogeneous | same-model fresh-context | in-thread (approximated independence) | self-checklist
+- Independence level: heterogeneous | same-model fresh-context | in-thread (approximated independence) | self-checklist | not-probed (no narrative warranted)
 - Rounds used: N (max 5)
 
 | ID | Round | Phase | Probe | Answer | Evidence | Verdict (verbatim) |
@@ -63,7 +71,8 @@ first retro in a repo where no prior doc exists under `docs/retros/`)
 Verdict cell values: `accepted` | `no evidenced answer (3 rejections): <verbatim>` | `self-attested` | `no evidenced answer (dispatch cap): <verbatim>`
 
 (`self-attested` is for degraded modes only; in `self-checklist` mode the rows are the
-checklist answers; a zero-row table under a valid header is valid.
+checklist answers; under `not-probed (no narrative warranted)` a zero-row table
+under a valid header is valid on the no-channel path.
 `no evidenced answer (dispatch cap): <verbatim>` is for exchanges terminated because the
 5-dispatch global cap was exhausted before the 3-rejection limit was reached — the
 facilitator's last probe text is recorded verbatim.
