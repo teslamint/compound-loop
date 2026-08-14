@@ -1,6 +1,6 @@
 ---
 title: Planning Discrimination and Verdict Coverage
-status: draft
+status: approved
 date: 2026-08-15
 schema: spec/v1
 ---
