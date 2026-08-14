@@ -80,7 +80,9 @@ assert_fail_naming() {
 RETRO_CONDITIONS=(phase8-headless phase8-capability W1 W2 W3 W4 phase4-unregistered)
 
 # Level values are the case-sensitivity exception: they match exactly.
-RETRO_DEGRADED_LEVELS=("in-thread (approximated independence)" "self-checklist")
+RETRO_INTHREAD_LEVEL="in-thread (approximated independence)"
+RETRO_SELFCHECKLIST_LEVEL="self-checklist"
+RETRO_DEGRADED_LEVELS=("$RETRO_INTHREAD_LEVEL" "$RETRO_SELFCHECKLIST_LEVEL")
 RETRO_NOTPROBED_LEVEL="not-probed (no narrative warranted)"
 
 RETRO_LEVEL=""
@@ -148,11 +150,27 @@ cond_phase8_headless() {
   return 0
 }
 
-# Both facilitator-channel anchors on the rounds-used line, case-insensitively,
-# when the level is degraded.
+# The absent-capability claim on the rounds-used line, scoped by level, because
+# the two degraded levels carry two different claims
+# (docs/specs/2026-08-14-retro-interview-integrity-design.md line 147,
+# skills/retrospective/SKILL.md line 116; see
+# docs/deviations/2026-08-14-in-thread-capability-scope-009.md).
+#
+#   self-checklist -> both facilitator-channel anchors, case-insensitively.
+#   in-thread      -> a reason clause is present after the round count. The
+#                     shipped prose asks the claim to name why fresh context was
+#                     unavailable; a fixed phrase cannot be required of a reason
+#                     the author writes in their own words, so the mechanical
+#                     test is presence, not wording.
 cond_phase8_capability() {
-  local _doc="$1" line
+  local _doc="$1" line reason
   [[ $RETRO_DEGRADED -eq 1 ]] || return 0
+  if [[ "$RETRO_LEVEL" == "$RETRO_INTHREAD_LEVEL" ]]; then
+    reason="${RETRO_ROUNDS_LINE#*:}"
+    reason="$(sed -E 's/^[[:space:]]*[0-9]+//' <<<"$reason")"
+    [[ "$reason" == *[[:alnum:]]* ]] || return 1
+    return 0
+  fi
   line="$(tr '[:upper:]' '[:lower:]' <<<"$RETRO_ROUNDS_LINE")"
   [[ "$line" == *"no subagent primitive"* ]] || return 1
   [[ "$line" == *"no external facilitator cli"* ]] || return 1
@@ -1196,6 +1214,41 @@ case_c21() {
   return $result
 }
 
+# --- Case C22: in-thread naming why fresh context was unavailable ---
+# The shipped prose (skills/retrospective/SKILL.md line 116) asks an
+# `in-thread` claim to name why fresh context was unavailable, not to name both
+# facilitator channels. This document follows that prose exactly, so the
+# checker must accept.
+case_c22() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "in-thread (approximated independence)" \
+    "2 (fresh context was unavailable: the only reachable worker shares this thread's transcript)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C23: in-thread with a bare round count and no reason ---
+# Discrimination case for C22: the level is degraded and the line carries the
+# count alone, so nothing states why fresh context was unavailable. The checker
+# must reject with `phase8-capability`.
+case_c23() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "in-thread (approximated independence)" "2"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase8-capability" || result=1
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -1227,6 +1280,8 @@ run_case C18 case_c18
 run_case C19 case_c19
 run_case C20 case_c20
 run_case C21 case_c21
+run_case C22 case_c22
+run_case C23 case_c23
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
