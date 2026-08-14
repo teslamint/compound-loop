@@ -1,6 +1,6 @@
 # Retro Interview Probes
 
-The facilitator's question bank. Same grammar as `designing`'s rigor-gap probes: one gap = one open-ended probe, concrete enough to bite into, never a menu. Probes are starting points — follow the evidence, not the list. In headless/single-agent mode this file runs as a fixed self-checklist instead of a dialogue — transcript rows carry `self-attested` verdicts under the `self-checklist` independence level.
+The facilitator's question bank. Same grammar as `designing`'s rigor-gap probes: one gap = one open-ended probe, concrete enough to bite into, never a menu. Probes are starting points — follow the evidence, not the list. When the harness offers no subagent primitive and no external facilitator CLI, this file runs as a fixed self-checklist instead of a dialogue — transcript rows carry `self-attested` verdicts under the `self-checklist` independence level.
 
 ## Carry-forward probes (Phase 4)
 

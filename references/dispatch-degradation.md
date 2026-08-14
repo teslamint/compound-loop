@@ -19,7 +19,7 @@ No parallel primitive (or the caller degraded deliberately): run the same work i
 
 ## Tier 3 — single-call fallback
 
-Harness offers no subagent capability at all (or the run is headless with a strict budget): one prompt executes all selected work items **serially inside itself**, emitting each item's structured output before self-merging.
+Harness offers no subagent capability at all (or a strict dispatch budget applies): one prompt executes all selected work items **serially inside itself**, emitting each item's structured output before self-merging.
 
 - The per-item output contract is unchanged — downstream consumers cannot tell which tier produced the artifact.
 - Verification adjusts: where Tier 1 uses a per-finding validator wave, Tier 3 uses a capped re-review loop instead (cheaper, same intent).
