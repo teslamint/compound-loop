@@ -153,17 +153,25 @@ cond_phase8_capability() {
 # evidence never authorizes the cheapest level.
 
 # W1: no Verdict cell of the Phase 3 table reads `Partially met` or `Not met`
-# (casing of schemas/retro-template.md line 35, matched case-insensitively),
-# or the document states that no spec exists.
+# (casing of schemas/retro-template.md line 35, matched case-insensitively), or
+# that same section states that no spec exists — the parenthetical form of
+# schemas/retro-template.md line 37. The no-spec escape hatch is scoped to the
+# section, like every other condition's read: an incidental sentence elsewhere
+# in the document does not license the cheapest level. An absent section, and a
+# present section carrying no data row, both fail when the statement is absent.
 cond_W1() {
-  local doc="$1" row cell
+  local doc="$1" section rows row cell
   [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
-  grep -qi 'no spec exists' "$doc" && return 0
+  section="$(extract_section "$doc" "## Success criteria: measured vs declared")"
+  [[ -n "$section" ]] || return 1
+  grep -qi 'no spec exists' <<<"$section" && return 0
+  rows="$(table_data_rows <<<"$section")"
+  [[ -n "$rows" ]] || return 1
   while IFS= read -r row; do
     [[ -n "$row" ]] || continue
     cell="$(last_cell "$row")"
     grep -Eqi 'partially met|not met' <<<"$cell" && return 1
-  done < <(extract_section "$doc" "## Measured vs. Declared" | table_data_rows)
+  done <<<"$rows"
   return 0
 }
 
@@ -185,15 +193,19 @@ cond_W2() {
 }
 
 # W3: the Findings section carries no entry outside the What Worked Well
-# bucket. A `### ` sub-heading opens a bucket; a list item is an entry.
+# bucket. A `### ` sub-heading opens a bucket; a list item is an entry. An
+# absent section fails: a document with no findings at all has not shown that
+# it has no narrative, it has only declined to say.
 cond_W3() {
-  local doc="$1"
+  local doc="$1" section
   [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
-  extract_section "$doc" "## Findings" | awk '
+  section="$(extract_section "$doc" "## Findings")"
+  [[ -n "$section" ]] || return 1
+  awk '
     /^### / { bucket = tolower($0); sub(/^###[[:space:]]*/, "", bucket); next }
     /^[[:space:]]*[-*][[:space:]]/ { if (bucket != "what worked well") { found = 1; exit } }
     END { exit(found ? 1 : 0) }
-  '
+  ' <<<"$section"
 }
 
 # W4, two paths. Zero transcript rows require both capability anchors on the
@@ -294,10 +306,29 @@ assert_warrant_anchors() {
   return 0
 }
 
-# A full retro fixture: Measured vs. Declared table, carry-forward section with
-# the reconciliation bullet, Findings buckets, and the Interview Transcript.
+# Couples `cond_W1`'s section literal to the template that owns the heading
+# (schemas/retro-template.md line 25). W1's fixtures and W1's extract call share
+# one literal, so they agree with each other whatever that literal says; only
+# this assertion can catch the two drifting away from the real template.
+assert_measured_heading_anchor() {
+  local dir="$1"
+  if ! grep -qxF '## Success criteria: measured vs declared' "$dir/schemas/retro-template.md"; then
+    echo "  assertion failed (measured heading anchor): template lacks the heading cond_W1 extracts"
+    return 1
+  fi
+  return 0
+}
+
+# A full retro fixture: the measured-criteria table under the heading
+# schemas/retro-template.md line 25 carries, carry-forward section with the
+# reconciliation bullet, Findings buckets, and the Interview Transcript.
 # Defaults satisfy all four warrant conditions; each case perturbs one field,
 # which is what makes a rejection attributable to the condition it names.
+#   --no-measured    omit the measured-criteria section entirely
+#   --no-spec        replace the measured table with the template's no-spec
+#                    parenthetical (schemas/retro-template.md line 37)
+#   --stray-no-spec  append the no-spec statement OUTSIDE the measured section
+#   --no-findings    omit the Findings section entirely
 write_fixture_retro_full() {
   local doc="$1"; shift
   local level="not-probed (no narrative warranted)"
@@ -306,6 +337,7 @@ write_fixture_retro_full() {
   local recon="registered 1, accounted for 1"
   local row_verdict="accepted"
   local extra_finding=0
+  local no_measured=0 no_spec=0 stray_no_spec=0 no_findings=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --level) level="$2"; shift 2 ;;
@@ -314,17 +346,34 @@ write_fixture_retro_full() {
       --recon) recon="$2"; shift 2 ;;
       --rows) row_verdict="$2"; shift 2 ;;
       --extra-finding) extra_finding=1; shift ;;
+      --no-measured) no_measured=1; shift ;;
+      --no-spec) no_spec=1; shift ;;
+      --stray-no-spec) stray_no_spec=1; shift ;;
+      --no-findings) no_findings=1; shift ;;
       *) echo "  harness error: unknown fixture option: $1" >&2; return 1 ;;
     esac
   done
   {
-    cat <<MD
-## Measured vs. Declared
+    if [[ $no_measured -eq 0 ]]; then
+      cat <<MD
+## Success criteria: measured vs declared
 
+MD
+      if [[ $no_spec -eq 1 ]]; then
+        cat <<MD
+(If no spec exists, state that explicitly and skip this section — do not reconstruct criteria after the fact.)
+
+MD
+      else
+        cat <<MD
 | # | Declared criterion | Measurement (command / rubric) | Measured result | Verdict |
 |---|---|---|---|---|
 | 1 | the warrant gates the fifth level | scripts/test-retro-format-drift.sh | verified: seven cases | $measured |
 
+MD
+      fi
+    fi
+    cat <<MD
 ## Carry-forward from previous retro
 
 | Item | Status | Evidence |
@@ -332,6 +381,9 @@ write_fixture_retro_full() {
 | previous item | Done | commit abc1234 |
 
 - Reconciliation: $recon
+MD
+    if [[ $no_findings -eq 0 ]]; then
+      cat <<MD
 
 ## Findings
 
@@ -339,13 +391,14 @@ write_fixture_retro_full() {
 - **What happened**: the warrant gated the fifth level
   **Cites**: T1
 MD
-    if [[ $extra_finding -eq 1 ]]; then
-      cat <<MD
+      if [[ $extra_finding -eq 1 ]]; then
+        cat <<MD
 
 ### Process observations
 - **What happened**: the checker grew four conditions
   **Cites**: T1
 MD
+      fi
     fi
     cat <<MD
 
@@ -359,6 +412,9 @@ MD
 MD
     if [[ "$row_verdict" != "none" ]]; then
       printf '| T1 | 1 | 5 | probe | answer | commit abc1234 | %s |\n' "$row_verdict"
+    fi
+    if [[ $stray_no_spec -eq 1 ]]; then
+      printf '\n(An interview answer said no spec exists for the tooling.)\n'
     fi
   } >"$doc"
 }
@@ -777,6 +833,7 @@ case_c9() {
   [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
   assert_condition_name "$out" "W1" || result=1
   assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
   rm -rf "$dir"
   return $result
 }
@@ -869,6 +926,80 @@ case_c15() {
   return $result
 }
 
+# --- Case C16: not-probed with the measured-criteria section absent ---
+# Deleting the section is the cheapest way to hold no `Partially met` or
+# `Not met` cell. An absent field fails the condition it belongs to, so the
+# checker must reject with `W1` rather than pass vacuously.
+case_c16() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --no-measured || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C17: not-probed with the Findings section absent ---
+# Same vacuity on the other side: a document that records no finding has not
+# shown it has no narrative. The checker must reject with `W3`.
+case_c17() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --no-findings || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W3" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C18: `Not met` cell plus a stray no-spec sentence ---
+# The no-spec escape hatch belongs to the measured-criteria section. This
+# fixture is C9 with the sentence appended after the transcript, where it
+# cannot speak for the criteria table. The checker must still reject with `W1`.
+case_c18() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --measured "Not met — the checker never rejected a bare claim" \
+    --stray-no-spec || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C19: no-spec statement inside the measured-criteria section ---
+# The escape hatch itself, in the template's own parenthetical form
+# (schemas/retro-template.md line 37): the section exists and carries no table.
+# Discrimination case against C16 and C18 — scoping the check must not kill it.
+case_c19() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --no-spec || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -893,6 +1024,10 @@ run_case C12 case_c12
 run_case C13 case_c13
 run_case C14 case_c14
 run_case C15 case_c15
+run_case C16 case_c16
+run_case C17 case_c17
+run_case C18 case_c18
+run_case C19 case_c19
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
