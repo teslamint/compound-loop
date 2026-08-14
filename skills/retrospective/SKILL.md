@@ -64,7 +64,7 @@ The narrative half of a retro is where self-assessment bias lives: the agent tha
 
 **Verbatim rule**: facilitator verdict text — acceptances and rejections both — is recorded verbatim, never summarized by the respondent. In degraded modes where one agent authors probe, answer, and verdict, the Verdict cell records `self-attested`, never `accepted` — a reader must never mistake self-attestation for facilitator acceptance.
 
-**Independence-level recording**: the transcript header carries exactly one of the four closed level values — `heterogeneous`, `same-model fresh-context`, `in-thread (approximated independence)`, `self-checklist`. Tool names are optional free text; the level vocabulary is closed.
+**Independence-level recording**: the transcript header carries exactly one of the five closed level values — `heterogeneous`, `same-model fresh-context`, `in-thread (approximated independence)`, `self-checklist`, `not-probed (no narrative warranted)`. Tool names are optional free text; the level vocabulary is closed.
 
 **Facilitator model selection**: fresh context is the minimum; a *heterogeneous* model is better when the environment offers one (from Claude Code, `codex exec` for a GPT-family facilitator; from Codex, a Claude subagent) — shared model biases produce shared blind spots, so heterogeneity adds a defense self-review cannot. Degrade per `references/dispatch-degradation.md` (plugin root): heterogeneous facilitator → same-model fresh-context subagent → sequential passes (facilitator pass generates probes from artifacts, respondent pass answers, facilitator pass critiques the evidence) → headless/single-agent: skip the interview and run the probe list as a fixed self-checklist. `enforces: P9`
 

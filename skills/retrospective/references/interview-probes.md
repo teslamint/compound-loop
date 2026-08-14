@@ -41,5 +41,6 @@ Verdict forms by independence level:
 | heterogeneous / same-model fresh-context | `accepted`, `no evidenced answer (3 rejections): <verbatim>`, `no evidenced answer (dispatch cap): <verbatim>` |
 | in-thread (approximated independence) | `self-attested` (the respondent and facilitator share a context; `accepted` would misrepresent the independence) |
 | self-checklist | `self-attested` (the rows are the checklist answers) |
+| not-probed (no narrative warranted) | two paths — on the reachable-channel path the confirmation row carries `accepted`; on the no-channel path the table holds no verdict cells at all. `self-attested` is never a `not-probed` verdict: it marks a degraded probe, not an absent one. |
 
 Phase 5 findings may only cite evidence that appears in a triple — by T-ID — or in Phase 2–3 data; nothing enters a finding on narrative authority alone.

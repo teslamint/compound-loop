@@ -52,7 +52,7 @@ first retro in a repo where no prior doc exists under `docs/retros/`)
 
 ## Interview Transcript
 
-- Independence level: heterogeneous | same-model fresh-context | in-thread (approximated independence) | self-checklist
+- Independence level: heterogeneous | same-model fresh-context | in-thread (approximated independence) | self-checklist | not-probed (no narrative warranted)
 - Rounds used: N (max 5)
 
 | ID | Round | Phase | Probe | Answer | Evidence | Verdict (verbatim) |
