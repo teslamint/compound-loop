@@ -9,7 +9,7 @@ fires, not before (`enforces: P6`).
 
 | Item | What | Trigger to build |
 |---|---|---|
-| Conformance suite | Golden-fixture end-to-end tests: full lifecycle, resume, one degraded dispatch tier, on both harnesses | First contract regression that structural validation (`scripts/validate.sh`) fails to catch |
+| Conformance suite | Golden-fixture end-to-end tests: full lifecycle, resume, one degraded dispatch tier, on both harnesses | First contract regression that structural validation (`scripts/validate.sh`) fails to catch — **fired** (structural validation passed 18 retro documents whose independence level the dispatch ladder did not warrant, found and repaired by the `feat/retro-interview-integrity` cycle, 2026-08-14); the suite build stays deferred to its own cycle, so this row remains open |
 | Schema validators + fixtures | plan/v1 and review-envelope/v1 validators with valid/invalid/legacy/migration fixtures | First malformed plan or envelope produced in real use — **fired** (out-of-enum values tracked in a consuming repo, 2026-07-26); plan/v1 half closed by this cycle (`feat/plan-status-terminal-states`); review-envelope/v1 half remains open under the original trigger |
 | Session-history search | Pluggable prior-context source for session-scoped retros (ce-sessions distillation) | First session retro that needed "what was tried before" and couldn't answer it |
 | compound-refresh headless auto-apply | Apply unambiguous Keep/Update actions headlessly (v0.1 is recommend-only) | After ~3 manual refresh cycles show the classifications are trustworthy |
