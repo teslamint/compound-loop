@@ -7,6 +7,7 @@ severity: medium
 symptoms:
   - "Test harness passes 25/25 but two enforced validator checks have zero fixture coverage"
   - "Deleting a validator check (replacing with no-op) leaves the harness green"
+  - "A case is red on the pre-change tree but red at fixture setup, never reaching the assertion it exists to make"
   - "Downstream corpus integration inherits an unenforced check as a silent gap"
 root_cause: "Fixture suite covers the check's positive and negative outcomes but not every enforced rule — a check can exist in the validator with no fixture that would fail if it were removed"
 resolution_type: mutation_testing
@@ -14,7 +15,9 @@ tags:
   - validator
   - fixtures
   - mutation-testing
+  - discriminating-fixture
   - false-green
+  - false-red
 ---
 
 ## Problem
@@ -49,6 +52,28 @@ In this cycle, three gaps were found this way:
 ## Why This Works
 
 A mutation test asks "would removing this check break something?" — a question coverage cannot answer. A check that can be deleted with a green suite is functionally dead code from the harness's perspective, regardless of its presence in the validator.
+
+## Related failure mode: red at fixture setup
+
+Mutation testing catches a case that is green when it should be red. The inverse
+also exists: a case that is **red for the wrong reason**, which is just as
+worthless as discrimination evidence and much easier to mistake for proof.
+
+A removal-shaped case — one that mutates a fixture by deleting a value, then
+asserts the checker rejects it — cannot discriminate on a tree where that value
+does not exist yet. It fails during fixture setup and never reaches its
+assertion. The `retro-interview-integrity` cycle hit this with cases C1 and C2,
+which removed a newly added vocabulary value from each consumer file: committed
+against the pre-change validator they were red, but red at setup, so they proved
+nothing about the old checker. A re-review forced their reclassification from
+discrimination evidence to regression guards, leaving one case (C3) plus a
+count audit as the actual discrimination evidence for that criterion.
+
+The check is one question per red case: **which line failed, and is it the
+assertion?** Record the observed failure line when the case is committed red, not
+just the exit status. A red case whose recorded failure line sits in setup is a
+regression guard for the post-change tree, and must not be counted as evidence
+that the change discriminates.
 
 ## Prevention
 

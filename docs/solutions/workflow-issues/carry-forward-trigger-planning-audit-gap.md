@@ -86,6 +86,14 @@ has closed.
   status — a softened reading ("grazed", "no real drift") is the same miss
   in a second form; this cycle's facilitator rejected exactly that reading
   twice.
+- A row whose trigger class does not match the class of risk it describes:
+  an edit-based trigger over an operational hazard yields a truthful "not
+  fired" beside a live exposure. Record the mismatch as an open unknown
+  rather than letting the trigger verdict read as an all-clear — the
+  worktree-state row did exactly this in the 2026-08-15
+  retro-interview-integrity cycle, where the audit correctly said not fired
+  and the hazard materialized in the same loop
+  (`docs/solutions/workflow-issues/loop-deliverable-in-disposable-state.md`).
 
 ## Examples
 
