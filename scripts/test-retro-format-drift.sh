@@ -64,18 +64,20 @@ assert_fail_naming() {
 # fixture retro document only; it never reads docs/retros/ and is not a
 # repository linter.
 #
-#   check_retro_doc <retro-doc-path>
+#   check_retro_doc <retro-doc-path> [previous-retro-doc-path]
 #     exit 0 -> accept
 #     exit 1 -> reject; prints exactly one condition name on stdout
 #     exit 2 -> document missing or unreadable; prints no condition name
 #
+# The optional second path is the previous retro document. Every condition
+# function receives it as `$2`; the six conditions that only read the current
+# document ignore it. An omitted or unreadable previous document leaves
+# `phase4-unregistered` with nothing to compare, which it treats as satisfied.
+#
 # Conditions evaluate in RETRO_CONDITIONS order and the first failure is the
 # one reported. Adding a condition is one array entry plus one
 # cond_<name-with-underscores> function; nothing else changes.
-# U5 appends `phase4-unregistered` last, together with its cond_ function; a
-# name without a function would make the dispatcher report that name for every
-# document.
-RETRO_CONDITIONS=(phase8-headless phase8-capability W1 W2 W3 W4)
+RETRO_CONDITIONS=(phase8-headless phase8-capability W1 W2 W3 W4 phase4-unregistered)
 
 # Level values are the case-sensitivity exception: they match exactly.
 RETRO_DEGRADED_LEVELS=("in-thread (approximated independence)" "self-checklist")
@@ -122,6 +124,17 @@ last_cell() {
   row="${row%"${row##*[![:space:]]}"}"
   row="${row%|}"
   row="${row##*|}"
+  row="${row#"${row%%[![:space:]]*}"}"
+  row="${row%"${row##*[![:space:]]}"}"
+  printf '%s\n' "$row"
+}
+
+# The first cell of a pipe row, trimmed.
+first_cell() {
+  local row="$1"
+  row="${row#"${row%%[![:space:]]*}"}"
+  row="${row#|}"
+  row="${row%%|*}"
   row="${row#"${row%%[![:space:]]*}"}"
   row="${row%"${row##*[![:space:]]}"}"
   printf '%s\n' "$row"
@@ -231,12 +244,42 @@ cond_W4() {
   return 0
 }
 
+# --- phase4-unregistered --------------------------------------------------
+# Reconciliation by name, not by count. The registered set is the first cell of
+# every data row of `## Carry-forward items registered` in the previous
+# document; the accounted-for set is the first cell of every data row of
+# `## Carry-forward from previous retro` in the current one. A current row
+# naming an item the previous document never registered fails: it inflates the
+# accounted-for count, and an inflated count can conceal a dropped item.
+# Whitespace is stripped and the comparison is case-insensitive. With no
+# previous document there is nothing to compare, so the condition is satisfied;
+# a previous document that carries no registration table registers nothing, so
+# any current data row fails.
+cond_phase4_unregistered() {
+  local doc="$1" prev="${2:-}" registered rows row name reg_names=""
+  [[ -n "$prev" && -r "$prev" ]] || return 0
+  rows="$(extract_section "$doc" "## Carry-forward from previous retro" | table_data_rows)"
+  [[ -n "$rows" ]] || return 0
+  registered="$(extract_section "$prev" "## Carry-forward items registered" | table_data_rows)"
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    reg_names+=$'\n'"$(first_cell "$row" | tr '[:upper:]' '[:lower:]')"
+  done <<<"$registered"
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    name="$(first_cell "$row" | tr '[:upper:]' '[:lower:]')"
+    [[ -n "$name" ]] || continue
+    grep -qxF -- "$name" <<<"$reg_names" || return 1
+  done <<<"$rows"
+  return 0
+}
+
 check_retro_doc() {
-  local doc="$1" name fn
+  local doc="$1" prev="${2:-}" name fn
   retro_parse_doc "$doc" || return 2
   for name in "${RETRO_CONDITIONS[@]}"; do
     fn="cond_${name//-/_}"
-    if ! "$fn" "$doc"; then
+    if ! "$fn" "$doc" "$prev"; then
       printf '%s\n' "$name"
       return 1
     fi
@@ -416,6 +459,75 @@ MD
     if [[ $stray_no_spec -eq 1 ]]; then
       printf '\n(An interview answer said no spec exists for the tooling.)\n'
     fi
+  } >"$doc"
+}
+
+# Couples `cond_phase4_unregistered` to the prose that owns the rule. Scoped to
+# the Phase 4 section: `registered` and `accounted for` also occur in the
+# warrant section, so a file-wide check would stay green after the Phase 4
+# clause moved or weakened.
+assert_phase4_anchors() {
+  local dir="$1" section anchor
+  section="$(extract_section "$dir/skills/retrospective/SKILL.md" "## Phase 4: Carry-Forward Reconciliation")"
+  if [[ -z "$section" ]]; then
+    echo "  assertion failed (phase 4 anchors): Phase 4 section not found"
+    return 1
+  fi
+  for anchor in "row by row, by name" "registered" "accounted for"; do
+    if [[ "$section" != *"$anchor"* ]]; then
+      echo "  assertion failed (phase 4 anchors): Phase 4 section missing anchor: $anchor"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# The previous retro document: a registration table only, one row per name.
+write_fixture_prev_retro() {
+  local doc="$1"; shift
+  {
+    cat <<MD
+## Carry-forward items registered
+
+| Item | Type | Priority | Tracked at |
+|---|---|---|---|
+MD
+    local item
+    for item in "$@"; do
+      printf '| %s | process | P2 | ROADMAP.md |\n' "$item"
+    done
+  } >"$doc"
+}
+
+# The current retro document, at a probed level so that only
+# `phase4-unregistered` can speak: one carry-forward row per name, plus the
+# reconciliation bullet.
+write_fixture_current_retro() {
+  local doc="$1" recon="$2"; shift 2
+  {
+    cat <<MD
+## Carry-forward from previous retro
+
+| Item | Status | Evidence |
+|---|---|---|
+MD
+    local item
+    for item in "$@"; do
+      printf '| %s | Done | commit abc1234 |\n' "$item"
+    done
+    cat <<MD
+
+- Reconciliation: $recon
+
+## Interview Transcript
+
+- Independence level: heterogeneous
+- Rounds used: 1 (one facilitator dispatch)
+
+| ID | Round | Phase | Probe | Answer | Evidence | Verdict (verbatim) |
+|---|---|---|---|---|---|---|
+| T1 | 1 | 4 | probe | answer | commit abc1234 | accepted |
+MD
   } >"$doc"
 }
 
@@ -1000,6 +1112,64 @@ case_c19() {
   return $result
 }
 
+# --- Case C11: a carry-forward row the previous retro never registered ---
+# The previous document registers four items and the current table holds four
+# rows, so every count agrees. One registered name has been replaced by an
+# unregistered one, which a count-only reconciliation cannot see. The checker
+# must reject with `phase4-unregistered`.
+case_c11() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" \
+    "checker grammar" "dispatch cap" "template drift" "warrant wording"
+  write_fixture_current_retro "$dir/fixture-retro.md" "registered 4, accounted for 4" \
+    "checker grammar" "dispatch cap" "template drift" "report formatting"
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase4-unregistered" || result=1
+  assert_phase4_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C20: every current row reproduces a registered name ---
+# The accepting counterpart of C11, with the same four registered items and no
+# substitution. Discrimination case: the by-name comparison must not reject a
+# reconciliation that is correct.
+case_c20() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_prev_retro "$dir/fixture-prev-retro.md" \
+    "checker grammar" "dispatch cap" "template drift" "warrant wording"
+  write_fixture_current_retro "$dir/fixture-retro.md" "registered 4, accounted for 4" \
+    "Checker Grammar" "dispatch cap " " template drift" "warrant wording"
+  out="$(check_retro_doc "$dir/fixture-retro.md" "$dir/fixture-prev-retro.md")"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code (condition: ${out:-none})"; result=1; }
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C21: the degraded reconciliation bullet under not-probed ---
+# The template's degraded form records `registered 0, accounted for 0` with the
+# suffix naming the missing registration table. An absent measurement is not a
+# clean one, so the checker must reject with `W2`.
+case_c21() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --recon "registered 0, accounted for 0 — degraded: previous retro has no registration table" \
+    || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W2" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -1020,6 +1190,7 @@ run_case C7 case_c7
 run_case C8 case_c8
 run_case C9 case_c9
 run_case C10 case_c10
+run_case C11 case_c11
 run_case C12 case_c12
 run_case C13 case_c13
 run_case C14 case_c14
@@ -1028,6 +1199,8 @@ run_case C16 case_c16
 run_case C17 case_c17
 run_case C18 case_c18
 run_case C19 case_c19
+run_case C20 case_c20
+run_case C21 case_c21
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
