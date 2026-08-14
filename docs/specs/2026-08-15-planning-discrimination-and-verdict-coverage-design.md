@@ -53,7 +53,7 @@ An author plans a measurement that can error or come back ambiguous. Verdict cov
 - Regex detection of comparison or verdict shapes inside plan prose. Plan bodies are free narrative; a checker that guesses which steps are comparisons produces false positives and false negatives, and a marker the author chooses to write is self-attested. Rejected by design, not deferred.
 - Mirroring the two rules into `schemas/plan-schema.md` plus a `scripts/validate.sh` agreement check. Deferred with a trigger (Open Decisions 1), because that mechanism proves only that two contract files contain agreeing text; it leaves plan bodies exactly as unaudited as prose alone.
 - `CHANGELOG.md`. `skills/planning/SKILL.md` step 12 assigns changelog entries to `shipping`, never to a planning unit; this spec does not reassign that ownership.
-- Retrofitting the two checks onto the 20 plans already in `docs/plans/` (`find docs/plans -maxdepth 1 -type f -name '*.md' | wc -l` → `20`, observed `2026-08-14T20:04:00Z`). The checks bind plans authored after this change.
+- Retrofitting the two checks onto the 20 plans already in `docs/plans/` (`find docs/plans -maxdepth 1 -type f -name '*.md' | wc -l` → `20`, observed `2026-08-14T20:03:39Z`). The checks bind plans authored after this change.
 - Any claim that the consuming-repository incidents are reproducible here.
 
 ## Assumptions and Preconditions
