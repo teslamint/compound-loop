@@ -77,13 +77,25 @@ assert_fail_naming() {
 # Conditions evaluate in RETRO_CONDITIONS order and the first failure is the
 # one reported. Adding a condition is one array entry plus one
 # cond_<name-with-underscores> function; nothing else changes.
-RETRO_CONDITIONS=(phase8-headless phase8-capability W1 W2 W3 W4 phase4-unregistered)
+RETRO_CONDITIONS=(level-unrecognized phase8-headless phase8-capability W1 W2 W3 W4 phase4-unregistered)
 
 # Level values are the case-sensitivity exception: they match exactly.
 RETRO_INTHREAD_LEVEL="in-thread (approximated independence)"
 RETRO_SELFCHECKLIST_LEVEL="self-checklist"
 RETRO_DEGRADED_LEVELS=("$RETRO_INTHREAD_LEVEL" "$RETRO_SELFCHECKLIST_LEVEL")
 RETRO_NOTPROBED_LEVEL="not-probed (no narrative warranted)"
+RETRO_LEVELS=(
+  "heterogeneous"
+  "same-model fresh-context"
+  "$RETRO_INTHREAD_LEVEL"
+  "$RETRO_SELFCHECKLIST_LEVEL"
+  "$RETRO_NOTPROBED_LEVEL"
+)
+
+# The template's instructional parenthetical (schemas/retro-template.md line
+# 37). It is guidance addressed to the author, not a statement about this
+# cycle, so leaving it in place claims nothing and `cond_W1` excludes it.
+RETRO_NO_SPEC_BOILERPLATE='(If no spec exists, state that explicitly and skip this section — do not reconstruct criteria after the fact.)'
 
 RETRO_LEVEL=""
 RETRO_ROUNDS_LINE=""
@@ -98,6 +110,7 @@ retro_parse_doc() {
   RETRO_NOTPROBED=0
   [[ -r "$doc" ]] || return 1
   RETRO_LEVEL="$(sed -n 's/^- Independence level:[[:space:]]*//p' "$doc" | head -n 1)"
+  RETRO_LEVEL="${RETRO_LEVEL%"${RETRO_LEVEL##*[![:space:]]}"}"
   RETRO_ROUNDS_LINE="$(sed -n '/^- Rounds used:/p' "$doc" | head -n 1)"
   for lvl in "${RETRO_DEGRADED_LEVELS[@]}"; do
     [[ "$RETRO_LEVEL" == "$lvl" ]] && RETRO_DEGRADED=1
@@ -140,6 +153,20 @@ first_cell() {
   row="${row#"${row%%[![:space:]]*}"}"
   row="${row%"${row##*[![:space:]]}"}"
   printf '%s\n' "$row"
+}
+
+# The independence level is one of the five the template publishes. Surrounding
+# whitespace is trimmed before the comparison, so a trailing space no longer
+# makes every level-gated condition vacuous. An unrecognized level is a content
+# defect of the document, not an unreadable file, so it rejects through the
+# ordinary exit-1 path and names itself like every other condition; exit 2 stays
+# reserved for a document the checker could not read at all.
+cond_level_unrecognized() {
+  local _doc="$1" lvl
+  for lvl in "${RETRO_LEVELS[@]}"; do
+    [[ "$RETRO_LEVEL" == "$lvl" ]] && return 0
+  done
+  return 1
 }
 
 # `headless` as a token on the rounds-used line, when the level is degraded.
@@ -185,24 +212,33 @@ cond_phase8_capability() {
 
 # W1: no Verdict cell of the Phase 3 table reads `Partially met` or `Not met`
 # (casing of schemas/retro-template.md line 35, matched case-insensitively), or
-# that same section states that no spec exists — the parenthetical form of
-# schemas/retro-template.md line 37. The no-spec escape hatch is scoped to the
-# section, like every other condition's read: an incidental sentence elsewhere
-# in the document does not license the cheapest level. An absent section, and a
-# present section carrying no data row, both fail when the statement is absent.
+# that same section states that no spec exists.
+#
+# The verdict rows are read FIRST and an unmet criterion rejects unconditionally:
+# a document that measured a criterion and found it unmet has narrative material
+# whatever else the section says, so no statement can excuse it. The no-spec
+# escape hatch speaks only for a section that measured nothing.
+#
+# The escape hatch is scoped to the section, like every other condition's read:
+# an incidental sentence elsewhere in the document does not license the cheapest
+# level. The template's own instructional parenthetical is excluded by exact
+# line, because boilerplate an author never deleted states nothing about this
+# cycle. An absent section, and a present section carrying no data row, both fail
+# when a real statement is absent.
 cond_W1() {
   local doc="$1" section rows row cell
   [[ $RETRO_NOTPROBED -eq 1 ]] || return 0
   section="$(extract_section "$doc" "## Success criteria: measured vs declared")"
   [[ -n "$section" ]] || return 1
-  grep -qi 'no spec exists' <<<"$section" && return 0
   rows="$(table_data_rows <<<"$section")"
-  [[ -n "$rows" ]] || return 1
   while IFS= read -r row; do
     [[ -n "$row" ]] || continue
     cell="$(last_cell "$row")"
     grep -Eqi 'partially met|not met' <<<"$cell" && return 1
   done <<<"$rows"
+  grep -vxF -- "$RETRO_NO_SPEC_BOILERPLATE" <<<"$section" \
+    | grep -qi 'no spec exists' && return 0
+  [[ -n "$rows" ]] || return 1
   return 0
 }
 
@@ -380,6 +416,21 @@ assert_measured_heading_anchor() {
   return 0
 }
 
+# Couples the line `cond_W1` excludes to the template that owns it
+# (schemas/retro-template.md line 37). The exclusion literal and the fixture
+# that writes it are one variable, so they agree with each other whatever that
+# variable says; only this assertion can catch the pair drifting away from the
+# real template — after which the exclusion would guard a line no template
+# publishes, and live boilerplate would satisfy W1 again.
+assert_no_spec_boilerplate_anchor() {
+  local dir="$1"
+  if ! grep -qxF -- "$RETRO_NO_SPEC_BOILERPLATE" "$dir/schemas/retro-template.md"; then
+    echo "  assertion failed (no-spec boilerplate anchor): template lacks the line cond_W1 excludes"
+    return 1
+  fi
+  return 0
+}
+
 # Couples `cond_W2`'s literals to the template that owns the reconciliation
 # bullet (schemas/retro-template.md lines 48 and 53). W2's fixtures and W2's
 # parse share one copy of that text, so they agree with each other whatever it
@@ -410,8 +461,12 @@ assert_reconciliation_bullet_anchor() {
 # Defaults satisfy all four warrant conditions; each case perturbs one field,
 # which is what makes a rejection attributable to the condition it names.
 #   --no-measured    omit the measured-criteria section entirely
-#   --no-spec        replace the measured table with the template's no-spec
-#                    parenthetical (schemas/retro-template.md line 37)
+#   --no-table       omit the measured table, keeping the section heading
+#   --no-spec-line   state in the section that no spec exists, in an author's
+#                    own words rather than the template's instructional line
+#   --boilerplate    leave the template's instructional parenthetical
+#                    (schemas/retro-template.md line 37) in the section
+#   --no-spec        the genuine no-spec document: --no-table --no-spec-line
 #   --stray-no-spec  append the no-spec statement OUTSIDE the measured section
 #   --no-findings    omit the Findings section entirely
 write_fixture_retro_full() {
@@ -422,7 +477,7 @@ write_fixture_retro_full() {
   local recon="registered 1, accounted for 1"
   local row_verdict="accepted"
   local extra_finding=0
-  local no_measured=0 no_spec=0 stray_no_spec=0 no_findings=0
+  local no_measured=0 no_table=0 no_spec_line=0 boilerplate=0 stray_no_spec=0 no_findings=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --level) level="$2"; shift 2 ;;
@@ -432,7 +487,10 @@ write_fixture_retro_full() {
       --rows) row_verdict="$2"; shift 2 ;;
       --extra-finding) extra_finding=1; shift ;;
       --no-measured) no_measured=1; shift ;;
-      --no-spec) no_spec=1; shift ;;
+      --no-table) no_table=1; shift ;;
+      --no-spec-line) no_spec_line=1; shift ;;
+      --boilerplate) boilerplate=1; shift ;;
+      --no-spec) no_table=1; no_spec_line=1; shift ;;
       --stray-no-spec) stray_no_spec=1; shift ;;
       --no-findings) no_findings=1; shift ;;
       *) echo "  harness error: unknown fixture option: $1" >&2; return 1 ;;
@@ -444,18 +502,22 @@ write_fixture_retro_full() {
 ## Success criteria: measured vs declared
 
 MD
-      if [[ $no_spec -eq 1 ]]; then
-        cat <<MD
-(If no spec exists, state that explicitly and skip this section — do not reconstruct criteria after the fact.)
-
-MD
-      else
+      if [[ $no_table -eq 0 ]]; then
         cat <<MD
 | # | Declared criterion | Measurement (command / rubric) | Measured result | Verdict |
 |---|---|---|---|---|
 | 1 | the warrant gates the fifth level | scripts/test-retro-format-drift.sh | verified: seven cases | $measured |
 
 MD
+      fi
+      if [[ $no_spec_line -eq 1 ]]; then
+        cat <<MD
+No spec exists for this cycle, so this section records no criteria.
+
+MD
+      fi
+      if [[ $boilerplate -eq 1 ]]; then
+        printf '%s\n\n' "$RETRO_NO_SPEC_BOILERPLATE"
       fi
     fi
     cat <<MD
@@ -760,7 +822,7 @@ PY
   return $result
 }
 
-# --- Case H: template has only 3 independence levels (malformation guard) ---
+# --- Case H: template has only 4 independence levels (malformation guard) ---
 case_h() {
   local dir out code result=0
   dir="$(setup_copy)" || return 1
@@ -1138,9 +1200,10 @@ case_c18() {
 }
 
 # --- Case C19: no-spec statement inside the measured-criteria section ---
-# The escape hatch itself, in the template's own parenthetical form
-# (schemas/retro-template.md line 37): the section exists and carries no table.
-# Discrimination case against C16 and C18 — scoping the check must not kill it.
+# The escape hatch itself, written in the author's own words: the section exists
+# and carries no table. Discrimination case against C16 and C18 — scoping the
+# check must not kill it. The fixture states the fact rather than reproducing the
+# template's instructional line, which C26 now proves is not a statement at all.
 case_c19() {
   local dir out code result=0
   dir="$(setup_copy)" || return 1
@@ -1249,6 +1312,106 @@ case_c23() {
   return $result
 }
 
+# --- Case C24: `Not met` cell beside the template's instructional line ---
+# The cheapest evasion of the no-spec escape hatch: leave the boilerplate the
+# template ships and record an unmet criterion anyway. Two independent guards
+# reject it — the verdict rows are read before any statement, and the
+# instructional line is not a statement. The checker must reject with `W1`.
+case_c24() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --measured "Not met — the checker never rejected a bare claim" \
+    --boilerplate || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  assert_no_spec_boilerplate_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C25: `Not met` cell beside a genuine no-spec statement ---
+# Discrimination case for the ordering alone: the statement is real, so the
+# boilerplate exclusion never speaks, and only reading the verdict rows first
+# rejects the document. A measured criterion that came out unmet is narrative
+# material whatever the section says beside it. The checker must reject with `W1`.
+case_c25() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --measured "Not met — the checker never rejected a bare claim" \
+    --no-spec-line || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_measured_heading_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C26: the template's instructional line and nothing else ---
+# Discrimination case for the exclusion alone: no verdict row exists, so the
+# ordering never speaks. Boilerplate an author never deleted is guidance
+# addressed to the author, not a claim that this cycle had no spec. Paired with
+# C19, which accepts the same shape once a real statement replaces the line.
+# The checker must reject with `W1`.
+case_c26() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro_full "$dir/fixture-retro.md" \
+    --no-table --boilerplate || { rm -rf "$dir"; return 1; }
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "W1" || result=1
+  assert_warrant_anchors "$dir" || result=1
+  assert_no_spec_boilerplate_anchor "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C27: an independence level outside the template's five ---
+# A level the template never publishes satisfies no level-gated condition, so an
+# unchecked one would pass every condition vacuously. The checker must reject
+# with `level-unrecognized`.
+case_c27() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "self-review" \
+    "0 (nothing warranted probing)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "level-unrecognized" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C28: a degraded level carrying a trailing space ---
+# Discrimination case for the level trim: the claim is C7's insufficient one, so
+# the document must reject exactly as C7 does. Without the trim the level matches
+# nothing, every condition passes vacuously, and one invisible character buys an
+# acceptance. The checker must reject with `phase8-capability`.
+case_c28() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  write_fixture_retro "$dir/fixture-retro.md" "self-checklist " \
+    "0 (no subagent primitive in this harness)"
+  out="$(check_retro_doc "$dir/fixture-retro.md")"; code=$?
+  [[ $code -eq 1 ]] || { echo "  expected exit 1, got $code"; result=1; }
+  assert_condition_name "$out" "phase8-capability" || result=1
+  assert_phase8_anchors "$dir" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -1282,6 +1445,11 @@ run_case C20 case_c20
 run_case C21 case_c21
 run_case C22 case_c22
 run_case C23 case_c23
+run_case C24 case_c24
+run_case C25 case_c25
+run_case C26 case_c26
+run_case C27 case_c27
+run_case C28 case_c28
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
