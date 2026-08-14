@@ -250,7 +250,7 @@ open(path, "w", encoding="utf-8").write(text)
 PY
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
-  assert_fail_naming "$out" "expected 4 distinct independence levels" "FAIL names the level-count guard" || result=1
+  assert_fail_naming "$out" "expected 5 distinct independence levels" "FAIL names the level-count guard" || result=1
   rm -rf "$dir"
   return $result
 }
@@ -293,6 +293,96 @@ PY
   return $result
 }
 
+# --- Case C1: `not-probed (no narrative warranted)` deleted from the skill prose ---
+# Removes the backticked occurrence (backticks included — dropping only the
+# inner text would leave an empty backtick pair that de-pairs the file's
+# remaining spans and trips pre-existing check 6 instead) from
+# skills/retrospective/SKILL.md. Regression guard for the fifth level value:
+# check 9 must name the skill file and the missing level.
+case_c1() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir/skills/retrospective/SKILL.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+assert "`not-probed (no narrative warranted)`" in text, "fixture assumption broken: backticked not-probed level not found in skill prose"
+text = text.replace("`not-probed (no narrative warranted)`", "")
+assert "not-probed (no narrative warranted)" not in text, "fixture assumption broken: a non-backticked not-probed level occurrence remains"
+open(path, "w", encoding="utf-8").write(text)
+PY
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "skills/retrospective/SKILL.md" "FAIL line names the skill file" || result=1
+  assert_fail_naming "$out" "not-probed (no narrative warranted)" "FAIL line names the missing level value" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C2: `not-probed (no narrative warranted)` deleted from the probes contract ---
+# Same removal against skills/retrospective/references/interview-probes.md.
+# Regression guard for the fifth level value on the probes side.
+case_c2() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir/skills/retrospective/references/interview-probes.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+assert "not-probed (no narrative warranted)" in text, "fixture assumption broken: not-probed level not found in the probes contract"
+text = text.replace("not-probed (no narrative warranted)", "")
+open(path, "w", encoding="utf-8").write(text)
+PY
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "skills/retrospective/references/interview-probes.md" "FAIL line names the probes file" || result=1
+  assert_fail_naming "$out" "not-probed (no narrative warranted)" "FAIL line names the missing level value" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C3: a non-final level deleted from the probes contract ---
+# Removes `in-thread (approximated independence)` from
+# skills/retrospective/references/interview-probes.md. The list-final level
+# stays intact, so a positional rule that inspects only the last value passes
+# the mutated tree. Discrimination case: check 9 must assert every level
+# against the probes contract, not the final one.
+case_c3() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir/skills/retrospective/references/interview-probes.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+assert "in-thread (approximated independence)" in text, "fixture assumption broken: in-thread level not found in the probes contract"
+text = text.replace("in-thread (approximated independence)", "in-thread")
+open(path, "w", encoding="utf-8").write(text)
+PY
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
+  assert_fail_naming "$out" "skills/retrospective/references/interview-probes.md" "FAIL line names the probes file" || result=1
+  assert_fail_naming "$out" "in-thread (approximated independence)" "FAIL line names the missing level value" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+# --- Case C4: clean repo carrying five levels, no mutation ---
+# Check 9 passes an unmutated tree once the fifth level exists in every
+# consumer file.
+case_c4() {
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -eq 0 ]] || { echo "  expected exit 0, got $code"; result=1; }
+  assert_contains "$out" "ok:   retro interview format: template and skill prose agree" "ok-line" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -303,6 +393,10 @@ run_case G case_g
 run_case H case_h
 run_case I case_i
 run_case J case_j
+run_case C1 case_c1
+run_case C2 case_c2
+run_case C3 case_c3
+run_case C4 case_c4
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
