@@ -1,0 +1,216 @@
+---
+title: Retro Interview Integrity
+status: draft
+date: 2026-08-14
+schema: spec/v1
+---
+
+# Retro Interview Integrity Design
+
+_Created 2026-08-14. Revised 2026-08-14 after two independent reviews (one heterogeneous via `codex exec`, one same-family)._
+
+## Overview
+
+The `retrospective` skill's interview protocol splits facilitator from respondent to keep an agent from grading its own work. Five defects let that split be skipped, claimed falsely, or bypassed entirely. This spec repairs the dispatch ladder's wording, makes the degraded-mode claim falsifiable against the whole ladder, adds a mechanical carry-forward count reconciliation with parseable fields, and separates "no facilitator was reachable" from "nothing warranted probing" behind a falsifiable warrant.
+
+Source issues: #6, #7, #8, #9, #10.
+
+## User Scenarios
+
+### S1: Headless run on a harness that has subagents
+
+A retro runs with `mode:headless` on Claude Code, where a subagent tool and a Codex CLI are both available. Today the dispatch ladder's fourth rung reads `headless/single-agent`, and the slash reads as "or", so the run legally takes the self-checklist floor. After this change the ladder names rung 4 by capability only, and `mode:headless` is stated as a non-qualifying condition. The run dispatches a same-model fresh-context facilitator instead.
+
+### S2: Run whose subagent primitive dies mid-session
+
+A retro's subagent dispatch fails. The ladder's rung 1 already names an external CLI facilitator (`codex exec`), so the run is not at the floor: it dispatches the external facilitator. `self-checklist` requires **both** channels to be unreachable, and Phase 8 requires the doc to say so — "no subagent primitive and no external facilitator CLI reachable in this harness" — rather than the unfalsifiable "no independent facilitator was available".
+
+### S3: Mechanical change where nothing warranted probing
+
+A retro covers a docs-only text edit. Every success criterion is Met, the carry-forward counts reconcile exactly, and the Findings section has no What to Improve entries. The author records `not-probed (no narrative warranted)` with a zero-row table. The three warrant conditions are visible in the doc itself, so the claim is falsifiable by reading the doc.
+
+### S4: Carry-forward substitution that a matching count conceals
+
+The previous retro registered four carry-forward items. This retro's reconciliation table has four rows, but one registered item is missing and one unregistered item took its place. Phase 4's current prose ("an item that goes unmentioned is a silent drop") does not require reading the previous doc's registration table row by row, so the matching count passes. After this change Phase 4 requires a row-by-row reconciliation by name, both counts recorded in a parseable template field, and an unregistered row flagged as its own defect.
+
+### S5: A run that names `mode:headless` as its justification
+
+An author writes `Independence level: self-checklist` with `Rounds used: 0 (headless mode)`. Phase 8's current check validates only that the level string is drawn from the closed vocabulary, so it passes. After this change the check requires a named absent capability covering the whole ladder and states that `mode:headless` is explicitly not one, so the claim is rejected at the pre-commit gate.
+
+### S6: A run claiming `not-probed` while carrying an unmet criterion
+
+An author records `not-probed (no narrative warranted)` on a retro whose Phase 3 table has a Not Met row. Warrant condition W1 fails on the doc's own content, so the level is rejected and the run must probe or degrade to a facilitator level with a named absent capability.
+
+## Scope
+
+### In
+
+- `skills/retrospective/SKILL.md` — dispatch ladder rung 4 (#6), Phase 8 pre-commit clause and the migrated zero-row sentence (#8, #10), Phase 4 count reconciliation (#9), independence-level vocabulary and the `not-probed` warrant (#10).
+- `skills/retrospective/references/interview-probes.md` — the headless/single-agent assertion at the file's opening paragraph (#6) and the verdict-forms table (#10).
+- `references/dispatch-degradation.md` — the headless conflation in the no-subagent tier (#6). **Shared file with 12 skill and reference consumers** (see Risks).
+- `schemas/retro-template.md` — the independence-level line (#10) and a parseable carry-forward count field (#9).
+- `scripts/validate.sh` check 9 — level count and the probes-consistency rule (#10).
+- `scripts/test-retro-format-drift.sh` — discrimination cases (#8, #9, #10) **and an audit of existing cases A–J against the 5-level template** (see Testing).
+- `ROADMAP.md` — record that the Conformance-suite trigger fired (#7).
+- `CONCEPTS.md` — the `Independence level` definition, which enumerates the closed vocabulary (#10).
+
+### Out
+
+- Annotating or amending the 18 existing zero-round retro docs. They stay as historical record, matching issue #7's own recommendation.
+- Building the Conformance suite. Its ROADMAP trigger fired; the build is its own cycle.
+- Posting the #7 thesis correction to GitHub. That is an outward action (`enforces: P7`) and belongs to this loop's Ship phase, tracked as a named deliverable in Success Criteria 7.
+- `skills/planning/SKILL.md` step 14 (issues #11, #12). Separate loop by user scoping decision.
+- Any repository-wide validation over `docs/retros/*.md`. Deliberately excluded: 17 of 18 existing zero-round docs would fail such a check immediately.
+- Splitting the independence field into two orthogonal fields (independence level + interview disposition). Considered and rejected — see Open Decisions 2.
+
+## Assumptions and Preconditions
+
+Live assumptions retained. Every command below is pipe-free so it is copy-pasteable out of this table; all were rerun at the recorded timestamp. Repository invariants that still apply: `scripts/validate.sh` is the single structural gate and must pass on the post-change tree; `docs/retros/` holds 36 committed retro docs whose shapes this change must not invalidate.
+
+| Claim | Command | Observed at | Observed result | Evidence source |
+|---|---|---|---|---|
+| All four current independence levels already appear in `interview-probes.md`, so requiring every level there is satisfiable without inventing artificial mentions | `rg -c -e heterogeneous -e "same-model fresh-context" -e in-thread -e self-checklist skills/retrospective/references/interview-probes.md` | `2026-08-14T04:25:09+00:00` | `4` | Working tree at `d3c6f0b` |
+| check 9 hardcodes a level count of 4 and selects the probes-checked rung positionally | `rg -n -e "len\(set\(levels\)\) != 4" -e "degraded = levels\[-1\]" scripts/validate.sh` | `2026-08-14T04:25:09+00:00` | `333: if len(set(levels)) != 4:` and `373: degraded = levels[-1]` | Working tree at `d3c6f0b` |
+| `references/dispatch-degradation.md` carries the same headless conflation named in issue #6, which cites only SKILL.md and interview-probes.md | `rg -n -e "no subagent capability at all" references/dispatch-degradation.md` | `2026-08-14T04:25:09+00:00` | Line 22: "Harness offers no subagent capability at all (or the run is headless with a strict budget)" | Working tree at `d3c6f0b` |
+| 18 retro docs record `Rounds used: 0` | `rg -c "Rounds used: 0" docs/retros/` | `2026-08-14T04:25:09+00:00` | 18 files, one match each | Working tree at `d3c6f0b` |
+| The independent-facilitator path was exercised 7 times, falsifying issue #7's "never exercised" thesis | `rg -n -e "Independence level: heterogeneous" -e "Independence level: same-model" -e "Independence level: in-thread" docs/retros/` | `2026-08-14T04:25:09+00:00` | 7 matching lines across 7 docs (5 heterogeneous, 1 same-model fresh-context, 1 in-thread) | Working tree at `d3c6f0b` |
+| The repository's fixture convention is disposable `mktemp -d` trees, so discrimination fixtures need no committed directory and cannot pollute `docs/retros/` | `rg -c "mktemp -d" scripts/test-retro-format-drift.sh` | `2026-08-14T04:25:09+00:00` | `2` (pattern documentation and the per-case setup) | Working tree at `d3c6f0b` |
+| Existing test case H asserts the 4-level guard string and therefore breaks when the count becomes 5 | `rg -n "expected 4 distinct" scripts/test-retro-format-drift.sh` | `2026-08-14T04:25:09+00:00` | Line 253 (level-count guard, breaks) and line 272 (verdict-count guard, unaffected) | Working tree at `d3c6f0b` |
+| `references/dispatch-degradation.md` is consumed by 12 skill and reference files, not 1 | `rg -ln "dispatch-degradation" skills/ references/ schemas/` | `2026-08-14T04:25:09+00:00` | 12 files: compound, debugging, designing, implementing, planning, planning/references/deepening, release-loop, retrospective, reviewing, reviewing/references/merge-pipeline, shipping, shipping/references/pr-feedback | Working tree at `d3c6f0b` |
+| Exactly one existing retro doc lacks a `Carry-forward items registered` table, so Phase 4 step 1 needs a stated fallback | `rg -L --files-without-match "Carry-forward items registered" docs/retros/` | `2026-08-14T04:25:09+00:00` | 1 file: `docs/retros/2026-08-05-add-license-retro.md` (35 of 36 have the table) | Working tree at `d3c6f0b` |
+
+## Architecture
+
+Eight files change. No runtime module structure exists — the deliverable is procedural contract text plus the structural validation that keeps its vocabulary consistent across four files.
+
+The vocabulary flows one way. `schemas/retro-template.md` is the source of the closed level list. `scripts/validate.sh` check 9 parses that list and asserts each value appears in both `skills/retrospective/SKILL.md` and `skills/retrospective/references/interview-probes.md`. A value added to the template without a consumer edit fails the gate; a consumer renamed without the template fails it too.
+
+Data flow for the new Phase 4 step: the previous retro doc's `Carry-forward items registered` table is the input, the current doc's `Carry-forward from previous retro` table is the output, and the reconciliation is a two-way name match whose two cardinalities land in a parseable template field.
+
+## Interface
+
+### Independence-level vocabulary (#10)
+
+The closed list gains a fifth value, appended last:
+
+```
+heterogeneous | same-model fresh-context | in-thread (approximated independence) | self-checklist | not-probed (no narrative warranted)
+```
+
+`not-probed` sits off the independence axis: the first four rank how independent a facilitator was, the fifth records that no probing was warranted. `self-checklist` narrows to exactly one meaning — one agent authored probe, answer, and verdict because no other agent was reachable.
+
+`not-probed` gets its own row in `interview-probes.md`'s verdict-forms table, stating that it carries no verdict cells because it has no rows.
+
+**Precedence when both conditions hold.** A run can have both a degraded environment and nothing warranting probing. `not-probed` wins, and the environment fact is not recorded. The rationale is what the field is for: the independence level exists so a reader can weigh the transcript's verdict cells. A zero-row table has no verdict cells, so the environment fact would qualify nothing. Phase 8's current sentence — "A zero-row table under a valid header is valid — nothing warranted probing" — migrates to `not-probed` and is removed from the other four levels.
+
+### The `not-probed` warrant (#10)
+
+Emptiness is not evidence. A zero-row table is what an author writes after deciding not to probe, so authorizing `not-probed` from table emptiness alone would install a rung cheaper than the floor rung the issues show being abused. `not-probed` is valid only when all three conditions hold, each visible in the doc itself:
+
+- **W1** — no Phase 3 criterion is Partially Met or Not Met, or the doc states that no spec exists.
+- **W2** — Phase 4's reconciliation records registered N equal to accounted-for M, with no unregistered rows.
+- **W3** — the Findings section contains no What to Improve entries.
+
+All three are doc-inspectable, so a false `not-probed` claim is falsifiable by reading the same document that makes it. A run failing any condition must probe, or degrade to a facilitator level and name its absent capability.
+
+### check 9 probes rule (#10)
+
+The positional selection `degraded = levels[-1]` is replaced by a position-independent rule: **every** level parsed from the template must appear in `interview-probes.md`, as it already must in `SKILL.md`. The level count assertion moves from 4 to 5.
+
+**This supersedes a recorded user decision.** `docs/deviations/2026-07-21-check9-probes-level-scope-003.md` resolved the same question in favor of list-final-only, reasoning that "requiring all four levels there would force artificial mentions of rungs the probes contract never uses". That premise is now empirically moot: all four levels already appear in the probes contract via its verdict-forms table (see Assumptions), so the generalization forces no artificial mention today. The supersession is deliberate and has a cost — it imposes the mention requirement on every future level, including `not-probed`, which this spec accepts by giving `not-probed` a verdict-forms row. Approving this spec carries the supersession; the earlier decision is not silently preserved.
+
+### Dispatch ladder rung 4 (#6)
+
+Rung 4 is named by capability only — no facilitator channel is reachable at all. The ladder states explicitly that `mode:headless` is not a qualifying condition for any rung, because it governs user interaction, not worker dispatch. The same correction applies to `interview-probes.md`'s opening paragraph, which currently asserts the wrong mapping as a plain statement of fact.
+
+In `references/dispatch-degradation.md`, the tier-3 parenthetical is **reworded, not deleted**: `(or the run is headless with a strict budget)` becomes `(or a strict dispatch budget applies)`. This removes the headless conflation while preserving the budget-based tier-3 sanction that other consumers depend on — notably `compound`, which retrospective's own Phase 7 invokes in `mode:headless` and which selects its tier through this ladder.
+
+### Phase 8 pre-commit clause (#8)
+
+A degraded independence level must name the specific capability that was absent, covering **the whole ladder, not one rung of it**. Scope: `in-thread (approximated independence)` and `self-checklist` only.
+
+- The two independent levels are excluded — nothing was absent.
+- `not-probed` is excluded — no capability was absent; the W1–W3 warrant is its evidence.
+- `mode:headless` is explicitly not an absent capability.
+
+For `self-checklist` the claim must cover both facilitator channels the ladder names, in the shape "no subagent primitive and no external facilitator CLI reachable in this harness". A bare "no subagent primitive" is insufficient, because the ladder's own rung 1 names `codex exec` as a facilitator channel independent of the subagent primitive — a subagent that dies does not establish that no facilitator was reachable. For `in-thread` the claim names why fresh context was unavailable.
+
+The rule turns an unfalsifiable claim into a checkable one: an author writing a specific unreachability claim can be wrong about it, where "no facilitator was available" cannot be.
+
+### Phase 4 count reconciliation (#9)
+
+Four mechanical steps, promoted out of the facilitator's probe bank so they run in every mode:
+
+1. Read the previous retro's `Carry-forward items registered` table — the table, not the narrative. **Fallback**: when the previous doc has no such table, record registered N = 0 and note the absence; this is a degraded reconciliation, not a passing one.
+2. Reconcile row by row, by name.
+3. Record both counts in the template's parseable field: registered N, accounted for M.
+4. A row in this table that the previous retro did not register is itself a defect — it inflates M and can conceal a drop.
+
+`schemas/retro-template.md` gains the count field under the `Carry-forward from previous retro` heading so the two cardinalities are parseable rather than prose. The corresponding probe stays in `interview-probes.md`. A mechanical step and a facilitator probe are different defenses against the same failure.
+
+## Testing
+
+Extends `scripts/test-retro-format-drift.sh`, which already mutates disposable `mktemp -d` trees and asserts check 9's response.
+
+**Existing-case audit (mandatory).** Case H (line 248) removes `| self-checklist` from the template and asserts the failure string `expected 4 distinct independence levels` (line 253). Under a 5-level template that mutation leaves 4 levels, so the new check fails with `expected 5 ...` and case H's assertion misses — turning the whole suite, which is Success Criterion 1's own measured-by command, red. Every case A–J is audited against the 5-level template before new cases are added. Traced already: case I's verdict-form count of 4 is unaffected; cases B and G survive as written.
+
+New vocabulary-propagation cases:
+
+| Case | Mutation | Expected |
+|---|---|---|
+| C1 | Remove `not-probed (no narrative warranted)` from `SKILL.md` | check 9 fails |
+| C2 | Remove `not-probed (no narrative warranted)` from `interview-probes.md` | check 9 fails |
+| C3 | Remove `in-thread (approximated independence)` from `interview-probes.md` | check 9 fails (proves the rule is position-independent, not list-final) |
+| C4 | Unmutated tree | check 9 passes |
+
+New discrimination cases. The Phase 8 and warrant rules are enforced at runtime by an agent reading skill prose, which no shell test can execute. What the test proves is that the rules **discriminate**, and that the shipped prose still carries them:
+
+| Case | Fixture | Expected |
+|---|---|---|
+| C5 | `self-checklist` / `Rounds used: 0 (headless mode)` | checker rejects |
+| C6 | `self-checklist` / `Rounds used: 0 (no subagent primitive and no external facilitator CLI reachable in this harness)` | checker accepts |
+| C7 | `self-checklist` / `Rounds used: 0 (no subagent primitive in this harness)` | checker rejects — covers one ladder channel only |
+| C8 | `not-probed` / zero-row table / all criteria Met / counts reconcile / no What-to-Improve findings | checker accepts without requiring an absent capability |
+| C9 | `not-probed` / zero-row table / one Not Met criterion | checker rejects (W1) |
+| C10 | `not-probed` / zero-row table / registered 4, accounted 3 | checker rejects (W2) |
+| C11 | Previous doc registers 4 items; current table has 4 rows, one substituted | checker rejects the unregistered row (#9) |
+
+**Anti-circularity coupling.** A checker implemented in the test script and never run against the shipped artifact proves only itself: if the Phase 8 prose drifts or is deleted, the cases stay green. Each discrimination case therefore also asserts that `skills/retrospective/SKILL.md`'s Phase 8 section still contains the discriminating clause — that a degraded level requires a named absent capability, and that `mode:headless` is named as non-qualifying. This ties C5–C11 to the deliverable the way C1–C4 are tied to the real `validate.sh`.
+
+The checker never reads `docs/retros/`.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| A repository-wide check over `docs/retros/*.md` would fail 17–18 existing docs on the first run | Explicitly out of scope. The checker runs against fixtures only |
+| `references/dispatch-degradation.md` is consumed by 12 skill and reference files; deleting the tier-3 budget parenthetical would remove the only budget-based tier-3 sanction repo-wide, concretely changing `compound`'s sanctioned headless single-call collapse — which retrospective's own Phase 7 depends on | The parenthetical is reworded to a budget-only clause, not deleted. Before commit, verify each of the 12 consumers' readings is unchanged; the enumeration is retained in Assumptions |
+| Appending a fifth level changes check 9's `levels[-1]` target from `self-checklist` to `not-probed`, silently relaxing the rung the probes contract is checked against | The positional rule is replaced, not adjusted. C3 is the discriminating case that proves the replacement |
+| Adding `not-probed` installs a rung cheaper than the floor rung the issues show being abused — no facilitator, no capability claim, no transcript row | Emptiness alone never authorizes it. The W1–W3 warrant makes the claim falsifiable from the doc's own Phase 3, Phase 4, and Findings content, and C9/C10 are the adversarial fixtures |
+| A zero-row table can coexist with a full Findings section, because the Findings check accepts a finding citing Phase 2–3 data with no T-ID | W3 closes this specific hole: `not-probed` is invalid when any What to Improve entry exists, whatever it cites |
+| The check 9 generalization reverses a recorded user decision | Named as a supersession in the Interface section with its rationale and its cost, and raised explicitly at the Design gate rather than carried silently |
+| Issue #7's falsified thesis gets repaired locally while the issue keeps asserting it | Success Criterion 7 makes the issue correction a named Ship-phase deliverable with an owner |
+
+## Success Criteria
+
+1. Check 9 rejects a tree where the fifth level is missing from either consumer file, and rejects a tree where a non-final level is missing from the probes contract.
+   - **Measured by**: `./scripts/test-retro-format-drift.sh` — cases C1, C2, C3 fail-as-expected and C4 passes, with the whole suite exiting 0. C3 fails on the pre-change tree, where the probes rule checks only the list-final level.
+2. The Phase 8 absent-capability rule discriminates across the whole ladder: a justification naming only `mode:headless` is rejected, one naming a single ladder channel is rejected, and one naming both channels is accepted.
+   - **Measured by**: `./scripts/test-retro-format-drift.sh` — C5 rejects, C7 rejects, C6 accepts.
+3. The `not-probed` warrant discriminates: a conforming doc is accepted and a doc with an unmet criterion or a count mismatch is rejected.
+   - **Measured by**: `./scripts/test-retro-format-drift.sh` — C8 accepts, C9 rejects, C10 rejects.
+4. The carry-forward reconciliation catches a substitution that a matching row count conceals.
+   - **Measured by**: `./scripts/test-retro-format-drift.sh` — C11 rejects the unregistered row.
+5. No existing retro document is invalidated by this change, and the existing test suite is not left broken by the level-count change.
+   - **Measured by**: `./scripts/validate.sh` exits 0 with `[cf-tid] carry-forward T-ID integrity` reporting at least 26 retro docs checked and `retro interview format: template and skill prose agree` reported ok; `./scripts/test-retro-format-drift.sh` exits 0 with every case A–J passing.
+6. The dispatch ladder and both downstream files name rung 4 by capability only, and each states that `mode:headless` does not qualify.
+   - **Measured by**: judgment rubric. A reviewer reads the rung-4 sentence in `skills/retrospective/SKILL.md`, the opening paragraph of `skills/retrospective/references/interview-probes.md`, and the no-subagent tier in `references/dispatch-degradation.md`, and confirms each names an absent capability and none names headless mode as a qualifying condition. Pass means all three read that way with no slash-joined capability/flag pair remaining, and the dispatch-degradation tier retains a budget clause that does not mention headless.
+7. Issue #7's falsified thesis is corrected where it was asserted, and the fired Conformance-suite trigger is recorded.
+   - **Measured by**: `rg -n "Conformance suite.*fired" ROADMAP.md` returns the Conformance-suite row marked fired with this cycle as the evidence — the row-scoped pattern is required because a bare `fired` search already matches the Schema-validators row on the pre-change tree and would not discriminate; and the Ship phase posts a comment on issue #7 citing the seven independent-facilitator retro docs by filename. Owner: the human at the Ship gate (`enforces: P7`).
+8. Phase 4 states both carry-forward cardinalities as a mechanical step reachable without a facilitator, with a stated fallback for a previous doc lacking the table.
+   - **Measured by**: judgment rubric. A reviewer confirms Phase 4 instructs reading the previous doc's registration table, reconciling by name, recording registered N and accounted-for M in the template field, treating an unregistered row as a defect, and handling the no-table case. Pass means all five instructions are present in Phase 4 prose, not only in `interview-probes.md`, and `schemas/retro-template.md` carries the count field.
+
+## Open Decisions
+
+1. **Whether `in-thread` belongs under the absent-capability rule.** The spec includes it: an in-thread facilitator is degraded because fresh context was unavailable, which is a nameable capability. If a reviewer judges that in-thread runs cannot always name one, narrowing the rule to `self-checklist` alone is the fallback. Resolved by: user at the Design gate.
+2. **Splitting the independence field into two orthogonal fields.** The heterogeneous review argued that `not-probed` is a category error inside a single-valued independence field, and proposed `Facilitator independence` plus `Interview disposition: probed | not-probed`. Rejected here in favor of the precedence rule, because the level exists to qualify verdict cells and a zero-row table has none to qualify, and because the split would reverse the user's recorded choice of the fifth-value option and widen the blast radius to check 9's parser, the template line, the CONCEPTS.md definition, and the shape of 36 historical docs. Recorded so the tradeoff is visible. Resolved by: user at the Design gate, if they prefer the split.
