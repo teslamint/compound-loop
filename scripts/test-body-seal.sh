@@ -302,17 +302,34 @@ date: 2026-08-15
 execution: code" "
 ## Goal
 
-one byte before sealing
+one-byte token: A
 "
 one_byte_seal="$(independent_digest "$d/docs/plans/one-byte.md")"
-python3 - "$d/docs/plans/one-byte.md" "$one_byte_seal" <<'PY'
+one_byte_mutation_info="$(python3 - "$d/docs/plans/one-byte.md" "$one_byte_seal" <<'PY'
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
-path.write_text(text.replace("execution: code\n---", "execution: code\nbody_seal: " + sys.argv[2] + "\n---"), encoding="utf-8")
-path.write_text(path.read_text(encoding="utf-8").replace("one byte before sealing", "one byte after sealing"), encoding="utf-8")
+raw = path.read_bytes()
+sealed = raw.replace(
+    b"execution: code\n---",
+    b"execution: code\nbody_seal: " + sys.argv[2].encode("ascii") + b"\n---",
+    1,
+)
+before = sealed
+needle = b"one-byte token: A"
+replacement = b"one-byte token: B"
+if before.count(needle) != 1 or len(needle) != len(replacement):
+    raise SystemExit("RED one-byte fixture setup")
+after = before.replace(needle, replacement, 1)
+differing = sum(left != right for left, right in zip(before, after))
+if len(after) != len(before) or differing != 1:
+    raise SystemExit("RED one-byte mutation must change exactly one byte")
+path.write_bytes(after)
+print(f"byte-length={len(before)} differing-bytes={differing}")
 PY
+)"
+assert_contains "one-byte exact mutation" "$one_byte_mutation_info" "byte-length="
+assert_contains "one-byte exact mutation count" "$one_byte_mutation_info" "differing-bytes=1"
 one_byte_digest="$(independent_digest "$d/docs/plans/one-byte.md")"
 assert_parity_case "one-byte body mutation" "$d" one-byte.md mismatch "$one_byte_digest"
 rm -rf "$d"
@@ -437,6 +454,29 @@ baseline body
   set -e
   assert_rc "migration oracle missing baseline exit" 1 "$missing_rc"
   assert_contains "migration oracle missing-baseline diagnostic" "$missing_out" "missing-baseline"
+  git -C "$migration_root" restore --source HEAD -- docs/plans/migration.md
+  set +e
+  option_out="$(cd "$migration_root" && python3 migration-check.py --not-a-commit docs/plans/migration.md 2>&1)"; option_rc=$?
+  set -e
+  assert_rc "migration oracle option-like baseline exit" 1 "$option_rc"
+  assert_contains "migration oracle option-like baseline diagnostic" "$option_out" "invalid-baseline"
+  absolute_plan="$migration_root/docs/plans/migration.md"
+  set +e
+  absolute_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" "$absolute_plan" 2>&1)"; absolute_rc=$?
+  set -e
+  assert_rc "migration oracle absolute plan path exit" 1 "$absolute_rc"
+  assert_contains "migration oracle absolute plan path diagnostic" "$absolute_out" "invalid-plan-path"
+  set +e
+  traversal_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" ../docs/plans/migration.md 2>&1)"; traversal_rc=$?
+  set -e
+  assert_rc "migration oracle traversal plan path exit" 1 "$traversal_rc"
+  assert_contains "migration oracle traversal plan path diagnostic" "$traversal_out" "invalid-plan-path"
+  ln -s docs/plans/migration.md "$migration_root/migration-link.md"
+  set +e
+  symlink_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" migration-link.md 2>&1)"; symlink_rc=$?
+  set -e
+  assert_rc "migration oracle symlink plan path exit" 1 "$symlink_rc"
+  assert_contains "migration oracle symlink plan path diagnostic" "$symlink_out" "symlink-plan-path"
 else
   fail "migration oracle extraction and execution — marker/fence contract absent"
 fi
@@ -477,10 +517,27 @@ if schema_text.count(start) == 1 and schema_text.count(end) == 1:
 section = schema_text.split(start, 1)[1].split(end, 1)[0] if marker_ok else ""
 fenced = re.findall(r"```python\n(.*?)\n```", section, re.DOTALL)
 block_ok = marker_ok and len(fenced) == 1 and section.count("```") == 2
+checker_path = fixture_root / "migration-check.py"
+if block_ok:
+    checker_path.write_text(fenced[0] + "\n", encoding="utf-8")
+source_result = subprocess.run(
+    ["git", "-C", str(root), "rev-parse", "HEAD"],
+    text=True,
+    capture_output=True,
+)
+source_revision = source_result.stdout.strip() if source_result.returncode == 0 else "unavailable"
 
 OUTCOMES = ("success", "forced-failure", "rerun", "compensation", "headless", "cancellation")
 TARGET = "docs/plans/adoption.md"
 
+checker_runs = []
+
+def run_migration_checker(repo: Path, baseline: str, plan_path: str) -> tuple[int, str]:
+    argv = ["python3", str(checker_path), baseline, plan_path]
+    result = subprocess.run(argv, cwd=repo, text=True, capture_output=True)
+    output = (result.stdout + result.stderr).strip()
+    checker_runs.append({"argv": argv, "cwd": str(repo), "rc": result.returncode, "output": output})
+    return result.returncode, output
 def git(repo: Path, *args: str, check: bool = True, strip: bool = True) -> str:
     result = subprocess.run(["git", "-C", str(repo), *args], text=True, capture_output=True)
     if check and result.returncode:
@@ -523,7 +580,7 @@ def new_repo(outcome: str) -> tuple[Path, str, str, str, bytes, str, bytes]:
     with open(repo / TARGET, encoding="utf-8", newline=None) as handle:
         current = handle.read()
     new = digest_text(current)
-    command = f"python3 migration-check.py {baseline} {TARGET}"
+    command = f"python3 {checker_path} {baseline} {TARGET}"
     return repo, baseline, old, new, pre_bytes, command, sentinel_bytes
 
 def write_seal(repo: Path, new: str) -> None:
@@ -538,6 +595,9 @@ def transition(repo: Path, baseline: str, old: str, new: str, command: str, appr
         return 1, "missing-approval"
     if git(repo, "status", "--porcelain"):
         return 1, "rerun-fail-closed"
+    checker_rc, checker_output = run_migration_checker(repo, baseline, TARGET)
+    if checker_rc != 0:
+        return checker_rc, f"migration-checker:{checker_output}"
     with open(repo / TARGET, encoding="utf-8", newline=None) as handle:
         current = handle.read()
     baseline_text = git(repo, "show", f"{baseline}:{TARGET}", strip=False)
@@ -571,7 +631,7 @@ def assert_success(repo: Path, baseline: str, pre: bytes, old: str, new: str, co
           and "approval=first-hand-explicit" in message)
     return ok, "success-state" if ok else "success-state-mismatch"
 
-def markdown(outcome: str, baseline: str, repo: Path, pre: dict, command: str, rc: int, output: str, post: dict, next_result: str, mechanism: str, sentinel: Path, sentinel_check: dict) -> str:
+def markdown(outcome: str, baseline: str, repo: Path, pre: dict, command: str, rc: int, output: str, post: dict, next_result: str, mechanism: str, sentinel: Path, sentinel_check: dict, checker_log: list[dict]) -> str:
     timestamp = datetime.now(timezone.utc).isoformat()
     inventory = [str(fixture_root), str(repo), str(repo / ".git"), str(repo / TARGET),
                  str(root / "skills/planning/schemas/plan-schema.md"), str(evidence_root), str(sentinel),
@@ -581,7 +641,8 @@ def markdown(outcome: str, baseline: str, repo: Path, pre: dict, command: str, r
 
 - plan identity: `{TARGET}`
 - matrix-row identity: `U4/adoption-reseal-{outcome}`
-- source commit: `{baseline}`
+- source commit: `{source_revision}`
+- fixture baseline commit: `{baseline}`
 - fixture identity and timestamp: `adoption-{outcome}` / `{timestamp}`
 - disposable root: `{fixture_root}`
 - complete configured target inventory: `{json.dumps(inventory)}`
@@ -589,6 +650,7 @@ def markdown(outcome: str, baseline: str, repo: Path, pre: dict, command: str, r
 - boundary sentinel: `{sentinel}` / post-check=`{json.dumps(sentinel_check, sort_keys=True)}`
 - pre-state: `{json.dumps(pre, sort_keys=True)}`
 - exact command/injection: `{command}` / `outcome={outcome}`
+- migration checker invocation: `{json.dumps(checker_log, sort_keys=True)}`
 - exit status: `{rc}`
 - concise sanitized output: `{safe_output}`
 - post-state: `{json.dumps(post, sort_keys=True)}`
@@ -598,6 +660,7 @@ def markdown(outcome: str, baseline: str, repo: Path, pre: dict, command: str, r
 
 failures = 0
 for outcome in OUTCOMES:
+    checker_runs = []
     repo, baseline, old, new, pre_bytes, command, sentinel_expected = new_repo(outcome)
     sentinel = repo / "sentinel.txt"
     pre = state(repo, pre_bytes)
@@ -687,7 +750,7 @@ for outcome in OUTCOMES:
     if not sentinel_check["unchanged"]:
         print(f"RED adoption-reseal-{outcome}/boundary-sentinel-mutated", file=sys.stderr)
         failures += 1
-    record = markdown(outcome, baseline, repo, pre, command, rc, output, post, next_result, mechanism, sentinel, sentinel_check)
+    record = markdown(outcome, baseline, repo, pre, command, rc, output, post, next_result, mechanism, sentinel, sentinel_check, checker_runs)
     (evidence_root / f"adoption-reseal-{outcome}.md").write_text(record, encoding="utf-8")
 
 records = sorted(evidence_root.glob("adoption-reseal-*.md"))

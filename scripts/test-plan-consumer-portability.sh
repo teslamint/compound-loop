@@ -61,6 +61,7 @@ from pathlib import Path
 mode, consumer, skill_file, fixture_root = sys.argv[1:]
 skill_path = Path(skill_file)
 root = Path(fixture_root)
+adoption_policy: dict | None = None
 failures = 0
 
 
@@ -72,6 +73,7 @@ def emit(state: str, name: str, detail: str = "") -> None:
 
 
 def parse_contract(path: Path) -> tuple[list[dict], str | None]:
+    global adoption_policy
     text = path.read_text(encoding="utf-8")
     marker = f"<!-- plan-consumer-contract: {consumer}/v1 -->"
     end_marker = "<!-- end-plan-consumer-contract -->"
@@ -90,12 +92,51 @@ def parse_contract(path: Path) -> tuple[list[dict], str | None]:
                 row = json.loads(stripped)
             except json.JSONDecodeError as exc:
                 return [], f"invalid JSON contract row: {exc}"
+            if row.get("decision") == "adoption-policy":
+                adoption_policy = row.get("policy")
+                continue
             if not all(key in row for key in ("decision", "fixture", "expected", "diagnostic")):
                 return [], "contract row missing decision/fixture/expected/diagnostic"
             rows.append(row)
+    if mode == "adoption" and not isinstance(adoption_policy, dict):
+        return [], "missing authoritative adoption policy"
     if not rows:
         return [], "operative contract block has no rows"
     return rows, None
+def policy_violation(policy: dict | None) -> str | None:
+    if not isinstance(policy, dict):
+        return "missing"
+    required = (
+        "approval", "baseline", "plan_path", "old_seal", "new_seal", "reproduction_command"
+    )
+    if policy.get("required_evidence") != list(required):
+        return "required-evidence"
+    if policy.get("baseline_current_body") != "equal":
+        return "baseline-current-equality"
+    commit = policy.get("migration_commit")
+    if not isinstance(commit, dict):
+        return "migration-commit"
+    if commit.get("path") != "docs/plans/adoption.md":
+        return "migration-commit-path"
+    if commit.get("diff") != "seal-only":
+        return "migration-commit-diff"
+    if commit.get("message_fields") != [
+        "baseline", "plan", "old-seal", "new-seal", "reproduction-command", "approval"
+    ]:
+        return "migration-commit-message-tuple"
+    if commit.get("command") != "exact":
+        return "migration-commit-command"
+    if commit.get("approval") != "first-hand-explicit":
+        return "migration-commit-approval"
+    if policy.get("later_reseal") != "reject":
+        return "later-reseal"
+    retry = policy.get("interrupted_retry")
+    if not isinstance(retry, dict) or retry.get("compensation") != "target-only":
+        return "interrupted-retry-compensation"
+    if retry.get("fresh_approval") is not True:
+        return "interrupted-retry-fresh-approval"
+    return None
+
 
 
 def find_row(rows: list[dict], fixture: str) -> dict | None:
@@ -202,7 +243,7 @@ def implementing_decision(path: Path, fixture: str) -> tuple[str, str]:
         required = ("Files", "Interfaces", "Test scenarios", "Execution note")
         if not all(f"## {heading}" in text for heading in required): return "reject", "full handoff"
     return "accept", ""
-def adoption_cases(directory: Path) -> list[tuple[str, Path]]:
+def adoption_cases(directory: Path, consumer: str) -> list[tuple[str, Path]]:
     cases: list[tuple[str, Path]] = []
     body = "## Goal\n\nimmutable baseline body\n"
     old_seal = "0" * 64
@@ -270,22 +311,56 @@ def adoption_cases(directory: Path) -> list[tuple[str, Path]]:
             if name == f"adoption-missing-{suffix}":
                 evidence.pop(field)
         path.with_suffix(path.suffix + ".adoption.json").write_text(json.dumps(evidence), encoding="utf-8")
-        if name == "reseal-after-adoption":
+        if name == "reseal-after-adoption" or (consumer == "reviewing" and name == "adoption-complete"):
             adopted = current_text.replace("body_seal: " + old_seal, "body_seal: " + evidence["new_seal"])
             path.write_text(adopted, encoding="utf-8")
             run_git(repo, "add", "docs/plans/adoption.md")
-            run_git(repo, "commit", "-qm", "adoption reseal")
-            path.write_text(adopted.replace(evidence["new_seal"], "f" * 64, 1), encoding="utf-8")
+            message = (
+                f"adoption reseal\n\nbaseline={baseline}\nplan=docs/plans/adoption.md\n"
+                f"old-seal={old_seal}\nnew-seal={evidence['new_seal']}\n"
+                f"reproduction-command={evidence['reproduction_command']}\n"
+                "approval=first-hand-explicit\n"
+            )
+            run_git(repo, "commit", "-qm", message)
+            if name == "reseal-after-adoption":
+                path.write_text(adopted.replace(evidence["new_seal"], "f" * 64, 1), encoding="utf-8")
         cases.append((name, path))
     return cases
 
+def prior_transition(repo: Path, baseline: str, plan_path: str, evidence: dict, policy: dict) -> bool:
+    commit_policy = policy["migration_commit"]
+    message_tokens = {
+        "baseline": f"baseline={baseline}",
+        "plan": f"plan={plan_path}",
+        "old-seal": f"old-seal={evidence.get('old_seal', '')}",
+        "new-seal": f"new-seal={evidence.get('new_seal', '')}",
+        "reproduction-command": f"reproduction-command={evidence.get('reproduction_command', '')}",
+        "approval": f"approval={commit_policy['approval']}",
+    }
+    required = tuple(message_tokens[field] for field in commit_policy["message_fields"])
+    for commit in run_git(repo, "log", "--format=%H", "--", plan_path).splitlines():
+        try:
+            parent = run_git(repo, "rev-parse", f"{commit}^")
+        except subprocess.CalledProcessError:
+            continue
+        if parent != baseline or commit_paths(repo, commit) != {plan_path}:
+            continue
+        diff = run_git_text(repo, "diff", "--no-ext-diff", "--unified=0", parent, commit, "--", plan_path)
+        message = run_git_text(repo, "show", "-s", "--format=%B", commit)
+        if diff.count("+body_seal: ") == 1 and diff.count("-body_seal: ") == 1 and all(token in message for token in required):
+            return True
+    return False
 
-def adoption_decision(path: Path, fixture: str) -> tuple[str, str]:
+def adoption_decision(path: Path, fixture: str, consumer: str, policy: dict | None = None) -> tuple[str, str]:
+    policy = adoption_policy if policy is None else policy
+    policy_error = policy_violation(policy)
+    if policy_error:
+        return "reject", f"adoption-policy:{policy_error}"
     meta_path = path.with_suffix(path.suffix + ".adoption.json")
     if not meta_path.exists():
         return "reject", "adoption evidence missing"
     evidence = json.loads(meta_path.read_text(encoding="utf-8"))
-    field_diagnostics = {
+    diagnostic_names = {
         "approval": "approval",
         "baseline": "baseline commit",
         "plan_path": "plan path",
@@ -293,15 +368,15 @@ def adoption_decision(path: Path, fixture: str) -> tuple[str, str]:
         "new_seal": "new seal",
         "reproduction_command": "reproduction command",
     }
-    for field, diagnostic in field_diagnostics.items():
+    for field in policy["required_evidence"]:
         if not evidence.get(field):
-            return "reject", diagnostic
+            return "reject", diagnostic_names[field]
     plan_path = evidence["plan_path"]
-    if plan_path.startswith("/") or ".." in Path(plan_path).parts or plan_path != "docs/plans/adoption.md":
+    if plan_path.startswith("/") or ".." in Path(plan_path).parts or plan_path != policy["migration_commit"]["path"]:
         return "reject", "plan path"
     repo = path.parents[2]
-    history = run_git(repo, "log", "--format=%s", "--", plan_path)
-    if any(line.startswith("adoption reseal") for line in history.splitlines()):
+    transition_found = prior_transition(repo, evidence["baseline"], plan_path, evidence, policy)
+    if transition_found and fixture == "reseal-after-adoption":
         return "reject", "interactive deepening"
     try:
         baseline_text = run_git_text(repo, "show", f"{evidence['baseline']}:{plan_path}")
@@ -309,21 +384,28 @@ def adoption_decision(path: Path, fixture: str) -> tuple[str, str]:
         return "reject", "missing-baseline"
     with open(path, encoding="utf-8", newline=None) as handle:
         current_text = handle.read()
+    if policy["baseline_current_body"] != "equal":
+        return "reject", "adoption-policy:baseline-current-equality"
     if body_seal(baseline_text) != body_seal(current_text):
         return "reject", "changed-body"
+    if consumer == "reviewing" and not transition_found:
+        return "reject", "migration commit"
     if not re.fullmatch(r"[0-9a-f]{64}", evidence["old_seal"]):
-        return "reject", "old seal"
-    current_fields, _ = parse_frontmatter(path)
-    if current_fields.get("body_seal") != evidence["old_seal"]:
         return "reject", "old seal"
     if not re.fullmatch(r"[0-9a-f]{64}", evidence["new_seal"]):
         return "reject", "new seal"
+    current_fields, _ = parse_frontmatter(path)
+    expected_current_seal = evidence["new_seal"] if consumer == "reviewing" else evidence["old_seal"]
+    if current_fields.get("body_seal") != expected_current_seal:
+        return "reject", "new seal" if consumer == "reviewing" else "old seal"
     if evidence["new_seal"] != body_seal(current_text):
         return "reject", "new seal"
+    if policy["later_reseal"] != "reject":
+        return "reject", "adoption-policy:later-reseal"
     return "accept", "adoption-approved"
 
 
-def evaluate_adoption_cases(rows: list[dict], cases: list[tuple[str, Path]]) -> None:
+def evaluate_adoption_cases(rows: list[dict], cases: list[tuple[str, Path]], consumer: str) -> None:
     for fixture, path in cases:
         row = find_row(rows, fixture)
         if row is None:
@@ -332,7 +414,7 @@ def evaluate_adoption_cases(rows: list[dict], cases: list[tuple[str, Path]]) -> 
         repo = path.parents[2]
         before_head = run_git(repo, "rev-parse", "HEAD")
         before_bytes = path.read_bytes()
-        actual, detail = adoption_decision(path, fixture)
+        actual, detail = adoption_decision(path, fixture, consumer)
         after_head = run_git(repo, "rev-parse", "HEAD")
         after_bytes = path.read_bytes()
         if actual != row["expected"] or row["diagnostic"] not in detail:
@@ -343,23 +425,24 @@ def evaluate_adoption_cases(rows: list[dict], cases: list[tuple[str, Path]]) -> 
             emit("PASS", fixture, f"{actual}:{detail}")
 
 
-def adoption_evidence_deletions(rows: list[dict], cases: list[tuple[str, Path]]) -> None:
+def adoption_evidence_deletions(rows: list[dict], cases: list[tuple[str, Path]], consumer: str) -> None:
     complete = dict(cases)["adoption-complete"]
     meta_path = complete.with_suffix(complete.suffix + ".adoption.json")
     original = json.loads(meta_path.read_text(encoding="utf-8"))
-    required = (
-        ("approval", "approval"),
-        ("baseline", "baseline commit"),
-        ("plan_path", "plan path"),
-        ("old_seal", "old seal"),
-        ("new_seal", "new seal"),
-        ("reproduction_command", "reproduction command"),
-    )
+    diagnostic_names = {
+        "approval": "approval",
+        "baseline": "baseline commit",
+        "plan_path": "plan path",
+        "old_seal": "old seal",
+        "new_seal": "new seal",
+        "reproduction_command": "reproduction command",
+    }
+    required = tuple((field, diagnostic_names[field]) for field in adoption_policy["required_evidence"])
     for field, diagnostic in required:
         mutated = dict(original)
         mutated.pop(field, None)
         meta_path.write_text(json.dumps(mutated), encoding="utf-8")
-        actual, detail = adoption_decision(complete, "adoption-complete")
+        actual, detail = adoption_decision(complete, "adoption-complete", consumer)
         row = find_row(rows, f"adoption-missing-{field.replace('_', '-')}")
         if actual == "reject" and diagnostic in detail and row is not None:
             emit("PASS", f"deletion-evidence-{field}", f"independent missing-{field} mutation rejected:{detail}")
@@ -368,6 +451,29 @@ def adoption_evidence_deletions(rows: list[dict], cases: list[tuple[str, Path]])
         meta_path.write_text(json.dumps(original), encoding="utf-8")
 
 
+def adoption_policy_mutations(cases: list[tuple[str, Path]], consumer: str) -> None:
+    complete = dict(cases)["adoption-complete"]
+    policy = adoption_policy
+    mutations = {
+        "required-evidence": lambda p: p["required_evidence"].pop(),
+        "baseline-current-equality": lambda p: p.update(baseline_current_body="ignore"),
+        "migration-commit-path": lambda p: p["migration_commit"].update(path="docs/plans/other.md"),
+        "migration-commit-diff": lambda p: p["migration_commit"].update(diff="all-files"),
+        "migration-commit-message-tuple": lambda p: p["migration_commit"].update(message_fields=["baseline"]),
+        "migration-commit-command": lambda p: p["migration_commit"].update(command="approximate"),
+        "migration-commit-approval": lambda p: p["migration_commit"].update(approval="implicit"),
+        "later-reseal": lambda p: p.update(later_reseal="accept"),
+        "interrupted-retry-compensation": lambda p: p["interrupted_retry"].update(compensation="all-files"),
+        "interrupted-retry-fresh-approval": lambda p: p["interrupted_retry"].update(fresh_approval=False),
+    }
+    for name, mutate in mutations.items():
+        mutated = json.loads(json.dumps(policy))
+        mutate(mutated)
+        actual, detail = adoption_decision(complete, "adoption-complete", consumer, mutated)
+        if actual == "accept":
+            emit("FAIL", f"operative-policy-mutation-{name}", "weakened adoption policy was accepted")
+        else:
+            emit("PASS", f"operative-policy-mutation-{name}", f"policy mutation rejected:{detail}")
 
 def release_cases(directory: Path) -> list[tuple[str, Path]]:
     required = ("schema", "title", "type", "status", "date", "execution")
@@ -831,11 +937,12 @@ if mode == "fixtures":
 elif mode == "adoption":
     rows, error = parse_contract(skill_path)
     if error:
-        emit("FAIL", "contract", error)
+        emit("FAIL", "adoption-policy/missing", error)
     else:
-        cases = adoption_cases(root / "adoption")
-        evaluate_adoption_cases(rows, cases)
-        adoption_evidence_deletions(rows, cases)
+        cases = adoption_cases(root / "adoption", consumer)
+        adoption_policy_mutations(cases, consumer)
+        evaluate_adoption_cases(rows, cases, consumer)
+        adoption_evidence_deletions(rows, cases, consumer)
         deletion_mutations(rows, cases)
 elif mode == "shared":
     shared_literals(skill_path, root)
@@ -897,7 +1004,6 @@ elif [ -f "$ROOT/schemas/plan-schema.md" ]; then
 fi
 if [ -z "$ssot" ]; then
   fail "shared SSOT fallback finds skills/planning/schemas/plan-schema.md or schemas/plan-schema.md"
-else
   mkdir -p "$fixture/skills/planning/schemas"
   cp "$ssot" "$fixture/skills/planning/schemas/plan-schema.md"
   for consumer in implementing release-loop retrospective; do

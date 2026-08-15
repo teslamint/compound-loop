@@ -87,20 +87,35 @@ git commit -m "docs(plan): approve plan"
 During adoption of this release, one reseal may replace an existing seal only when the first-hand user approval, exact pre-upgrade baseline commit, repo-relative plan path, old seal, new seal, canonical reproduction command, and baseline/current canonical-body equality are all present. The migration commit changes only `body_seal`; its message records `(baseline commit, plan path, old seal, new seal)`, the reproduction command, and the approval. A changed body or missing baseline rejects with the named `changed-body` or `missing-baseline` diagnostic. Missing evidence rejects while naming the missing field: approval, baseline commit, plan path, old seal, new seal, or reproduction command. Any later ordinary reseal is rejected unless interactive deepening authorizes it. After an interruption, fresh first-hand approval is mandatory.
 
 The migration check below is the executable oracle used by the adoption branch. It accepts `<baseline-commit> <plan-path>`, reads `git show <baseline>:<path>` and the current plan with UTF-8 and universal-newline semantics, extracts both canonical bodies literally, exits 0 only when they are equal, and exits 1 with a named diagnostic otherwise.
+Malformed, option-like, or non-full baseline input is rejected as `invalid-baseline`; an exact lowercase full object-format hash that cannot resolve as a commit, or whose baseline path cannot be read, is `missing-baseline`. Absolute, traversing, out-of-root, missing, or non-regular plan paths are `invalid-plan-path`; any symlink in the traversed path, including the target, is `symlink-plan-path`.
 
 <!-- body-seal-migration-check:begin -->
 ```python
 import io
+import re
+import stat
 import subprocess
 import sys
+from pathlib import Path
 
 
 def universal_text(data: bytes) -> str:
     return io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", newline=None).read()
 
 
-def canonical_body(text: str) -> str:
-    return text.split('---', 2)[2]
+def reject(kind: str, detail: str) -> "NoReturn":
+    print(f"{kind}: {detail}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def git_run(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
 
 
 if len(sys.argv) != 3:
@@ -108,19 +123,81 @@ if len(sys.argv) != 3:
     raise SystemExit(2)
 
 baseline, plan_path = sys.argv[1:]
-baseline_result = subprocess.run(
-    ["git", "show", f"{baseline}:{plan_path}"],
+root_result = subprocess.run(
+    ["git", "rev-parse", "--show-toplevel"],
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     check=False,
 )
-if baseline_result.returncode != 0:
-    print(f"missing-baseline: {baseline}:{plan_path}", file=sys.stderr)
-    raise SystemExit(1)
+if root_result.returncode != 0:
+    reject("invalid-plan-path", "repository root is unavailable")
+try:
+    repo_root = Path(universal_text(root_result.stdout).strip()).resolve(strict=True)
+except (OSError, UnicodeError):
+    reject("invalid-plan-path", "repository root is unavailable")
 
-with open(plan_path, encoding="utf-8", newline=None) as handle:
+format_result = git_run(repo_root, "rev-parse", "--show-object-format")
+object_format = universal_text(format_result.stdout).strip() if format_result.returncode == 0 else ""
+object_lengths = {"sha1": 40, "sha256": 64}
+expected_length = object_lengths.get(object_format)
+if expected_length is None or len(baseline) != expected_length or not re.fullmatch(r"[0-9a-f]+", baseline):
+    reject("invalid-baseline", "baseline must be an exact lowercase full object-format hex ID")
+
+commit_result = git_run(
+    repo_root,
+    "rev-parse",
+    "--verify",
+    "--end-of-options",
+    f"{baseline}^{{commit}}",
+)
+if commit_result.returncode != 0 or universal_text(commit_result.stdout).strip() != baseline:
+    reject("missing-baseline", baseline)
+
+relative_path = Path(plan_path)
+if (
+    not plan_path
+    or "\x00" in plan_path
+    or relative_path.is_absolute()
+    or not relative_path.parts
+    or ".." in relative_path.parts
+):
+    reject("invalid-plan-path", "plan path must be repo-relative and contain no '..'")
+
+candidate = repo_root.joinpath(*relative_path.parts)
+component = repo_root
+for part in relative_path.parts:
+    component = component / part
+    if component.is_symlink():
+        reject("symlink-plan-path", plan_path)
+try:
+    resolved_path = candidate.resolve(strict=True)
+    resolved_path.relative_to(repo_root)
+except (OSError, ValueError):
+    reject("invalid-plan-path", "plan path is missing or outside the repository")
+try:
+    if not stat.S_ISREG(resolved_path.stat().st_mode):
+        reject("invalid-plan-path", "plan path is not a regular file")
+except OSError:
+    reject("invalid-plan-path", "plan path is not a regular file")
+
+with open(resolved_path, encoding="utf-8", newline=None) as handle:
     current_text = handle.read()
+git_path = relative_path.as_posix()
+baseline_result = git_run(
+    repo_root,
+    "show",
+    "--end-of-options",
+    f"{baseline}:{git_path}",
+)
+if baseline_result.returncode != 0:
+    reject("missing-baseline", f"{baseline}:{git_path}")
 baseline_text = universal_text(baseline_result.stdout)
+
+
+def canonical_body(text: str) -> str:
+    return text.split('---', 2)[2]
+
+
 if canonical_body(current_text) != canonical_body(baseline_text):
     print(f"changed-body: {plan_path}", file=sys.stderr)
     raise SystemExit(1)
