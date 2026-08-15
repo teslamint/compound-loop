@@ -174,7 +174,7 @@ else
 fi
 
 # Explicit inventory of package-owned paths. The schema source contributes two
-# planning-local references as well as SKILL.md and deepening.md references.
+# validator command references and one example reference.
 # The two shared references named in the skill files
 # (references/question-tools.md and references/dispatch-degradation.md) are
 # deliberately not inventory entries: they are repository-root shared inputs,
@@ -186,7 +186,7 @@ INVENTORY=(
   'skills/planning/SKILL.md|references/stateful-ceremony-matrix-example.md|references/stateful-ceremony-matrix-example.md|1'
   'skills/planning/SKILL.md|skills/planning/scripts/validate-plan-frontmatter.py|scripts/validate-plan-frontmatter.py|1'
   'skills/planning/references/deepening.md|schemas/plan-schema.md|schemas/plan-schema.md|1'
-  'skills/planning/schemas/plan-schema.md|skills/planning/references/deepening.md|references/deepening.md|1'
+  'skills/planning/schemas/plan-schema.md|skills/planning/scripts/validate-plan-frontmatter.py|scripts/validate-plan-frontmatter.py|2'
   'skills/planning/schemas/plan-schema.md|skills/planning/references/stateful-ceremony-matrix-example.md|references/stateful-ceremony-matrix-example.md|1'
 )
 
