@@ -73,6 +73,8 @@ Retrospective never changes the plan body.
 Retrospective rejects any frontmatter mutation other than `status` and `completed_by`.
 Applicability is keyed to the plan's first commit after the terminal-state contract landed, not to its approval date; no terminal state is backfilled onto earlier plans.
 
+Transition validation inspects the actual parent-to-retro commit diff for every selected plan. It compares the committed plan bytes before and after that commit, allowing only `status` and `completed_by` frontmatter changes and rejecting any body or other-frontmatter mutation; mutation metadata never supplies the immutability verdict.
+
 ## Phase 3: Measured vs. Declared (core)
 
 For each criterion in the spec's Success Criteria section:

@@ -53,6 +53,8 @@ When the sibling planning validator is available, `--skip-plan` runs it and requ
 When the sibling planning validator is absent, `--skip-plan` uses the local minimum-field fallback and still rejects unknown schema versions.
 The fallback does not guess unknown fields or defer eligibility to an unavailable sibling; implementing performs its own full pre-flight after this gate.
 
+The standalone literal set is closed: `required-fields`, `schema`, and `approved-status` are the only executable literal rows. An absent or unexpected literal key is contract drift and fails closed; this gate never ignores extra status-set declarations.
+
 ## Phases
 
 | # | Phase | Invokes | Gate |

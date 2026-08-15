@@ -24,14 +24,14 @@ This consumer executes only the plan rules listed here; it does not require the 
 {"decision":"schema","fixture":"schema-unknown","expected":"reject","diagnostic":"schema"}
 {"decision":"status","fixture":"status-approved","expected":"accept","diagnostic":""}
 {"decision":"status","fixture":"status-draft","expected":"reject","diagnostic":"pending approval"}
-{"decision":"status","fixture":"status-done","expected":"reject","diagnostic":"completed_by"}
-{"decision":"status","fixture":"status-done-missing-evidence","expected":"reject","diagnostic":"completed_by"}
-{"decision":"status","fixture":"status-superseded","expected":"reject","diagnostic":"superseded_by"}
+{"decision":"status","fixture":"status-done","expected":"reject","diagnostic":"completed_by=0123456789abcdef0123456789abcdef01234567"}
+{"decision":"status","fixture":"status-done-missing-evidence","expected":"reject","diagnostic":"completed_by missing"}
+{"decision":"status","fixture":"status-superseded","expected":"reject","diagnostic":"superseded_by=docs/plans/successor.md"}
 {"decision":"status","fixture":"status-missing","expected":"reject","diagnostic":"status"}
 {"decision":"status","fixture":"status-unknown","expected":"reject","diagnostic":"status"}
 {"decision":"seal","fixture":"seal-correct","expected":"accept","diagnostic":""}
-{"decision":"seal","fixture":"seal-malformed","expected":"reject","diagnostic":"stored="}
-{"decision":"seal","fixture":"seal-mismatch","expected":"reject","diagnostic":"stored="}
+{"decision":"seal","fixture":"seal-malformed","expected":"reject","diagnostic":"stored= computed="}
+{"decision":"seal","fixture":"seal-mismatch","expected":"reject","diagnostic":"stored= computed="}
 {"decision":"seal","fixture":"seal-never-sealed","expected":"accept","diagnostic":""}
 {"decision":"seal","fixture":"seal-removed","expected":"reject","diagnostic":"removed seal"}
 {"decision":"reseal","fixture":"reseal-post-approval","expected":"reject","diagnostic":"interactive deepening"}
@@ -52,9 +52,9 @@ This consumer executes only the plan rules listed here; it does not require the 
 The only accepted plan schema is `plan/v1`; a missing or unknown `schema` rejects before execution.
 A plan with `status: approved` proceeds to contradiction scanning and unit dispatch.
 A plan with `status: draft` rejects with a pending-approval diagnostic.
-A plan with `status: done` rejects and names its recorded `completed_by` commit.
+A plan with `status: done` rejects and names its recorded `completed_by=<SHA>` commit.
 A `done` plan missing `completed_by` rejects as a terminal-state validator violation; never invent a commit.
-A plan with `status: superseded` rejects and names its `superseded_by` successor path.
+A plan with `status: superseded` rejects and names its `superseded_by=<path>` successor path.
 A missing or unknown `status` rejects before any unit is executed.
 
 Each dispatched unit consumes its full handoff: exact values and signatures, `Files`, `Interfaces`, `Test scenarios`, and `Execution note`.
@@ -64,7 +64,7 @@ Each dispatched unit consumes its full handoff: exact values and signatures, `Fi
 ### Approval seal and history
 
 A correctly formatted and matching `body_seal` proceeds after stored-versus-computed comparison.
-A malformed or mismatched `body_seal` rejects and reports both stored and computed values.
+A malformed or mismatched `body_seal` rejects and reports both `stored=<value>` and `computed=<value>` values.
 Compute the comparison from UTF-8 text read with universal-newline translation, then the exact `text.split('---', 2)[2]` extraction, UTF-8 encoding, and lowercase SHA-256 rendering.
 An approved plan that was never sealed remains valid when its approval history contains no `body_seal`.
 An approved plan whose approval history contained a seal but whose current frontmatter removed it rejects as a removed-seal violation.

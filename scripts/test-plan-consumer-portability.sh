@@ -104,17 +104,21 @@ def find_row(rows: list[dict], fixture: str) -> dict | None:
     return matches[0]
 
 
-def parse_frontmatter(path: Path) -> tuple[dict[str, str], str]:
-    text = path.read_text(encoding="utf-8")
+def parse_frontmatter_text(text: str) -> dict[str, str]:
     parts = text.split("---", 2)
     if len(parts) < 3:
-        return {}, text
+        return {}
     values: dict[str, str] = {}
     for line in parts[1].splitlines():
         match = re.match(r"^([a-z_]+):(?:[ \t]*(.*))?$", line)
         if match:
             values[match.group(1)] = (match.group(2) or "").strip()
-    return values, text
+    return values
+
+
+def parse_frontmatter(path: Path) -> tuple[dict[str, str], str]:
+    text = path.read_text(encoding="utf-8")
+    return parse_frontmatter_text(text), text
 
 
 def write_plan(directory: Path, name: str, fields: dict[str, str], body: str, history: dict | None = None) -> Path:
@@ -146,7 +150,7 @@ def implementing_cases(directory: Path) -> list[tuple[str, Path]]:
     unknown = dict(base); unknown["schema"] = "plan/v9"; cases.append(("schema-unknown", write_plan(directory, "schema-unknown.md", unknown, "## Goal\n\nfixture")))
     for name, status in (("status-approved", "approved"), ("status-draft", "draft"), ("status-done", "done"), ("status-superseded", "superseded"), ("status-unknown", "paused")):
         fields = dict(base); fields["status"] = status
-        if status == "done": fields["completed_by"] = "base-commit"
+        if status == "done": fields["completed_by"] = "0123456789abcdef0123456789abcdef01234567"
         if status == "superseded": fields["superseded_by"] = "docs/plans/successor.md"
         cases.append((name, write_plan(directory, f"{name}.md", fields, "## Goal\n\nfixture")))
     missing_done = dict(base); missing_done["status"] = "done"; cases.append(("status-done-missing-evidence", write_plan(directory, "status-done-missing-evidence.md", missing_done, "## Goal\n\nfixture")))
@@ -172,8 +176,10 @@ def implementing_decision(path: Path, fixture: str) -> tuple[str, str]:
         return "reject", "schema"
     status = fields.get("status")
     if status == "draft": return "reject", "pending approval"
-    if status == "done": return "reject", "completed_by" if fields.get("completed_by") else "completed_by missing"
-    if status == "superseded": return "reject", "superseded_by"
+    if status == "done":
+        return "reject", f"completed_by={fields['completed_by']}" if fields.get("completed_by") else "completed_by missing"
+    if status == "superseded":
+        return "reject", f"superseded_by={fields['superseded_by']}" if fields.get("superseded_by") else "superseded_by missing"
     if status != "approved": return "reject", "status"
     history_path = path.with_suffix(path.suffix + ".history.json")
     history = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else {}
@@ -300,6 +306,54 @@ def update_plan(repo: Path, name: str, landed: str) -> None:
     path.write_text(f"---\n{frontmatter}\n---{text.split('---', 2)[2]}", encoding="utf-8")
 
 
+def mutate_transition_target(path: Path, mutation: str) -> None:
+    before = path.read_text(encoding="utf-8")
+    before_fields = parse_frontmatter_text(before)
+    before_body = before.split("---", 2)[2]
+    if mutation == "body":
+        after = before.rstrip("\n") + "\n\nfixture body mutation\n"
+    elif mutation == "other-frontmatter":
+        fields = dict(before_fields)
+        fields["date"] = "2099-12-31"
+        frontmatter = "\n".join(f"{key}: {value}" for key, value in fields.items())
+        after = f"---\n{frontmatter}\n---{before.split('---', 2)[2]}"
+    else:
+        raise ValueError(f"unknown transition mutation: {mutation}")
+    after_fields = parse_frontmatter_text(after)
+    after_body = after.split("---", 2)[2]
+    if mutation == "body":
+        if before_fields != after_fields or before_body == after_body:
+            raise AssertionError("body mutation setup changed more than the plan body")
+    elif set(before_fields) ^ set(after_fields) or {
+        key for key in set(before_fields) | set(after_fields)
+        if before_fields.get(key) != after_fields.get(key)
+    } != {"date"} or before_body != after_body:
+        raise AssertionError("frontmatter mutation setup changed more than date")
+    path.write_text(after, encoding="utf-8")
+
+
+def run_git_text(repo: Path, *args: str) -> str:
+    result = subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+    return result.stdout
+
+
+def inspect_plan_transition(repo: Path, commit: str, name: str) -> tuple[bool, set[str]]:
+    relative = f"docs/plans/{name}"
+    parent = run_git(repo, "rev-parse", f"{commit}^")
+    diff = run_git_text(repo, "diff", "--no-ext-diff", parent, commit, "--", relative)
+    if not diff:
+        return False, set()
+    before = run_git_text(repo, "show", f"{parent}:{relative}")
+    after = (repo / relative).read_text(encoding="utf-8")
+    before_fields = parse_frontmatter_text(before)
+    after_fields = parse_frontmatter_text(after)
+    changed_fields = {
+        key for key in set(before_fields) | set(after_fields)
+        if before_fields.get(key) != after_fields.get(key)
+    }
+    return before.split("---", 2)[2] != after.split("---", 2)[2], changed_fields
+
+
 def retro_decision(case_dir: Path) -> tuple[str, str]:
     spec = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
     repo = case_dir / "repo"
@@ -307,8 +361,6 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
         return "reject", "repo-relative origin"
     if spec.get("selection") == "none":
         return "accept" if spec.get("origin") else "no-flip", "repo-relative origin" if spec.get("origin") else "no-plan"
-    if spec.get("mutation") == "body": return "reject", "body"
-    if spec.get("mutation") == "other-frontmatter": return "reject", "frontmatter"
     selected: set[str] = set()
     progress = repo / ".release-loop/progress.md"
     if progress.exists():
@@ -366,16 +418,42 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
     retro_path.write_text("retro fixture\n", encoding="utf-8")
     for name in selected:
         update_plan(repo, name, plans[name]["landed"])
+        if spec.get("mutation"):
+            mutate_transition_target(repo / "docs/plans" / name, spec["mutation"])
     if tracker_rel:
         with (repo / tracker_rel).open("a", encoding="utf-8") as tracker:
             tracker.write("retro update\n")
     run_git(repo, "add", *sorted(required_paths))
     run_git(repo, "commit", "-qm", "retro and plan transitions")
     commit = run_git(repo, "rev-parse", "HEAD")
+    for name in selected:
+        body_changed, changed_fields = inspect_plan_transition(repo, commit, name)
+        unexpected_fields = changed_fields - {"status", "completed_by"}
+        if body_changed:
+            return "reject", "body"
+        if unexpected_fields:
+            return "reject", f"frontmatter {','.join(sorted(unexpected_fields))}"
     changed_paths = commit_paths(repo, commit)
     if not required_paths.issubset(changed_paths):
         return "reject", "all-plans"
     return "transition", "all-plans same-commit"
+
+
+def diagnostic_matches(row: dict, path: Path, fixture: str, detail: str) -> bool:
+    expected = row["diagnostic"]
+    if consumer == "implementing":
+        fields, text = parse_frontmatter(path)
+        if fixture == "status-done":
+            token = f"completed_by={fields.get('completed_by', '')}"
+            return bool(fields.get("completed_by")) and expected == token and detail == token
+        if fixture == "status-superseded":
+            token = f"superseded_by={fields.get('superseded_by', '')}"
+            return bool(fields.get("superseded_by")) and expected == token and detail == token
+        if fixture in {"seal-malformed", "seal-mismatch"}:
+            current = fields.get("body_seal", "")
+            computed = body_seal(text)
+            return expected == "stored= computed=" and detail == f"stored={current} computed={computed}"
+    return not expected or expected in detail
 
 
 def evaluate_cases(rows: list[dict], cases: list[tuple[str, Path]], decision_fn) -> None:
@@ -385,10 +463,44 @@ def evaluate_cases(rows: list[dict], cases: list[tuple[str, Path]], decision_fn)
             emit("FAIL", fixture, "contract row missing")
             continue
         actual, detail = decision_fn(path, fixture) if consumer == "implementing" else decision_fn(path)
-        if actual != row["expected"] or (row["diagnostic"] and row["diagnostic"] not in detail):
+        if actual != row["expected"] or not diagnostic_matches(row, path, fixture, detail):
             emit("FAIL", fixture, f"expected={row['expected']} diagnostic={row['diagnostic']} got={actual}:{detail}")
         else:
             emit("PASS", fixture, f"{actual}:{detail}")
+
+
+def diagnostic_mutations(rows: list[dict], cases: list[tuple[str, Path]], decision_fn) -> None:
+    if consumer != "implementing":
+        return
+    requirements = {
+        "status-done": ("completed_by=",),
+        "status-superseded": ("superseded_by=",),
+        "seal-malformed": ("stored=", "computed="),
+        "seal-mismatch": ("stored=", "computed="),
+    }
+    case_map = dict(cases)
+    for fixture, tokens in requirements.items():
+        row = find_row(rows, fixture)
+        path = case_map.get(fixture)
+        if row is None or path is None:
+            emit("FAIL", f"diagnostic-{fixture}", "required fixture or contract row missing")
+            continue
+        actual, detail = decision_fn(path, fixture)
+        if actual != "reject":
+            emit("FAIL", f"diagnostic-{fixture}", f"fixture unexpectedly returned {actual}")
+            continue
+        for token in tokens:
+            if row["diagnostic"].count(token) != 1:
+                emit("FAIL", f"diagnostic-{fixture}-missing-{token.rstrip('=')}", "mutation setup expected exactly one token")
+                continue
+            mutated = dict(row)
+            mutated["diagnostic"] = row["diagnostic"].replace(token, "", 1)
+            if mutated["diagnostic"] == row["diagnostic"]:
+                emit("FAIL", f"diagnostic-{fixture}-missing-{token.rstrip('=')}", "mutation setup made no change")
+            elif diagnostic_matches(mutated, path, fixture, detail):
+                emit("FAIL", f"diagnostic-{fixture}-missing-{token.rstrip('=')}", "missing-token mutation was accepted")
+            else:
+                emit("PASS", f"diagnostic-{fixture}-missing-{token.rstrip('=')}", "missing-token mutation rejected")
 
 
 def deletion_mutations(rows: list[dict], cases: list[tuple[str, Path]]) -> None:
@@ -420,12 +532,21 @@ def deletion_mutations(rows: list[dict], cases: list[tuple[str, Path]]) -> None:
 
 
 def compare_shared_rows(rows: list[dict], consumer_name: str, expected: dict[str, str]) -> list[tuple[str, str, str]]:
+    del consumer_name
     mismatches: list[tuple[str, str, str]] = []
-    for field, value in expected.items():
-        matches = [row for row in rows if row["decision"] == "literal" and row["fixture"] == field]
-        actual = matches[0]["expected"] if len(matches) == 1 else "<missing>"
-        if len(matches) != 1 or actual != value:
-            mismatches.append((field, actual, value))
+    literal_rows = [row for row in rows if row["decision"] == "literal"]
+    actual_fields = {row["fixture"] for row in literal_rows}
+    for field in sorted(actual_fields | set(expected)):
+        matches = [row for row in literal_rows if row["fixture"] == field]
+        if field not in expected:
+            actual = matches[0]["expected"] if len(matches) == 1 else "<duplicate>"
+            mismatches.append((field, actual, "<unexpected>"))
+        elif not matches:
+            mismatches.append((field, "<missing>", expected[field]))
+        elif len(matches) != 1:
+            mismatches.append((field, "<duplicate>", expected[field]))
+        elif matches[0]["expected"] != expected[field]:
+            mismatches.append((field, matches[0]["expected"], expected[field]))
     return mismatches
 
 
@@ -456,13 +577,27 @@ def shared_literals(path: Path, fixture: Path) -> None:
         for field, actual, value in live_mismatches:
             emit("FAIL", f"shared-{field}", f"DRIFT consumer={consumer} field={field} actual={actual} expected={value}")
     else:
-        for field in expected:
+        for field in sorted(expected):
             emit("PASS", f"shared-{field}", "matches sibling SSOT")
     for field, value in expected.items():
         matches = [row for row in rows if row["decision"] == "literal" and row["fixture"] == field]
         if len(matches) != 1:
             emit("FAIL", f"drift-{field}", f"mutation setup changed {len(matches)} rows, expected exactly 1")
             continue
+        removed_rows = [
+            row for row in rows
+            if not (row["decision"] == "literal" and row["fixture"] == field)
+        ]
+        if len(rows) - len(removed_rows) != 1:
+            emit("FAIL", f"drift-missing-{field}", "mutation setup changed more than the target literal")
+        else:
+            missing_mismatches = compare_shared_rows(removed_rows, consumer, expected)
+            expected_missing = [(field, "<missing>", value)]
+            if missing_mismatches != expected_missing:
+                detail = missing_mismatches[0] if missing_mismatches else ("<none>", "<none>", value)
+                emit("FAIL", f"drift-missing-{field}", f"DRIFT consumer={consumer} field={detail[0]} actual={detail[1]} expected={detail[2]}")
+            else:
+                emit("PASS", f"drift-missing-{field}", f"DRIFT consumer={consumer} field={field} actual=<missing> expected={value}")
         mutated_rows = [dict(row) for row in rows]
         changed = 0
         for mutated in mutated_rows:
@@ -479,6 +614,26 @@ def shared_literals(path: Path, fixture: Path) -> None:
             emit("FAIL", f"drift-{field}", f"DRIFT consumer={consumer} field={detail[0]} actual={detail[1]} expected={detail[2]}")
         else:
             emit("PASS", f"drift-{field}", f"DRIFT consumer={consumer} field={field} actual=drift expected={value}")
+    if consumer in {"release-loop", "retrospective"}:
+        forbidden = {
+            "decision": "literal",
+            "fixture": "statuses",
+            "expected": "draft | approved | done | superseded",
+            "diagnostic": "",
+        }
+        injected_rows = [dict(row) for row in rows] + [forbidden]
+        original_keys = {row["fixture"] for row in rows if row["decision"] == "literal"}
+        injected_keys = {row["fixture"] for row in injected_rows if row["decision"] == "literal"}
+        if injected_keys - original_keys != {"statuses"}:
+            emit("FAIL", "drift-unexpected-statuses", "mutation setup changed more than the forbidden literal key")
+        else:
+            unexpected_mismatches = compare_shared_rows(injected_rows, consumer, expected)
+            expected_unexpected = [("statuses", forbidden["expected"], "<unexpected>")]
+            if unexpected_mismatches != expected_unexpected:
+                detail = unexpected_mismatches[0] if unexpected_mismatches else ("<none>", "<none>", "<unexpected>")
+                emit("FAIL", "drift-unexpected-statuses", f"DRIFT consumer={consumer} field={detail[0]} actual={detail[1]} expected={detail[2]}")
+            else:
+                emit("PASS", "drift-unexpected-statuses", f"DRIFT consumer={consumer} field=statuses actual={forbidden['expected']} expected=<unexpected>")
     if not expected:
         emit("PASS", "shared-subset", "retrospective carries no full-schema literal copy")
 
@@ -491,6 +646,7 @@ if mode == "fixtures":
         if consumer == "implementing":
             cases = implementing_cases(root / "implementing")
             evaluate_cases(rows, cases, implementing_decision)
+            diagnostic_mutations(rows, cases, implementing_decision)
         elif consumer == "release-loop":
             cases = release_cases(root / "release-loop")
             evaluate_cases(rows, cases, release_decision)
