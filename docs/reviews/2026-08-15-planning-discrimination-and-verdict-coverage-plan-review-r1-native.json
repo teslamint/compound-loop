@@ -1,0 +1,70 @@
+{
+  "findings": [
+    {
+      "title": "Bind the Discrimination fixture's changed input to the variation axis the step exists to detect",
+      "body": "Sixth loophole (mandate 2), constructed against the shipped U2 wording: a plan step verifies `--optimize` took effect by comparing digests of `coremldata.bin` from a build with the flag vs without, where the flag in fact only rewrites `weights.bin`. The fixture pair is two `coremldata.bin` digests — same artifact kinds as the real comparands, produced by the same pipeline; two same-input runs compare equal (observed); for the 'one changed input' half the author swaps the source `.mlpackage`, and the digests compare different (observed). Every written clause is satisfied — the different-kinds clause does not fire (same kind), and 'a guard that cannot fail' does not refuse it because the comparison demonstrably returns both answers — yet the deployed comparison is constant along the `--optimize` axis, so it cannot report anything about the change under test: the exact issue #11 defect class in same-kind clothing. The loophole clause is \"one changed input must compare different\", which nowhere binds the change to the input or option whose effect the step exists to verify. Worse, SC2's accept rubric in Verification summary (\"a step that hashes two builds produced by the same conversion command, records the same-input pair as equal and the changed-input pair as different\") blesses the same construction, so the Phase 4 reviewer running SC2 would accept it. Feasibility is not a defense: the bullet already requires running the real pipeline, so toggling the real option costs nothing extra. Smallest repair, in both the U1/U2-shipped bullet and SC2's accept case: \"…; one changed input must compare different — and the changed input is the very input or option whose effect the step exists to detect, not an arbitrary one.\" Graded P0 per mandate 3: it is a hole in the mechanism this cycle exists to build and it defeats SC2's accept half.",
+      "priority": 0,
+      "confidence": 0.8,
+      "file_path": "docs/plans/2026-08-15-001-fix-planning-discrimination-and-verdict-coverage-plan.md",
+      "line_start": 83,
+      "line_end": 87
+    },
+    {
+      "title": "Cover verdict values that resolve outside both enumeration sources",
+      "body": "Secondary residual against the shipped U1 wording (mandate 2): the union clause exhausts exactly two sources — the emitting step's declared output set and the origin spec's enumeration — plus the unresolved-measurement value. Construction: the measuring step is `grep -c pattern file` with a declared output set of {0, 1}; the spec's prose asks only \"whether the pattern appears\" (no larger enumeration). The union is {0, 1} plus unresolved; each of those values gets its own next step; no catch-all, nothing unconsumed. The measurement then returns `2` — a value that resolved cleanly, sits in neither source, and has no branch. Every written clause is satisfied while a producible verdict value has no next step, which is the defect class R2 exists to catch; \"failing to resolve\" does not cover a value that resolved to something outside the enumerated set, and SC3's rubric (union-shadowing case only) would not surface it. Smallest repair to the shipped clause: \"…and include the measurement failing to resolve — or resolving to a value outside the enumerated set — as one of the values\", routing out-of-set resolution to the same mandatory branch as unresolved. Graded P1, not P0: the motivating issue #12 case and its hostile variant remain rejected by the shipped wording, so SC3 as written still passes; this is an escape beyond the rubric, and per mandate 3 a hole in the mechanism under construction is never Minor.",
+      "priority": 1,
+      "confidence": 0.7,
+      "file_path": "docs/plans/2026-08-15-001-fix-planning-discrimination-and-verdict-coverage-plan.md",
+      "line_start": 71,
+      "line_end": 75
+    },
+    {
+      "title": "U1/U2 acceptance counts contradict U3's 'may land in either order'",
+      "body": "U3's dependency note states \"U1 and U2 have no dependency on each other and may land in either order\", but the absolute bullet counts in the two acceptance lines encode a fixed order: U1's acceptance asserts the step 14 bullet count `returns 11` (true only while U2 has not landed) and U2's asserts `returns 12` plus a name count of `2` (true only after U1 has landed). Executing in the explicitly permitted order U2-then-U1 makes both units' acceptance checks fail on a correct implementation — U2 would observe count 11/name count 1, and U1 would observe count 12. This is an architecture-unit/acceptance contradiction (angle 3 class) and an acceptance-soundness defect (angle 4): the commands red-flag the right implementation under a sequencing the plan itself authorizes. Verified against the current file: step 14 has 10 bullets today, Scenario coverage third and Command closure last, so the position assertions (`sed -n '4p'`, `tail -1`) are order-independent and correct — only the absolute counts bind the order. Smallest fix: either delete the either-order sentence and declare U1 → U2, or make each unit's count assertion relative (count increased by one; final counts of 11-then-12 asserted once in SC1). SC1 itself measures the final state and is unaffected, hence P1 rather than P0.",
+      "priority": 1,
+      "confidence": 0.95,
+      "file_path": "docs/plans/2026-08-15-001-fix-planning-discrimination-and-verdict-coverage-plan.md",
+      "line_start": 87,
+      "line_end": 93
+    },
+    {
+      "title": "U3 acceptance: multi-file grep -c never 'returns 0', and byte-identity check is single-line phrased for a wrapped bullet",
+      "body": "Two mechanics defects in U3's acceptance line. (1) `grep -c 'gh issue' docs/issue-closures/*.md` \"returns `0`\" — with two files, grep -c emits per-file counts (`…issue-11.md:0` and `…issue-12.md:0`) and exits 1; verified on this platform. The literal output `0` never occurs, so the check as written cannot be read off as pass/fail without reinterpretation. Replace with `grep -l 'gh issue' docs/issue-closures/*.md | wc -l` returns `0`, or per-file `grep -c`. Note also step 4 bans any `gh` command while the acceptance greps only `gh issue`, so a `gh api` invocation would pass the mechanical check — widen the pattern to `gh ` if the acceptance is meant to enforce step 4. (2) The byte-identity check says \"extracting the quoted line and grepping the skill for it with `-F`\" (singular line), but both bullets will be wrapped across multiple lines in `skills/planning/SKILL.md` (U1/U2: \"wrapped to match the surrounding lines\") and prefixed in the payload if block-quoted; a single-line `grep -F` cannot establish byte-identity of a multi-line region. Specify per-wrapped-line `grep -F` after stripping any quote prefix, or unwrap both sides before comparing. Neither defect passes a wrong implementation of the payloads themselves, so P2.",
+      "priority": 2,
+      "confidence": 0.9,
+      "file_path": "docs/plans/2026-08-15-001-fix-planning-discrimination-and-verdict-coverage-plan.md",
+      "line_start": 100,
+      "line_end": 100
+    },
+    {
+      "title": "Row 55's trigger classifies as edit-based under step 5a's tiebreak, not event-based",
+      "body": "The audit classifies ROADMAP row 55 (\"Forced-failure matrices omit partial durable state\", trigger \"Next planning-contract change\") as event-based. Step 5a's tiebreak says a trigger naming both a file condition and an event resolves to edit-based — the mechanically checkable reading wins — and \"planning-contract change\" is an edit condition on a nameable file set (`skills/planning/SKILL.md`, `schemas/plan-schema.md`) phrased as an event; the audit's own \"Fired by\" cell demonstrates this by diffing it against the file list (\"U1/U2 change the planning contract\"), which is exactly the edit-based procedure. The fired verdict and the Deferred disposition are both correct, so there is no mandate-1 omission; the impact is forward-looking — a future plan touching `schemas/plan-schema.md` that inherits the event-based label may skip the mechanical file-list diff that edit-based classification obligates. Smallest fix: change the Class cell to edit-based (or edit-based-per-tiebreak) with the rest of the row unchanged. P2: no success criterion of this cycle is threatened.",
+      "priority": 2,
+      "confidence": 0.7,
+      "file_path": "docs/plans/2026-08-15-001-fix-planning-discrimination-and-verdict-coverage-plan.md",
+      "line_start": 118,
+      "line_end": 118
+    },
+    {
+      "title": "Latched-fired rows 12/13 have audit-cell dispositions but no Deferred to Follow-Up Work entries",
+      "body": "Step 5a's letter: \"Every fired trigger gets a disposition in the same planning pass: fold the row in as a unit, or add a Deferred to Follow-Up Work entry naming the row and the reason.\" The audit counts seven fired rows; four are folded (57, 59, 60, 61) and row 55 gets a real Deferred-section entry, but the two latched rows — Conformance suite (12) and Schema validators + fixtures (13) — carry \"Deferred with reason\" only inside the audit table's Disposition cell, with no corresponding entry in the Deferred to Follow-Up Work section. The handling is internally inconsistent (row 55's identical disposition kind did get a section entry) and short of 5a's letter for the deferral arm. Mitigation is real: both rows' deferrals are already recorded in the tracker itself (\"stays deferred to its own cycle\" / \"remains open under the original trigger\"), which is why this is not a mandate-1 omitted-fired-row — both rows appear in the audit with fired verdicts and reasons. Smallest fix: one Deferred bullet naming rows 12 and 13 and pointing at the tracker's own recorded deferrals, or an explicit sentence in the audit section stating that latched rows deferred by the tracker itself take their disposition from the tracker record. P2: no criterion threatened; the letter-level gap invites future audits to treat the disposition cell as always sufficient.",
+      "priority": 2,
+      "confidence": 0.75,
+      "file_path": "docs/plans/2026-08-15-001-fix-planning-discrimination-and-verdict-coverage-plan.md",
+      "line_start": 114,
+      "line_end": 115
+    },
+    {
+      "title": "Mandate 1 discharged: independently re-derived audit matches the attestation — 21 open, 7 fired, 0 unobservable",
+      "body": "Re-derived from ROADMAP.md at 68ffafe (the plan's parent commit), not from the plan's table. Open rows: Future candidates lines 12–23 = 12 rows, none struck; Carry-forward lines 44–62 = 19 data rows of which 10 are struck (~~Done~~/~~Closed~~: 44–52, 56), leaving lines 53, 54, 55, 57, 58, 59, 60, 61, 62 = 9 open. Total 21 ✓. Per-row: 12 event-based LATCHED-FIRED (cell carries **fired**) → dispositioned; 13 event-based LATCHED-FIRED → dispositioned; 53 event-based not fired (SC6 is declared Ship-gate, pre-Retro); 54 edit-based not fired (file list = skills/planning/SKILL.md + docs/issue-closures/, no shipping/handoff files); 55 FIRED (U1/U2 touch the planning contract) → Deferred entry present; 57 edit-based FIRED conservatively on its third arm → folded via committed path (strictly the arm reads 'into loop state', which U3 avoids — over-inclusive firing, the safe direction, not reportable); 58 edit-based not fired (no interview-protocol or reviewing dispatch files); 59 event-based FIRED (deliverable is an integrity mechanism) → folded, discharged in Design; 60 event-based FIRED (Design review triaged mechanism findings) → folded procedurally; 61 event-based FIRED (SC6 human-discharged) → folded; 62 event-based not fired (author-executed, no committing subagent); 14–23 all event-based, none's external occurrence is this cycle. Fired set: {12, 13, 55, 57, 59, 60, 61} = 7 ✓. No drift-based triggers exist, so 0 unobservable ✓. Diff against the plan's audit: zero omitted rows, zero missing dispositions; the two divergences found are the classification and deferral-realization P2s reported separately. The mandate's blocking class (omitted fired row) is empty.",
+      "priority": 3,
+      "confidence": 0.95,
+      "file_path": "docs/plans/2026-08-15-001-fix-planning-discrimination-and-verdict-coverage-plan.md",
+      "line_start": 118,
+      "line_end": 127
+    }
+  ],
+  "overall_correctness": "incorrect",
+  "explanation": "The plan is schema-conformant, byte-faithful to the approved spec's Interface wording, scope-clean, and its carry-forward audit re-derives exactly (21 open / 7 fired / 0 unobservable, no omitted fired row). It is blocked by one P0 from the mandated invariant attack: the shipped Discrimination check's 'one changed input must compare different' clause never binds the changed input to the input or option whose effect the step exists to detect, so a same-kind, same-pipeline fixture varied along an irrelevant axis satisfies every clause — and SC2's accept rubric — while the deployed comparison still cannot discriminate the change under test. Two P1s (an out-of-enumeration verdict value escaping U1's union clause; U1/U2 absolute acceptance counts contradicting U3's 'may land in either order') and three P2s (U3's multi-file grep -c output shape and single-line byte-identity phrasing; row 55's event-based label against the step 5a tiebreak; latched rows 12/13 lacking Deferred-section entries) accompany it, with severities graded against the threatened success criteria per mandate 3.",
+  "confidence": 0.8
+}

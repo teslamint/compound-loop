@@ -10,7 +10,7 @@ phase: design | plan | implement | review | ship | retro | done | blocked
 phase_status: in-progress | waiting-user | blocked | complete
 started: <ISO-8601 timestamp>
 updated: <ISO-8601 timestamp>          # touched on every write
-branch: <feature branch>
+branch: <current checkout branch; feature branch before handoff, value of base_branch after verified base handoff>
 base_branch: <detected base>
 flags: [--auto, --skip-design]          # as given, empty list if none
 

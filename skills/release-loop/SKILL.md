@@ -30,6 +30,23 @@ Phase transitions fire only when the invoked skill's exit condition holds — re
 
 Ship without Retro is an incomplete release: after merge, the loop always enters Retro before reporting done.
 
+## Approved-plan transition hooks
+
+An approved plan may declare only two release-loop-owned transition families, recognized by exact heading shape and never by free-text inference:
+
+- `## Release-loop Ship-cleanup transition R<N>:` — pass the body-sealed plan to `shipping`; its Step 8 hook runs these local transitions after merged-result verification and before worktree removal.
+- `## Release-loop post-Ship completion transition R<N>:` — after `shipping` returns a merged-and-cleaned exit and before Phase 6, the release-loop orchestrator runs these transitions in heading order and requires each section's acceptance evidence before advancing to Retro.
+
+Each transition section's first nonblank body line must be `Matrix rows: T<N>[, T<N> ...]`. Transition IDs are globally unique across both families; a matrix row may be claimed by at most one transition; and every declared row must exist with exactly one evidence owner. Duplicate IDs, duplicate row claims, missing rows, or extra mappings block Ship before any transition runs.
+
+Before either family runs, revalidate the approved plan's `body_seal`, require the section to name an owner and a matching mutation/failure-state matrix row, and persist the transition start in `progress.md`. A missing, failed, cancelled, or unverifiable transition blocks the loop in Ship; it never advances by silence. Any outward action requires an interactive point-of-risk USER gate with exact target and values; only the human or orchestrating session receiving first-hand approval executes it. A declined, deferred, relayed, or headless outward transition leaves Ship blocked; a matrix-permitted local transition may complete headlessly only when its matrix permits it and proves every outward target unreachable.
+
+A post-approval deviation never overrides a transition by discovery alone. When a sealed transition's literal artifact changed, accept one override only after the current-session USER approves the exact committed addendum path and whole-file SHA-256 and the orchestrator persists one timestamped `transition-override-approved` Log line with transition ID, addendum path/digest, target path, replaced/replacement digests, `approver=USER`, and session identity. Before use, require exactly one matching approval line for the current session, re-hash the tracked byte-clean addendum and target, and prove a single exact override block names the same transition and digests and that the sealed plan contains the replaced digest. Retain prior-session approval lines as history but ignore them for current-session authority. Missing, duplicate-current-session, untracked, dirty, ambiguous, or mismatched override state blocks the transition. Override approval changes only the pinned contract; it is never merge or outward-action consent.
+
+On every Ship entry or resume, before trusting a base `progress.md` or removing a worktree, inspect the base checkout's `.release-loop/.handoff/`. If an owned approved-plan transition operation is present, rerun that named transition from the still-preserved feature worktree before continuing. A missing or mismatched owner marker blocks Ship without deleting the operation.
+
+If the authoritative base ledger records `phase: ship` and `merged: true`, resume never re-enters pre-merge `shipping` or treats “nothing to ship” as completion. Use transition start/acceptance logs plus `.handoff/` state to rerun an interrupted pre-removal transition, finish only pending cleanup after its acceptance, and then run every incomplete post-Ship transition before Retro.
+
 ## Starting a new loop
 
 1. Parse flags; validate `--skip-*` prerequisites (above). Before any feature-derived lookup or mutation, define one `feature_slug` from explicit feature input. Accept only `^[a-z0-9]+(?:-[a-z0-9]+)*$`, reject the reserved standalone token `resume`, never silently normalize invalid input, ask an interactive caller for a replacement, and return blocked context for an unattended caller. Reuse the exact `feature_slug` for `feature:`, the branch suffix, the archive suffix, and any archived-resume lookup.

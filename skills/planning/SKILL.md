@@ -144,6 +144,18 @@ Before finalizing, the author (not a subagent) checks:
   stays a planning-time unknown unless the user narrows the claim.
 - **Spec coverage** — every spec requirement traces to a unit; list gaps. When the spec has a Risks table with mitigations that require a specific deliverable, each such mitigation traces to a unit step or a Deferred to Follow-Up Work entry — an un-traced mitigation is an undelivered promise.
 - **Scenario coverage** — re-walk the Scenario coverage map against the final unit set: every S-ID still completes end to end (deepening and unit edits are the likeliest breakage vector), and every map row names real scenario evidence (integration test, or observable verification for non-code plans). `enforces: P8`
+- **Verdict coverage** — for every unit that emits a verdict, decision, or
+  classification, derive the known value set from the union of the emitting step's
+  declared output set and the origin spec's own enumeration — never from recall, and
+  never from the narrower of the two. Cover that set's full complement as two
+  explicit outcome categories: the measurement fails to resolve, or it resolves to
+  any value outside the known set; one representative out-of-set value does not
+  cover the rest. Confirm every known value and both complement categories have
+  their own value- or category-specific next step; a single catch-all consumer that
+  acts on "whatever the verdict says" covers nothing. A value or category with no
+  next step is a plan gap, not an implementation-time unknown. A known value
+  deliberately out of scope goes to Deferred to Follow-Up Work with its reason, and
+  a verdict no unit consumes is itself either a gap or a deliberate Deferred entry.
 - **Mutation/failure-state completeness** — when the deliverable contains a stateful ceremony, confirm every durable transition has a row with transition identity, pre-state, action, expected post-state, all six outcome classes, and an implementation-unit/evidence-owner mapping. Confirm irreversible transitions name compensation or manual recovery, every forced failure uses safe isolated injection, and no cell is blank or uses not-applicable without a concrete reason. Otherwise confirm the exact stateless fallback is present.
 - **Placeholder scan** — search for step 13's red flags; fix inline.
 - **Type consistency** — do signatures, names, and types agree across units (a function `clearLayers()` in U2 and `clearFullLayers()` in U5 is a bug)?
@@ -151,6 +163,7 @@ Before finalizing, the author (not a subagent) checks:
 - **Retro carryover** — re-run the step 5a trigger audit against the final file list (deepening and unit edits are the likeliest divergence vector), confirm the attestation line still names the tracker state actually examined, and keep the feature-relevance question ("does this item belong in this plan?") for event-based triggers only.
 - **Architecture-unit clause consistency** — diff every claim in the Architecture notes against the unit steps and interfaces that implement it. A note asserting "X is always Y" while a unit step implements otherwise (or omits the constraint entirely) is a blocking finding.
 - **Command closure** — for every shell command in a unit step, verify that every variable it references is assigned or declared within that step or an earlier step in the same unit. A step referencing `$VAR` without a prior assignment is a dataflow gap that step 13's keyword scan cannot catch.
+- **Discrimination check** — for every step that compares two things, run the step's own comparison on two controlled fixture pairs. Both pairs use the same comparison domain as the step's real comparands and the same command, pipeline, or computation that actually produces or derives them. When the real comparands are artifacts, both fixture pairs must use the same artifact kinds as the step's real comparands; mixed artifact kinds in the real comparands or either fixture pair fail this check outright: they always differ, so the comparison cannot report anything about the change. The invariance pair runs identical inputs and configuration twice; the changed-axis pair differs only in the input or option whose effect the step exists to detect. Name the effect-bearing signal, field, or subartifact the comparison measures, and record both fixture pairs and both observed results in the step. The invariance pair must compare equal; the changed-axis pair must compare different in that named signal, field, or subartifact. A difference confined to metadata, a receipt, or another output unrelated to the specified effect does not satisfy the changed-axis result. For every guard, run and record one fixture that must pass and one minimally changed fixture that must fail; a guard that accepts both is not a guard.
 
 Fix issues inline; no separate review pass is needed.
 
