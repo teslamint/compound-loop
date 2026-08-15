@@ -144,6 +144,18 @@ Before finalizing, the author (not a subagent) checks:
   stays a planning-time unknown unless the user narrows the claim.
 - **Spec coverage** — every spec requirement traces to a unit; list gaps. When the spec has a Risks table with mitigations that require a specific deliverable, each such mitigation traces to a unit step or a Deferred to Follow-Up Work entry — an un-traced mitigation is an undelivered promise.
 - **Scenario coverage** — re-walk the Scenario coverage map against the final unit set: every S-ID still completes end to end (deepening and unit edits are the likeliest breakage vector), and every map row names real scenario evidence (integration test, or observable verification for non-code plans). `enforces: P8`
+- **Verdict coverage** — for every unit that emits a verdict, decision, or
+  classification, derive the known value set from the union of the emitting step's
+  declared output set and the origin spec's own enumeration — never from recall, and
+  never from the narrower of the two. Cover that set's full complement as two
+  explicit outcome categories: the measurement fails to resolve, or it resolves to
+  any value outside the known set; one representative out-of-set value does not
+  cover the rest. Confirm every known value and both complement categories have
+  their own value- or category-specific next step; a single catch-all consumer that
+  acts on "whatever the verdict says" covers nothing. A value or category with no
+  next step is a plan gap, not an implementation-time unknown. A known value
+  deliberately out of scope goes to Deferred to Follow-Up Work with its reason, and
+  a verdict no unit consumes is itself either a gap or a deliberate Deferred entry.
 - **Mutation/failure-state completeness** — when the deliverable contains a stateful ceremony, confirm every durable transition has a row with transition identity, pre-state, action, expected post-state, all six outcome classes, and an implementation-unit/evidence-owner mapping. Confirm irreversible transitions name compensation or manual recovery, every forced failure uses safe isolated injection, and no cell is blank or uses not-applicable without a concrete reason. Otherwise confirm the exact stateless fallback is present.
 - **Placeholder scan** — search for step 13's red flags; fix inline.
 - **Type consistency** — do signatures, names, and types agree across units (a function `clearLayers()` in U2 and `clearFullLayers()` in U5 is a bug)?
