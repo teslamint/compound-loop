@@ -163,22 +163,7 @@ Before finalizing, the author (not a subagent) checks:
 - **Retro carryover** — re-run the step 5a trigger audit against the final file list (deepening and unit edits are the likeliest divergence vector), confirm the attestation line still names the tracker state actually examined, and keep the feature-relevance question ("does this item belong in this plan?") for event-based triggers only.
 - **Architecture-unit clause consistency** — diff every claim in the Architecture notes against the unit steps and interfaces that implement it. A note asserting "X is always Y" while a unit step implements otherwise (or omits the constraint entirely) is a blocking finding.
 - **Command closure** — for every shell command in a unit step, verify that every variable it references is assigned or declared within that step or an earlier step in the same unit. A step referencing `$VAR` without a prior assignment is a dataflow gap that step 13's keyword scan cannot catch.
-- **Discrimination check** — for every step that compares two things, run the
-  step's own comparison on two controlled fixture pairs. Both pairs use the same
-  artifact kinds as the step's real comparands and the same command or pipeline
-  that produces them. The invariance pair runs identical inputs and
-  configuration twice; the changed-axis pair differs only in the input or
-  option whose effect the step exists to detect. Name the effect-bearing signal
-  or subartifact the comparison measures, and record both fixture pairs and both
-  observed results in the step. The invariance pair must compare equal; the
-  changed-axis pair must compare different in that named signal or subartifact.
-  A difference confined to metadata, a receipt, or another output unrelated to
-  the specified effect does not satisfy the changed-axis result. Different
-  artifact kinds in the real comparands or either fixture pair fail this check
-  outright: they always differ, so the comparison cannot report anything about
-  the change. For every guard, run and record one fixture that must pass and one
-  minimally changed fixture that must fail; a guard that accepts both is not a
-  guard.
+- **Discrimination check** — for every step that compares two things, run the step's own comparison on two controlled fixture pairs. Both pairs use the same comparison domain as the step's real comparands and the same command, pipeline, or computation that actually produces or derives them. When the real comparands are artifacts, both fixture pairs must use the same artifact kinds as the step's real comparands; mixed artifact kinds in the real comparands or either fixture pair fail this check outright: they always differ, so the comparison cannot report anything about the change. The invariance pair runs identical inputs and configuration twice; the changed-axis pair differs only in the input or option whose effect the step exists to detect. Name the effect-bearing signal, field, or subartifact the comparison measures, and record both fixture pairs and both observed results in the step. The invariance pair must compare equal; the changed-axis pair must compare different in that named signal, field, or subartifact. A difference confined to metadata, a receipt, or another output unrelated to the specified effect does not satisfy the changed-axis result. For every guard, run and record one fixture that must pass and one minimally changed fixture that must fail; a guard that accepts both is not a guard.
 
 Fix issues inline; no separate review pass is needed.
 

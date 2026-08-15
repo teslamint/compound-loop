@@ -19,7 +19,7 @@ import sys
 if sys.flags.optimize:
     raise SystemExit("optimized Python is forbidden for packet verification")
 pins = (
-    (Path(sys.argv[1]), "6a823211c87178f4d61c2f2a054a483fe5d471c80c5f8000252993e97d9092b3"),
+    (Path(sys.argv[1]), "18946ff5f0d3ef25a0495bdcfdd82f49999c69ca84603a9f5583540ccee1919f"),
     (Path(sys.argv[2]), "6bbf1e73b146a0e2bbb4a20ff7349b6000ccf31e713d5060cb5a41e7c5a4ee2c"),
 )
 for path, expected in pins:
@@ -62,29 +62,41 @@ if sys.flags.optimize:
 print(json.loads(Path(sys.argv[1]).read_text())["state"])
 PY
 }
-status=$(comment_status 11 "$PAYLOAD_11")
-case "$status" in
+status_11=$(comment_status 11 "$PAYLOAD_11")
+state_11=$(issue_state 11)
+status_12=$(comment_status 12 "$PAYLOAD_12")
+state_12=$(issue_state 12)
+case "$status_11" in
+  present|absent) ;;
+  *) exit 1 ;;
+esac
+case "$state_11" in
+  CLOSED|OPEN) ;;
+  *) exit 1 ;;
+esac
+case "$status_12" in
+  present|absent) ;;
+  *) exit 1 ;;
+esac
+case "$state_12" in
+  CLOSED|OPEN) ;;
+  *) exit 1 ;;
+esac
+case "$status_11" in
   present) ;;
   absent) gh issue comment 11 --repo teslamint/compound-loop --body-file "$PAYLOAD_11" ;;
-  *) exit 1 ;;
 esac
-state=$(issue_state 11)
-case "$state" in
+case "$state_11" in
   CLOSED) ;;
   OPEN) gh issue close 11 --repo teslamint/compound-loop ;;
-  *) exit 1 ;;
 esac
-status=$(comment_status 12 "$PAYLOAD_12")
-case "$status" in
+case "$status_12" in
   present) ;;
   absent) gh issue comment 12 --repo teslamint/compound-loop --body-file "$PAYLOAD_12" ;;
-  *) exit 1 ;;
 esac
-state=$(issue_state 12)
-case "$state" in
+case "$state_12" in
   CLOSED) ;;
   OPEN) gh issue close 12 --repo teslamint/compound-loop ;;
-  *) exit 1 ;;
 esac
 gh issue view 11 --repo teslamint/compound-loop --json state,comments > "$TMP/11.json"
 gh issue view 12 --repo teslamint/compound-loop --json state,comments > "$TMP/12.json"
