@@ -47,9 +47,40 @@ if [[ ! -d "$ROOT/skills/planning" ]]; then
   exit 1
 fi
 
-# The root copy is the pre-move oracle when it is still present. After relocation,
-# recover the same bytes from repository history so parity remains meaningful.
-ORACLE="$ROOT/schemas/plan-schema.md"
+# Find the relocation commit first. Once it exists, parity is anchored to the
+# move parent's old-root blob and the move commit's planning-local blob so later
+# approved schema documentation changes do not freeze the harness forever.
+if ! command -v git >/dev/null 2>&1; then
+  fail 'harness/setup — git is required for schema history/oracle checks'
+  exit 1
+fi
+
+ORACLE_MODE=""
+ORACLE=""
+MOVE_COMMIT=""
+MOVE_PARENT=""
+while IFS= read -r candidate; do
+  parent="$(git -C "$ROOT" rev-parse "$candidate^" 2>/dev/null || true)"
+  if [[ -n "$parent" ]] \
+    && git -C "$ROOT" cat-file -e "$parent:schemas/plan-schema.md" 2>/dev/null \
+    && git -C "$ROOT" cat-file -e "$candidate:skills/planning/schemas/plan-schema.md" 2>/dev/null; then
+    MOVE_COMMIT="$candidate"
+    MOVE_PARENT="$parent"
+    break
+  fi
+done < <(git -C "$ROOT" rev-list --first-parent HEAD -- skills/planning/schemas/plan-schema.md)
+
+if [[ -n "$MOVE_COMMIT" ]]; then
+  ORACLE_MODE="git"
+elif [[ -s "$ROOT/schemas/plan-schema.md" ]]; then
+  # RED-phase fallback only: before the relocation commit exists, compare the
+  # planning copy with the current root file that is about to be moved.
+  ORACLE_MODE="worktree"
+  ORACLE="$ROOT/schemas/plan-schema.md"
+else
+  fail 'harness/setup — no relocation commit and no pre-move root schema oracle'
+  exit 1
+fi
 
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/planning-schema-portability.XXXXXX" 2>/dev/null)"
 if [[ -z "$TMP_ROOT" || ! -d "$TMP_ROOT" ]]; then
@@ -57,21 +88,58 @@ if [[ -z "$TMP_ROOT" || ! -d "$TMP_ROOT" ]]; then
   exit 1
 fi
 
-if [[ ! -s "$ORACLE" ]]; then
-  ORACLE_FROM_GIT="$TMP_ROOT/pre-move-plan-schema.md"
-  ORACLE_COMMIT=""
-  while IFS= read -r candidate; do
-    if git -C "$ROOT" show "$candidate:schemas/plan-schema.md" >"$ORACLE_FROM_GIT" 2>/dev/null; then
-      ORACLE_COMMIT="$candidate"
-      break
-    fi
-  done < <(git -C "$ROOT" rev-list --first-parent HEAD -- schemas/plan-schema.md)
-  if [[ -n "$ORACLE_COMMIT" && -s "$ORACLE_FROM_GIT" ]]; then
-    ORACLE="$ORACLE_FROM_GIT"
-  else
-    fail 'harness/setup — pre-move schema oracle is missing from the worktree and git history'
+if [[ "$ORACLE_MODE" == "git" ]]; then
+  OLD_SCHEMA_ORACLE="$TMP_ROOT/pre-move-plan-schema.md"
+  MOVE_SCHEMA_ORACLE="$TMP_ROOT/move-commit-plan-schema.md"
+  if ! git -C "$ROOT" show "$MOVE_PARENT:schemas/plan-schema.md" >"$OLD_SCHEMA_ORACLE" 2>/dev/null \
+    || [[ ! -s "$OLD_SCHEMA_ORACLE" ]]; then
+    fail "harness/setup — move-parent oracle unavailable for $MOVE_PARENT"
     exit 1
   fi
+  if ! git -C "$ROOT" show "$MOVE_COMMIT:skills/planning/schemas/plan-schema.md" >"$MOVE_SCHEMA_ORACLE" 2>/dev/null \
+    || [[ ! -s "$MOVE_SCHEMA_ORACLE" ]]; then
+    fail "harness/setup — move-commit schema unavailable for $MOVE_COMMIT"
+    exit 1
+  fi
+fi
+
+active_schema_output=""
+if ! active_schema_output="$(python3 - "$ROOT" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+historical_prefixes = (
+    ".git/",
+    ".omc/",
+    ".release-loop/",
+    "docs/plans/",
+    "docs/specs/",
+    "docs/retros/",
+    "docs/reviews/",
+    "docs/solutions/",
+)
+active = []
+for path in root.rglob("plan-schema.md"):
+    if not path.is_file():
+        continue
+    relative = path.relative_to(root).as_posix()
+    if relative.startswith(historical_prefixes):
+        continue
+    active.append(relative)
+
+active.sort()
+expected = ["skills/planning/schemas/plan-schema.md"]
+if active != expected:
+    print("expected exactly one active plan-schema.md at skills/planning/schemas/plan-schema.md")
+    for relative in active:
+        print(f"unexpected active plan-schema.md: {relative}")
+    raise SystemExit(1)
+PY
+)"; then
+  fail "active-schema-layout — $active_schema_output"
+else
+  pass 'active-schema-layout — exactly one active plan-schema.md is planning-local'
 fi
 
 mkdir -p "$TMP_ROOT/skills"
@@ -105,18 +173,134 @@ else
   fail 'planning-local-validator — missing scripts/validate-plan-frontmatter.py'
 fi
 
-# Explicit inventory of package-owned paths. The two shared references named in
-# the skill files (references/question-tools.md and references/dispatch-degradation.md)
-# are deliberately not inventory entries: they are repository-root shared inputs,
+# Explicit inventory of package-owned paths. The schema source contributes two
+# planning-local references as well as SKILL.md and deepening.md references.
+# The two shared references named in the skill files
+# (references/question-tools.md and references/dispatch-degradation.md) are
+# deliberately not inventory entries: they are repository-root shared inputs,
 # not planning-package files.
 # The final column is the expected number of occurrences in the source file.
 INVENTORY=(
   'skills/planning/SKILL.md|schemas/plan-schema.md|schemas/plan-schema.md|9'
   'skills/planning/SKILL.md|references/deepening.md|references/deepening.md|1'
   'skills/planning/SKILL.md|references/stateful-ceremony-matrix-example.md|references/stateful-ceremony-matrix-example.md|1'
-  'skills/planning/SKILL.md|python3 skills/planning/scripts/validate-plan-frontmatter.py <plan-path>|scripts/validate-plan-frontmatter.py|1'
+  'skills/planning/SKILL.md|skills/planning/scripts/validate-plan-frontmatter.py|scripts/validate-plan-frontmatter.py|1'
   'skills/planning/references/deepening.md|schemas/plan-schema.md|schemas/plan-schema.md|1'
+  'skills/planning/schemas/plan-schema.md|skills/planning/references/deepening.md|references/deepening.md|1'
+  'skills/planning/schemas/plan-schema.md|skills/planning/references/stateful-ceremony-matrix-example.md|references/stateful-ceremony-matrix-example.md|1'
 )
+
+# Discover every path-like backticked package reference from the planning
+# contract sources before resolving any declared target. The two shared root
+# references are the only exclusions.
+run_inventory_check() {
+  python3 - "$PLANNING_COPY" "${INVENTORY[@]}" <<'PY'
+from collections import Counter
+from pathlib import Path
+import re
+import sys
+
+planning_copy = Path(sys.argv[1])
+declared_rows = sys.argv[2:]
+discovery_sources = sorted(
+    path for path in planning_copy.rglob("*.md")
+    if path.is_file()
+)
+excluded = {
+    "references/question-tools.md",
+    "references/dispatch-degradation.md",
+}
+path_pattern = re.compile(
+    r"(?<![\w./-])(?P<path>(?:skills/planning/)?"
+    r"(?:schemas|references|scripts)/[A-Za-z0-9._<>/-]+)"
+)
+backtick_pattern = re.compile(r"`([^`]*)`")
+
+
+def normalize(path: str) -> str:
+    if path.startswith("skills/planning/"):
+        return path[len("skills/planning/") :]
+    return path
+
+
+def is_local_candidate(raw_path: str, local_path: str) -> bool:
+    if local_path in excluded:
+        return False
+    if raw_path.startswith("skills/planning/"):
+        return True
+    if local_path.startswith(("schemas/", "references/")):
+        # Relative schema/reference paths are package-local candidates even
+        # when their targets are currently missing.
+        return True
+    if local_path.startswith("scripts/"):
+        # Unprefixed scripts/validate.sh-style commands may target a fixture
+        # or repository root. Existing planning-local scripts remain local.
+        return (planning_copy / local_path).is_file()
+    return False
+
+
+declared = Counter()
+declaration_errors = []
+for row in declared_rows:
+    fields = row.split("|")
+    if len(fields) != 4:
+        declaration_errors.append(f"malformed declaration: {row}")
+        continue
+    source, span, local_path, count_text = fields
+    try:
+        count = int(count_text)
+    except ValueError:
+        declaration_errors.append(f"invalid count in declaration: {row}")
+        continue
+    normalized = normalize(span)
+    if normalized != local_path:
+        declaration_errors.append(
+            f"span/path normalization mismatch: {source}|{span}|{local_path}"
+        )
+    key = (source, normalized)
+    if key in declared:
+        declaration_errors.append(f"duplicate declaration: {source}|{span}")
+    declared[key] += count
+
+discovered = Counter()
+for path in discovery_sources:
+    relative_to_planning = path.relative_to(planning_copy).as_posix()
+    relative = f"skills/planning/{relative_to_planning}"
+    text = path.read_text(encoding="utf-8")
+    source_spans = backtick_pattern.findall(text)
+    source_key = relative
+    for source_span in source_spans:
+        for match in path_pattern.finditer(source_span):
+            raw_path = match.group("path")
+            local_path = normalize(raw_path)
+            if is_local_candidate(raw_path, local_path):
+                discovered[(source_key, local_path)] += 1
+
+if declaration_errors:
+    print("\n".join(declaration_errors))
+    raise SystemExit(1)
+
+if discovered != declared:
+    print("discovered-vs-declared planning-local inventory mismatch")
+    for key in sorted(set(discovered) | set(declared)):
+        found = discovered.get(key, 0)
+        declared_count = declared.get(key, 0)
+        if found != declared_count:
+            print(f"{key[0]}|{key[1]}|discovered={found}|declared={declared_count}")
+    raise SystemExit(1)
+PY
+}
+
+if [[ "$SCHEMA_PRESENT" -eq 1 ]]; then
+  inventory_output=""
+  if ! inventory_output="$(run_inventory_check 2>&1)"; then
+    fail "planning-local-inventory-completeness — $inventory_output"
+  else
+    pass 'planning-local-inventory-completeness — discovered and declared source/span/count sets match'
+  fi
+else
+  skip 'planning-local-inventory-completeness — deferred until planning-local-schema is present'
+fi
 
 for entry in "${INVENTORY[@]}"; do
   IFS='|' read -r source span local_path expected_count <<< "$entry"
@@ -130,11 +314,13 @@ for entry in "${INVENTORY[@]}"; do
   detail=""
   if ! detail="$(python3 - "$standalone_source" "$span" "$PLANNING_COPY" "$local_path" "$expected_count" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 source, span, planning_copy, local_path, expected_count = sys.argv[1:]
 text = Path(source).read_text(encoding="utf-8")
-occurrences = text.count(f"`{span}`")
+source_spans = re.findall(r"`([^`]*)`", text)
+occurrences = sum(source_span.count(span) for source_span in source_spans)
 if occurrences != int(expected_count):
     print(
         f"expected {expected_count} backticked occurrences, found {occurrences}: `{span}`"
@@ -157,10 +343,40 @@ PY
 done
 
 if [[ "$SCHEMA_PRESENT" -eq 1 ]]; then
-  if cmp -s "$ORACLE" "$LOCAL_SCHEMA"; then
-    pass 'schema-byte-parity — planning-local schema matches the pre-move schema oracle'
+  MUTATION_SKILL="$PLANNING_COPY/SKILL.md"
+  MUTATION_BACKUP="$TMP_ROOT/SKILL.md.inventory-backup"
+  if ! cp "$MUTATION_SKILL" "$MUTATION_BACKUP"; then
+    fail 'planning-local-inventory-missing-relative-mutation — fixture backup failed'
   else
-    fail 'schema-byte-parity — planning-local schema differs from the pre-move schema oracle'
+    printf '\nInventory mutation probe: `references/new-local-reference.md`\n' >>"$MUTATION_SKILL"
+    mutation_output=""
+    if mutation_output="$(run_inventory_check 2>&1)"; then
+      fail 'planning-local-inventory-missing-relative-mutation — missing reference was accepted'
+    elif [[ "$mutation_output" == *'discovered-vs-declared planning-local inventory mismatch'* \
+      && "$mutation_output" == *'references/new-local-reference.md'* ]]; then
+      pass 'planning-local-inventory-missing-relative-mutation — missing relative reference was rejected'
+    else
+      fail "planning-local-inventory-missing-relative-mutation — unexpected diagnostic: $mutation_output"
+    fi
+    if ! mv "$MUTATION_BACKUP" "$MUTATION_SKILL"; then
+      fail 'planning-local-inventory-missing-relative-mutation — fixture restore failed'
+    fi
+  fi
+else
+  skip 'planning-local-inventory-missing-relative-mutation — deferred until planning-local-schema is present'
+fi
+
+if [[ "$SCHEMA_PRESENT" -eq 1 ]]; then
+  if [[ "$ORACLE_MODE" == "git" ]]; then
+    if cmp -s "$OLD_SCHEMA_ORACLE" "$MOVE_SCHEMA_ORACLE"; then
+      pass 'schema-byte-parity — move-parent old blob matches move-commit planning-local blob'
+    else
+      fail 'schema-byte-parity — move-parent old blob differs from move-commit planning-local blob'
+    fi
+  elif cmp -s "$ORACLE" "$LOCAL_SCHEMA"; then
+    pass 'schema-byte-parity — planning-local schema matches the pre-move worktree oracle'
+  else
+    fail 'schema-byte-parity — planning-local schema differs from the pre-move worktree oracle'
   fi
 else
   skip 'schema-byte-parity — deferred until planning-local-schema is present'
