@@ -410,6 +410,49 @@ if [[ -s "$LOCAL_VALIDATOR" ]]; then
   fi
 fi
 
+# Planning-only seal round-trip: draft -> print -> insert body_seal and
+# status: approved -> normal validation. The copy must not consult a
+# repository-root validator or schema.
+if [[ -s "$LOCAL_VALIDATOR" ]]; then
+  SEAL_OUT="$TMP_ROOT/standalone-seal.out"
+  SEAL_ERR="$TMP_ROOT/standalone-seal.err"
+  if python3 "$LOCAL_VALIDATOR" --print-seal "$DRAFT" >"$SEAL_OUT" 2>"$SEAL_ERR"; then
+    seal="$(cat "$SEAL_OUT")"
+    if [[ "$seal" =~ ^[0-9a-f]{64}$ ]] && [[ ! -s "$SEAL_ERR" ]]; then
+      if python3 - "$DRAFT" "$seal" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+seal = sys.argv[2]
+with path.open("r", encoding="utf-8", newline="") as handle:
+    text = handle.read()
+if "status: draft\n" not in text or "body_seal:" in text:
+    raise SystemExit("unexpected planning-only draft fixture shape")
+text = text.replace("status: draft\n", "status: approved\n", 1)
+text = text.replace("execution: code\n", f"execution: code\nbody_seal: {seal}\n", 1)
+with path.open("w", encoding="utf-8", newline="") as handle:
+    handle.write(text)
+PY
+      then
+        roundtrip_output=""
+        if roundtrip_output="$(python3 "$LOCAL_VALIDATOR" "$DRAFT" 2>&1)"; then
+          pass 'planning-local-validator — draft print-seal and approved normal-validation round-trip'
+        else
+          fail "planning-local-validator — approved seal round-trip failed${roundtrip_output:+ — $roundtrip_output}"
+        fi
+      else
+        fail 'planning-local-validator — could not insert printed seal and approved status'
+      fi
+    else
+      fail 'planning-local-validator — --print-seal did not return exactly one lowercase 64-hex digest'
+    fi
+  else
+    seal_error="$(cat "$SEAL_ERR")"
+    fail "planning-local-validator — --print-seal failed${seal_error:+ — $seal_error}"
+  fi
+fi
+
 # Active paths are intentionally allowlisted. Historical plans/specs/retros/
 # reviews/solutions and CHANGELOG are not scanned because their old references
 # are preserved evidence, not live resolution paths.
