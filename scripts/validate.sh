@@ -764,6 +764,45 @@ def raw_sha256(relative):
         return ""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
+def operative_markdown(text):
+    without_comments = re.sub(r"(?s)<!--.*?-->", "", text)
+    operative = []
+    fence_character = None
+    fence_length = 0
+    for line in without_comments.splitlines(keepends=True):
+        if fence_character is None:
+            opener = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})(.*?)(?:\r?\n)?$", line)
+            if opener and (
+                opener.group(1)[0] == "~" or "`" not in opener.group(2)
+            ):
+                fence_character = opener.group(1)[0]
+                fence_length = len(opener.group(1))
+                continue
+            operative.append(line)
+            continue
+
+        closer = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*(?:\r?\n)?$", line)
+        if (
+            closer
+            and closer.group(1)[0] == fence_character
+            and len(closer.group(1)) >= fence_length
+        ):
+            fence_character = None
+            fence_length = 0
+    return "".join(operative)
+
+def unique_section(relative, text, heading):
+    matches = re.findall(
+        rf"(?ms)^{re.escape(heading)}\n(.*?)(?=^## |\Z)",
+        operative_markdown(text),
+    )
+    if len(matches) != 1:
+        failures.append(
+            f"FAIL: {TAG} {relative} expected one operative {heading} section"
+        )
+        return ""
+    return matches[0]
+
 planning_rel = "skills/planning/SKILL.md"
 planning = load(planning_rel)
 discrimination = re.findall(r"^- \*\*Discrimination check\*\*.*$", planning, re.M)
@@ -808,21 +847,108 @@ for clause in (
 
 shipping_rel = "skills/shipping/SKILL.md"
 shipping = load(shipping_rel)
-for clause in (
-    "merged-result-verification-command",
-    "before presenting the merge gate",
-    "merged commit SHA",
-    "persisted before the merge gate",
-    "before persisting any approved-plan transition start",
-    "blocks every pre-removal transition and, on this release-loop path, cleanup",
-    "Standalone `shipping` without an eligible approved-plan transition",
+merge_gate = unique_section(shipping_rel, shipping, "## Step 7: Merge Gate")
+cleanup = unique_section(shipping_rel, shipping, "## Step 8: Cleanup")
+
+persist_contract = re.findall(
+    r"^\*\*Persist before the gate resolves\*\*:.*$",
+    merge_gate,
+    re.M,
+)
+if len(persist_contract) != 1:
+    failures.append(
+        f"FAIL: {TAG} {shipping_rel} expected one operative pre-gate persistence paragraph"
+    )
+else:
+    for clause in (
+        "On every merge path, append a separate `merged-result-verification-command` record",
+        "before presenting the merge gate",
+        "Sink by mode:",
+        "`release-loop` -> `.release-loop/progress.md`",
+        "standalone -> the worktree's git-dir state",
+    ):
+        require(shipping_rel, persist_contract[0], clause)
+    if persist_contract[0].count("merged-result-verification-command") != 1:
+        failures.append(
+            f"FAIL: {TAG} {shipping_rel} expected one pre-gate replay-command record"
+        )
+
+cleanup_intro = re.findall(
+    r"^For \*\*every merge outcome\*\*, merged-result verification is an executable prerequisite for cleanup:$",
+    cleanup,
+    re.M,
+)
+if len(cleanup_intro) != 1:
+    failures.append(
+        f"FAIL: {TAG} {shipping_rel} expected one all-merge cleanup prerequisite"
+    )
+
+numbered_steps = re.findall(r"^([1-4])\. (.*)$", cleanup, re.M)
+if [number for number, _ in numbered_steps] != ["1", "2", "3", "4"]:
+    failures.append(
+        f"FAIL: {TAG} {shipping_rel} expected ordered merged-result steps 1-4"
+    )
+else:
+    step_contracts = dict(numbered_steps)
+    for clause in (
+        "non-empty, non-`null`",
+        "merged commit SHA",
+        "A missing SHA blocks",
+    ):
+        require(shipping_rel, step_contracts["1"], clause)
+    for clause in (
+        "fast-forward only",
+        "Confirm that `git rev-parse HEAD` equals the merged commit SHA",
+        "a checkout mismatch blocks",
+    ):
+        require(shipping_rel, step_contracts["2"], clause)
+    for clause in (
+        "exact verification command",
+        "persisted before the merge gate",
+        "no narrower, reconstructed, or substitute command",
+    ):
+        require(shipping_rel, step_contracts["3"], clause)
+    for clause in (
+        "When invoked by `release-loop` with one or more eligible approved-plan pre-removal transitions",
+        "success record to `progress.md`",
+    ):
+        require(shipping_rel, step_contracts["4"], clause)
+
+cleanup_contract = re.findall(
+    r"^Every merge path MUST complete steps 1-3 successfully \*\*before cleanup\*\*\..*$",
+    cleanup,
+    re.M,
+)
+if len(cleanup_contract) != 1:
+    failures.append(
+        f"FAIL: {TAG} {shipping_rel} expected one operative all-merge completion paragraph"
+    )
+else:
+    for clause in (
+        "Missing SHA, checkout mismatch, absent or ambiguous command evidence, or failed verification blocks cleanup",
+        "Step 4 applies only",
+        "before persisting any approved-plan transition start",
+        "blocks every pre-removal transition and, on this release-loop path, cleanup",
+        "Standalone `shipping` reads the command from its existing git-dir record",
+        "typed `discard` path remains separate",
+    ):
+        require(shipping_rel, cleanup_contract[0], clause)
+
+for contradiction in (
+    r"(?i)\b(?:may|can)\b[^\n]{0,120}\b(?:reconstruct(?:ed)?|substitute)\b",
+    r"(?i)\b(?:approved-plan )?transition start\b[^\n]{0,120}\bbefore\b[^\n]{0,120}\b(?:verification|success)",
+    r"(?i)\bstandalone\b[^\n]{0,120}\b(?:skip|without)\b[^\n]{0,120}\b(?:verification|replay)\b",
 ):
-    require(shipping_rel, shipping, clause)
-if all(clause in shipping for clause in (
-    "merged-result-verification-command",
-    "## Step 8: Cleanup",
-)) and shipping.index("merged-result-verification-command") > shipping.index("## Step 8: Cleanup"):
-    failures.append(f"FAIL: {TAG} {shipping_rel} records the replay command after cleanup begins")
+    if re.search(contradiction, cleanup):
+        failures.append(
+            f"FAIL: {TAG} {shipping_rel} retains contradictory cleanup ordering"
+        )
+
+reject(
+    shipping_rel,
+    cleanup,
+    "Standalone `shipping` without an eligible approved-plan transition still verifies the merged result under Step 1 before cleanup",
+)
 
 packet_rel = "docs/issue-closures/2026-08-15-issues-11-and-12-command.md"
 payload_rel = "docs/issue-closures/2026-08-15-issue-11.md"

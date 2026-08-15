@@ -4,12 +4,13 @@ _Recorded 2026-08-15 after approval of `docs/plans/2026-08-15-001-fix-planning-d
 
 ## Original contract
 
-The approved plan and Addendum 012 fix four relevant behaviors:
+The approved plan and Addendum 012 fix five relevant behaviors:
 
 1. The Discrimination check applies to every step that compares two things, but its fixture requirements are written only in artifact terms.
 2. R2 verifies the issue-closure packet at SHA-256 `8168d671af3c457c36afa79e8b8c0217fbce96af0f07e7e8dc563687b8b1aaa7`; that packet pins issue #11 payload SHA-256 `6a823211c87178f4d61c2f2a054a483fe5d471c80c5f8000252993e97d9092b3` and reads both payloads from local `HEAD`.
 3. The release-loop hook permits a matrix-authorized local transition in headless mode, then ends the same paragraph by saying headless mode leaves Ship blocked without limiting that statement to outward transitions.
 4. Shipping orders merged-result verification before R1, but does not require the merged commit identity, exact verification command, result, and timestamp to be written before a transition start.
+5. Standalone `shipping` says it verifies the merged result under Step 1, although Step 1 runs before merge and the executable post-merge verification sequence is limited to release-loop paths with an eligible pre-removal transition.
 
 The plan's body seal remains valid. These are post-approval review findings, so the correction belongs here rather than in the approved plan or Addendum 012.
 
@@ -37,13 +38,17 @@ The local-transition permission and unconditional headless block cannot both gov
 
 A generic instruction to verify the merged result does not prove which commit was tested or that verification finished before the durable transition start. R1 can therefore begin without replayable evidence of its prerequisite.
 
+### Standalone merged-result verification gap
+
+The Step 8 executable procedure that obtains the merged commit SHA, fast-forwards the base checkout, and reruns the exact pre-gate command applies only when an eligible approved-plan transition exists. Step 1 runs before merge. Standalone `shipping` can therefore reach cleanup without testing the merged bytes, despite the universal merge-ordering invariant.
+
 ## Necessity
 
 The comparison wording cannot remain artifact-universal: doing so would make the new mandatory self-review reject valid numeric, string, HTTP-response, and structured-value checks. The synchronized issue payload must change with that shipped contract, and the immutable sealed R2 packet digest then requires an explicit override rather than silent resealing or plan mutation. The packet also must preflight both issues before mutation to satisfy the sealed zero-mutation read-failure acceptance rather than weakening that acceptance after approval.
 
 The headless clause must distinguish local from outward transitions because the approved matrix deliberately permits local headless completion while first-hand consent remains mandatory for outward effects. Leaving both statements in force would make the local terminal state unreachable.
 
-Merged-result verification must persist both its exact command before the merge gate and its result after merge. Conversation memory or a reconstructed command cannot recover the prerequisite after an orchestrator interruption, while allowing R1 to start without that record would permit cleanup on unverified merged bytes. No existing check records this pre-gate command/commit/result chain or safely authorizes the changed R2 digest.
+Merged-result verification must persist its exact command before every merge gate and rerun that command at the exact merged SHA before any cleanup. Conversation memory or a reconstructed command cannot recover the prerequisite after an interruption. Release-loop paths with an eligible transition additionally persist command/SHA/result/time evidence before R1 starts. No existing check enforces the all-merge command/SHA/replay chain or safely authorizes the changed R2 digest.
 
 ## Decision
 
@@ -68,12 +73,19 @@ The release-loop runtime does not scan for or auto-accept this block. Before app
 
 This override approval is not reusable consent for the outward transition. After the override is validated, R2 still presents the repository, issues, payloads, packet, and all four possible mutations and obtains fresh point-of-risk USER confirmation exactly as the sealed plan requires.
 
+### Merged-result verification on every merge
+
+Every path that reaches the merge gate persists a separate `merged-result-verification-command` record using the existing mode-specific sink. After merge, every path obtains the non-empty merged commit SHA, fast-forwards the base checkout without rewriting local work, proves base `HEAD` equals that SHA, and reruns the exact persisted Step 1 command before cleanup. A missing SHA, checkout mismatch, absent or ambiguous command, nonzero verification, or read failure blocks cleanup.
+
+Only release-loop paths with one or more eligible approved-plan pre-removal transitions append the additional timestamped `progress.md` success record and require it before the first transition start. The typed `discard` path remains separate and performs neither merged-result verification nor approved-plan transitions.
+
 ### Review-thread dispositions
 
 - CodeRabbit thread `3789345661`: addressed by the generalized comparison-domain contract and synchronized issue #11 payload.
 - CodeRabbit thread `3789345662`: not addressed. R2 already runs only after shipping returns merged-and-cleaned, from the authoritative base checkout, with the T1 pre-state `Exact U3 commit merged`, a verified packet digest, and fresh USER consent. Replacing the packet's local-`HEAD` reads with an unmodeled remote fetch would break the sealed R2 packet contract without adding a reachable workflow guard. The packet remains preparation evidence and authorizes no standalone execution.
 - CodeRabbit thread `3789345664`: addressed by limiting the headless block to outward transitions and preserving matrix-permitted local completion.
 - CodeRabbit thread `3789345667`: addressed by commit-pinned, durably recorded merged-result verification before any transition start.
+- CodeRabbit thread `3789990775`: addressed by persisting the exact Step 1 command on every merge path and requiring merged-SHA/base-HEAD verification plus exact replay before standalone or release-loop cleanup.
 
 ## Observable behavior
 
@@ -81,24 +93,24 @@ This override approval is not reusable consent for the outward transition. After
 - The corrected issue #11 comment body and packet pin become the R2 terminal artifact only after exact USER-approved addendum pinning.
 - Both issues' read-only comment/state preflights finish before the first possible comment or close operation, so any preflight read failure has zero mutation calls.
 - Matrix-permitted local transitions may complete headlessly; outward transitions remain blocked without first-hand USER consent.
-- On a release-loop merge path with an eligible pre-removal transition, cleanup blocks until the base checkout is fast-forwarded to the merged commit, the exact Step 1 full-suite command passes there, and command/SHA/result/time evidence is appended before any approved-plan transition start. Standalone shipping retains its existing merged-result verification and cleanup flow without requiring a release-loop ledger.
+- Every merge path blocks cleanup until the base checkout is fast-forwarded to the merged commit and the exact persisted Step 1 full-suite command passes there. A release-loop path with an eligible pre-removal transition additionally appends command/SHA/result/time evidence before any transition start; standalone shipping uses its existing git-dir record and has no release-loop ledger requirement.
 
 ## Safety and consent boundaries
 
-No automatic deviation discovery is allowed. The addendum override requires a current-session USER approval event for one exact path and whole-file digest. That event authorizes only the R2 contract substitution. Merge authorization and issue-mutation authorization remain separate first-hand gates. Missing merged-verification evidence blocks R1 and its subsequent cleanup; override ambiguity blocks R2 and Retro after cleanup, without inventing rollback or silently advancing.
+No automatic deviation discovery is allowed. The addendum override requires a current-session USER approval event for one exact path and whole-file digest. That event authorizes only the R2 contract substitution. Merge authorization and issue-mutation authorization remain separate first-hand gates. Missing merged-verification evidence blocks cleanup on every merge path and blocks R1 on an eligible release-loop path; override ambiguity blocks R2 and Retro after cleanup, without inventing rollback or silently advancing.
 
 The issue packet continues to use local `HEAD` intentionally: the R2 runtime gate reaches it only from the authoritative merged base checkout after the sealed plan's merged-state checks. The packet's first line remains `Preparation evidence — first-hand consent still required. This file authorizes no command.`
 
 ## Verification changes
 
-- `scripts/validate.sh` check 16 rejects artifact-only universal comparison wording, the headless contradiction, missing pre-gate command persistence or merged-commit evidence, and an invalid R2 override identity/digest chain.
+- `scripts/validate.sh` check 16 rejects artifact-only universal comparison wording, the headless contradiction, merge-path-specific command persistence or merged-result replay, missing release-loop pre-transition evidence, and an invalid R2 override identity/digest chain. Its shipping check removes HTML comments and fenced examples, extracts the unique operative Step 7 and Step 8 sections, validates the persistence paragraph and ordered steps 1-4 in their owning sections, and rejects contradictory cleanup ordering.
 - The check scopes the six override fields to one `Transition override R2` block, requires the active plan path and exact transition ID, hashes raw payload/packet bytes, requires the sealed R2 section to contain the replaced digest, and rejects automatic discovery or ambiguous current-session authority.
 - A disposable merged-base-shaped Git fixture executes the packet behind a local `gh` stub. Clean committed payloads must finish with read-only issue views; a committed payload whose bytes miss the pin, a post-commit working-tree/`HEAD` byte mismatch, or a late issue preflight read failure must exit before any issue comment or close call.
-- Shipping verification must prove the exact full-suite command was durably recorded before the merge gate, then prove merged SHA, base-HEAD equality, the same command, exit/result, and timestamp appear before the first R1 start record.
+- Shipping verification must prove the exact full-suite command is durably recorded before every merge gate, then prove every merge path requires merged SHA, base-HEAD equality, and replay of that same command before cleanup. Eligible release-loop transition paths additionally require exit/result/timestamp evidence before the first R1 start record. Disposable mutations that retain every required literal while permitting a substitute command and early transition start, or move the operative contracts under a tilde fence, must fail the scoped validator.
 
 | Gate | Success | Forced failure | Rerun / recovery | Compensation and headless |
 |---|---|---|---|---|
-| Merged-result prerequisite | Recorded pre-gate command replays at the exact merged SHA; success record precedes R1 start | Missing/ambiguous command, SHA mismatch, nonzero verification, late record, or append failure leaves R1 and cleanup untouched | Resume from the authoritative base ledger, replay the recorded command, and append a new success record; never infer it from chat | The merge is not rolled back; preserve the worktree until success. The local verification may run headlessly, but it authorizes no outward action |
+| Merged-result prerequisite | Every merge path records and replays the exact pre-gate command at the exact merged SHA before cleanup; eligible release-loop paths also record success before R1 starts | Missing/ambiguous command, SHA mismatch, nonzero verification, late release-loop record, or append failure blocks cleanup and leaves R1 untouched | Resume from the mode-specific durable record, replay the recorded command at the authoritative merged base, and append a new success record when release-loop requires one; never infer it from chat | The merge is not rolled back; preserve the worktree until success. Local verification may run headlessly, but it authorizes no outward action |
 | R2 override selection | Exactly one matching current-session USER approval line binds the committed addendum and target raw-byte digests | No approval, duplicate current-session lines, dirty/untracked bytes, wrong path/digest/transition, or a second override block blocks R2 | Retain prior-session lines as history; a resumed session obtains fresh USER approval and appends one new session-scoped line | Do not roll back merge, R1, or completed cleanup. Headless mode cannot create the USER approval |
 | R2 issue packet | Hash-verified payloads and read-only state snapshots precede the separately approved mutations | Hash mismatch or read failure exits before comment/close; partial remote state is never reported as terminal success | Re-read issue state and resume idempotently from the first missing comment/close operation under fresh point-of-risk consent | Existing comment/close operations are not reversed; record partial durable state and retry only the missing operations. Headless, relayed, declined, or deferred consent leaves R2 blocked |
 
@@ -109,6 +121,6 @@ The issue packet continues to use local `HEAD` intentionally: the R2 runtime gat
 - Approved specification: `docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md` (unchanged).
 - Approved plan: `docs/plans/2026-08-15-001-fix-planning-discrimination-and-verdict-coverage-plan.md` (unchanged; body seal retained).
 - Prior addendum: `docs/deviations/2026-08-15-discrimination-axis-and-out-of-set-verdict-012.md` (unchanged).
-- Review: PR #15, CodeRabbit run `9da8b3f8-bc91-4927-a5c0-be8c10f4416a`, threads `3789345661`, `3789345662`, `3789345664`, and `3789345667`.
+- Review: PR #15; CodeRabbit runs `9da8b3f8-bc91-4927-a5c0-be8c10f4416a` and the 2026-08-15 re-review; threads `3789345661`, `3789345662`, `3789345664`, `3789345667`, and `3789990775`.
 - Changed contracts: `skills/planning/SKILL.md`, `skills/release-loop/SKILL.md`, `skills/shipping/SKILL.md`, `docs/issue-closures/2026-08-15-issue-11.md`, and `docs/issue-closures/2026-08-15-issues-11-and-12-command.md`.
 - Addendum authority: `docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md`.
