@@ -37,6 +37,15 @@ This consumer executes only the plan rules listed here; it does not require the 
 {"decision":"reseal","fixture":"reseal-post-approval","expected":"reject","diagnostic":"interactive deepening"}
 {"decision":"unit","fixture":"unit-code","expected":"accept","diagnostic":""}
 {"decision":"unit","fixture":"unit-non-code","expected":"accept","diagnostic":""}
+{"decision":"adoption","fixture":"adoption-complete","expected":"accept","diagnostic":"adoption-approved"}
+{"decision":"adoption","fixture":"adoption-changed-body","expected":"reject","diagnostic":"changed-body"}
+{"decision":"adoption","fixture":"adoption-missing-baseline","expected":"reject","diagnostic":"missing-baseline"}
+{"decision":"adoption","fixture":"adoption-missing-approval","expected":"reject","diagnostic":"approval"}
+{"decision":"adoption","fixture":"adoption-missing-plan-path","expected":"reject","diagnostic":"plan path"}
+{"decision":"adoption","fixture":"adoption-missing-old-seal","expected":"reject","diagnostic":"old seal"}
+{"decision":"adoption","fixture":"adoption-missing-new-seal","expected":"reject","diagnostic":"new seal"}
+{"decision":"adoption","fixture":"adoption-missing-reproduction-command","expected":"reject","diagnostic":"reproduction command"}
+{"decision":"adoption","fixture":"reseal-after-adoption","expected":"reject","diagnostic":"interactive deepening"}
 ```
 <!-- end-plan-consumer-contract -->
 
@@ -68,13 +77,28 @@ A malformed or mismatched `body_seal` rejects and reports both `stored=<value>` 
 Compute the comparison from UTF-8 text read with universal-newline translation, then the exact `text.split('---', 2)[2]` extraction, UTF-8 encoding, and lowercase SHA-256 rendering.
 An approved plan that was never sealed remains valid when its approval history contains no `body_seal`.
 An approved plan whose approval history contained a seal but whose current frontmatter removed it rejects as a removed-seal violation.
-Every post-approval re-seal requires interactive deepening; U4 adoption migration is not an exception in this consumer.
+- Every post-approval re-seal requires interactive deepening. The one-time adoption migration exception is allowed only for the complete, baseline-proven, first-hand-approved branch below; it is not a generic bypass.
+
+### Adoption-only migration branch
+
+The ordinary rule is fail-closed: an approved plan with a post-approval body change or reseal is rejected and the diagnostic names `interactive deepening`. During this release's one-time adoption, implementing may accept exactly one exception only when the evidence is complete and baseline-proven:
+
+- first-hand explicit user approval;
+- the exact pre-upgrade baseline commit;
+- a repo-relative plan path;
+- the old seal and the new seal;
+- the canonical reproduction command; and
+- canonical bodies from the baseline and current plan that are byte-identical after the shared UTF-8/universal-newline read and literal extraction.
+
+Implementing rejects a changed body with `changed-body`, a missing baseline with `missing-baseline`, and each missing evidence field with its own diagnostic: `approval`, `baseline commit`, `plan path`, `old seal`, `new seal`, or `reproduction command`. The adoption commit may change only `body_seal` and must record `(baseline commit, plan path, old seal, new seal)`, the reproduction command, and the approval. Any later reseal is rejected unless interactive deepening authorizes it; an interrupted transition requires fresh first-hand approval after operator-owned compensation.
+
+The six durable outcomes are mandatory: `success` advances HEAD once with one seal-line diff and a clean tree; `forced-failure` leaves HEAD unchanged with one dirty target-plan seal diff and no migration commit; `rerun` fails closed without another write or commit until compensation and fresh approval, then permits exactly one success commit; `compensation` restores only the target plan to its pre-transition bytes with unchanged HEAD; `headless` rejects before writing when approval is absent; and `cancellation` leaves pre-write state clean while post-write cancellation proves forced failure before target-only compensation returns the tree clean without a commit. No other adoption or generic bypass branch exists.
 
 ## Pre-flight
 
 1. Read the plan once. It is a **decision artifact, not an execution script** (`enforces: P8`) — never edit its body during execution; progress lives in commits and the ledger, not plan edits.
 2. **Status check** (when invoked with a plan file): apply the standalone eligibility and terminal-state rules above. For `done`, name the recorded `completed_by` commit; if it is missing, report a validator violation rather than inventing a commit. For `superseded`, name the `superseded_by` successor path. Neither terminal state ever degrades to executing the plan.
-3. **Body-seal check** (runs between status check and contradiction scan): apply the approval-history rules above. A present seal must be lowercase hexadecimal and must match the stored-versus-computed values. A removed seal is a violation; a never-sealed plan remains valid. Only interactive deepening may re-seal an approved plan in this consumer.
+3. **Body-seal check** (runs between status check and contradiction scan): apply the approval-history rules above. A present seal must be lowercase hexadecimal and must match the stored-versus-computed values. A removed seal is a violation; a never-sealed plan remains valid. A post-approval reseal is rejected unless interactive deepening or the complete one-time adoption branch authorizes it.
 4. **Contradiction scan**: before Unit 1, scan the whole plan once for units that contradict each other, a Global Constraint, or the plan's Architecture notes, or that mandate something the review rubric below would flag as a defect. Batch every finding into **one** blocking question (`references/question-tools.md` at the plugin root); a clean scan proceeds without comment.
 5. **Ledger resume check**: read `.release-loop/progress.md`. Units it lists complete are done — do not re-dispatch them (`enforces: P8`); trust the ledger and `git log` over recollection. Resume at the first incomplete unit.
 6. **Worktree setup**: invoke `worktree-isolation` to obtain or confirm an isolated workspace before any unit touches files.

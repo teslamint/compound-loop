@@ -37,12 +37,110 @@ superseded_by: <path to successor plan>  # required when status: superseded
 
 ## Body seal
 
-The `body_seal` field stores the SHA-256 hex digest of the plan's markdown body. The canonical extraction is `text.split('---', 2)[2]` — everything after the second `---` delimiter characters, including the newline that terminates the delimiter line. All consumers use this expression; prose descriptions in other skills reference this section rather than restating the rule.
+`body_seal` stores the lowercase SHA-256 hex digest of the plan's markdown body. Every implementation reads the file as UTF-8 text with universal-newline translation, exactly `open(path, encoding="utf-8", newline=None).read()`. It then extracts the body with the literal expression `text.split('---', 2)[2]`: the first two delimiter occurrences are consumed, no delimiter-line reinterpretation or stripping occurs, and the newline after the second delimiter remains part of the body. The extracted text is encoded as UTF-8 and hashed with SHA-256.
 
-- **Set at**: the approval commit (planning step 17), in the same commit as the `status: approved` flip.
-- **Re-sealable**: only by interactive deepening (`skills/planning/references/deepening.md` §6). No other editing path may update `body_seal` after the initial approval.
-- **Absence**: valid. Plans without `body_seal` are not sealed; `validate.sh` check 14 skips them. Plans predating this contract are never backfilled.
-- **Verification**: `validate.sh` check 14 recomputes the hash and compares. Mismatch → FAIL. The seal proves body-matches-last-seal, not unchanged-since-approval; an agent that re-seals after editing defeats the mechanical check — the cross-cutting skill rules (implementing preflight, reviewing) defend against unauthorized re-sealing.
+For a worked example, the sealed plan `docs/plans/2026-08-14-001-fix-schema-reference-and-seal-verification-plan.md` has this complete stored digest:
+
+```text
+3264db823d75aba9a12ecf84c197059a2460b9c69d154c44ec4a6280f2779681
+```
+
+The following independent reproduction prints the digest for any plan without importing the shipped validator:
+
+```bash
+python3 - docs/plans/2026-08-14-001-fix-schema-reference-and-seal-verification-plan.md <<'PY'
+import hashlib
+import sys
+
+with open(sys.argv[1], encoding="utf-8", newline=None) as handle:
+    text = handle.read()
+body = text.split('---', 2)[2]
+print(hashlib.sha256(body.encode("utf-8")).hexdigest())
+PY
+```
+
+Use the shipped validator to print a seal, then verify one plan normally:
+
+```bash
+python3 skills/planning/scripts/validate-plan-frontmatter.py --print-seal <plan-path>
+python3 skills/planning/scripts/validate-plan-frontmatter.py <plan-path>
+bash scripts/validate.sh
+```
+
+- **Creation**: first commit the complete plan as `status: draft` without `body_seal`. After the user gives explicit approval, compute the seal from the unchanged body and make a second commit that changes only `status: approved` and adds `body_seal`. The approval commit must not alter any body line or other frontmatter field.
+
+The two commits are explicit:
+
+```bash
+git add <plan-path>
+git commit -m "docs(plan): create draft"
+# After first-hand user approval, update only status and body_seal.
+git add <plan-path>
+git commit -m "docs(plan): approve plan"
+```
+- **Re-sealing**: interactive deepening is the ordinary and only post-approval reseal path. Adoption migration is the one-time release exception described below, not a generic bypass.
+- **Absence**: valid. Plans without `body_seal` are not sealed; check 14 skips them. Plans predating this contract are never backfilled.
+- **Limits**: a seal is tamper evidence, not tamper prevention. Authorization is audited through commit history and review; a user who can edit and re-seal can make the digest match a changed body, so the seal cannot establish who authorized that edit.
+
+### Adoption-only migration
+
+During adoption of this release, one reseal may replace an existing seal only when the first-hand user approval, exact pre-upgrade baseline commit, repo-relative plan path, old seal, new seal, canonical reproduction command, and baseline/current canonical-body equality are all present. The migration commit changes only `body_seal`; its message records `(baseline commit, plan path, old seal, new seal)`, the reproduction command, and the approval. A changed body or missing baseline rejects with the named `changed-body` or `missing-baseline` diagnostic. Missing evidence rejects while naming the missing field: approval, baseline commit, plan path, old seal, new seal, or reproduction command. Any later ordinary reseal is rejected unless interactive deepening authorizes it. After an interruption, fresh first-hand approval is mandatory.
+
+The migration check below is the executable oracle used by the adoption branch. It accepts `<baseline-commit> <plan-path>`, reads `git show <baseline>:<path>` and the current plan with UTF-8 and universal-newline semantics, extracts both canonical bodies literally, exits 0 only when they are equal, and exits 1 with a named diagnostic otherwise.
+
+<!-- body-seal-migration-check:begin -->
+```python
+import io
+import subprocess
+import sys
+
+
+def universal_text(data: bytes) -> str:
+    return io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", newline=None).read()
+
+
+def canonical_body(text: str) -> str:
+    return text.split('---', 2)[2]
+
+
+if len(sys.argv) != 3:
+    print("usage: migration-check.py <baseline-commit> <plan-path>", file=sys.stderr)
+    raise SystemExit(2)
+
+baseline, plan_path = sys.argv[1:]
+baseline_result = subprocess.run(
+    ["git", "show", f"{baseline}:{plan_path}"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    check=False,
+)
+if baseline_result.returncode != 0:
+    print(f"missing-baseline: {baseline}:{plan_path}", file=sys.stderr)
+    raise SystemExit(1)
+
+with open(plan_path, encoding="utf-8", newline=None) as handle:
+    current_text = handle.read()
+baseline_text = universal_text(baseline_result.stdout)
+if canonical_body(current_text) != canonical_body(baseline_text):
+    print(f"changed-body: {plan_path}", file=sys.stderr)
+    raise SystemExit(1)
+
+print("unchanged-body")
+```
+<!-- body-seal-migration-check:end -->
+
+### Fail-closed adoption outcomes
+
+The adoption transition is fail-closed at every interruption boundary:
+
+- `success`: with a clean baseline/current-equivalent state and approval, replace only the seal and commit once. HEAD advances once, the committed diff is one seal line, the message contains the exact evidence, and the tree is clean.
+- `forced-failure`: if the operation fails after writing the seal but before commit, HEAD stays unchanged and exactly one target plan is dirty with a one-line seal diff; no migration commit exists.
+- `rerun`: invoking again in that forced-failure state fails closed without another write or commit. Compensate first, obtain fresh approval, then make exactly one success commit with no duplicate transition.
+- `compensation`: restore only the target plan from HEAD; its bytes and the worktree return to the pre-transition state, HEAD stays unchanged, and no migration commit exists.
+- `headless`: without first-hand approval, exit nonzero before writing; HEAD and the worktree remain unchanged, with a diagnostic naming missing approval.
+- `cancellation`: a pre-write cancellation leaves a clean state. A post-write cancellation first proves the forced-failure state, then operator-owned target-only compensation returns the tree clean; no commit is created.
+
+- **Verification**: check 14 recomputes the same canonical body and compares it with the stored value. A mismatch is a failure; an extraction failure is also a failure with the shipped `body_seal` extraction diagnostic.
 
 ## Document body — hard floor
 

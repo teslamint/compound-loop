@@ -683,24 +683,30 @@ checked = 0
 skipped = 0
 
 for plan in plans:
-    text = plan.read_text(encoding="utf-8")
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        skipped += 1
-        continue
-    frontmatter = parts[1]
-    body = parts[2]
+    rel = plan.relative_to(root)
+    with open(plan, encoding="utf-8", newline=None) as handle:
+        text = handle.read()
 
+    parts = text.split("---", 2)
+    frontmatter = parts[1] if len(parts) > 1 else ""
     key_match = re.search(r"^body_seal:[ \t]*(.*)$", frontmatter, re.M)
     if not key_match:
         skipped += 1
         continue
 
     raw_value = key_match.group(1).strip()
-    rel = plan.relative_to(root)
     if not re.fullmatch(r"[0-9a-f]{64}", raw_value):
         failures.append(
             f"FAIL: {TAG} {rel}: body_seal present but malformed: '{raw_value}'"
+        )
+        continue
+
+    try:
+        body = text.split('---', 2)[2]
+    except IndexError:
+        failures.append(
+            f"FAIL: {TAG} {rel}: 'body_seal' extraction failed: "
+            "canonical body requires two '---' delimiters"
         )
         continue
 
