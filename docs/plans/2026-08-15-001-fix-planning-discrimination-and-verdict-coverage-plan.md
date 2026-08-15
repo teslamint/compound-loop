@@ -2,10 +2,11 @@
 schema: plan/v1
 title: Planning Discrimination and Verdict Coverage
 type: fix
-status: draft
+status: approved
 date: 2026-08-15
 execution: non-code
 origin: docs/specs/2026-08-15-planning-discrimination-and-verdict-coverage-design.md
+body_seal: 5091cc907df5a2b80afd8fec35797c32c9235fc8270da2c738e82010ef6153d7
 ---
 
 # Planning Discrimination and Verdict Coverage — Implementation Plan
