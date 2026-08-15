@@ -5,7 +5,7 @@ description: Turn an approved spec into an implementation plan an engineer or ag
 
 # Planning
 
-Turns an approved spec into the plan that `implementing` and `reviewing` consume — a decision artifact, never an execution script. `schemas/plan-schema.md` is the frontmatter and unit contract; this skill produces documents that satisfy it and never restates its content.
+Turns an approved spec into the plan that `implementing` and `reviewing` consume — a decision artifact, never an execution script. `schemas/plan-schema.md` (resolved from this skill's root) is the frontmatter and unit contract; this skill produces documents that satisfy it and never restates its content.
 
 ## Entry / Exit / Gate
 

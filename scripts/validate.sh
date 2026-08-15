@@ -26,7 +26,7 @@ for s in schemas/lane-findings.schema.json schemas/review-envelope.schema.json; 
     fail "$s missing or invalid JSON"
   fi
 done
-for s in schemas/plan-schema.md schemas/retro-template.md schemas/headless-contract.md; do
+for s in skills/planning/schemas/plan-schema.md schemas/retro-template.md schemas/headless-contract.md; do
   [ -s "$ROOT/$s" ] && ok "$s present" || fail "$s missing or empty"
 done
 
@@ -138,7 +138,7 @@ if contract_text is not None:
         canonical = {}
 
 seen = set()
-candidate_re = re.compile(r"`([^`]+)`")
+candidate_re = re.compile(r"`([^`\n]+)`")
 state_re = re.compile(r"^(Documentation|Refresh|Retrospective|Release|Publication)\s+(complete|skipped|failed)\b", re.I)
 state_key = {"complete": "success", "skipped": "skipped", "failed": "failed"}
 producer_key = {"documentation": "compound", "refresh": "compound-refresh", "retrospective": "retrospective", "release": "release", "publication": "release publish"}
@@ -585,7 +585,7 @@ def check_contiguity(numbers, label):
 
 skill_path = root / "skills" / "planning" / "SKILL.md"
 deepening_path = root / "skills" / "planning" / "references" / "deepening.md"
-schema_path = root / "schemas" / "plan-schema.md"
+schema_path = root / "skills" / "planning" / "schemas" / "plan-schema.md"
 
 for p in (skill_path, deepening_path, schema_path):
     if not p.exists():
@@ -624,14 +624,14 @@ if hf_match:
         schema_items.add(str(n))
         schema_int_items.append(n)
     schema_int_items.sort()
-    check_contiguity(schema_int_items, "schemas/plan-schema.md hard-floor items")
+    check_contiguity(schema_int_items, "skills/planning/schemas/plan-schema.md hard-floor items")
 else:
-    fail("schemas/plan-schema.md: '## Document body — hard floor' section not found")
+    fail("skills/planning/schemas/plan-schema.md: '## Document body — hard floor' section not found")
 
 all_files = {
     "skills/planning/SKILL.md": skill_text,
     "skills/planning/references/deepening.md": deepening_text,
-    "schemas/plan-schema.md": schema_text,
+    "skills/planning/schemas/plan-schema.md": schema_text,
 }
 for ref_dir in (root / "skills" / "planning" / "references").iterdir():
     if ref_dir.suffix == ".md" and ref_dir.name != "deepening.md":
@@ -649,7 +649,7 @@ for m in re.finditer(r"\bitem (\d+)", schema_text, re.I):
     ref = m.group(1)
     if ref not in schema_items:
         line = schema_text[:m.start()].count("\n") + 1
-        fail(f"schemas/plan-schema.md:{line}: 'item {ref}' references nonexistent hard-floor item")
+        fail(f"skills/planning/schemas/plan-schema.md:{line}: 'item {ref}' references nonexistent hard-floor item")
 
 if failures:
     print("\n".join(failures))

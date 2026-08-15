@@ -108,23 +108,31 @@ PY
   return $result
 }
 
-# --- Case D: one-byte drift in skills/retrospective/SKILL.md:94 (cross-quoted compound line) ---
+# --- Case D: one-byte drift in retrospective's cross-quoted compound line ---
 case_d() {
-  local dir out code result=0
+  local dir out code result=0 mutation_line
   dir="$(setup_copy)" || return 1
-  python3 - "$dir/skills/retrospective/SKILL.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
+  if ! mutation_line="$(python3 - "$dir/skills/retrospective/SKILL.md" <<'PY'
 import sys
 path = sys.argv[1]
 lines = open(path, encoding="utf-8").read().split("\n")
-i = 93  # 0-indexed line 94 - the cross-quoted `compound` triplet in Phase 7
-assert "`Documentation complete — <path>`" in lines[i], "fixture assumption broken: expected span not found on line 94"
-lines[i] = lines[i].replace("Documentation complete — <path>", "Documentation complete — <pat>", 1)
+needle = "`Documentation complete — <path>`"
+matches = [index for index, line in enumerate(lines) if needle in line]
+assert len(matches) == 1, f"fixture assumption broken: expected one cross-quoted span, found {len(matches)}"
+index = matches[0]
+lines[index] = lines[index].replace("Documentation complete — <path>", "Documentation complete — <pat>", 1)
 open(path, "w", encoding="utf-8").write("\n".join(lines))
+print(index + 1)
 PY
+)"; then
+    echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"
+    rm -rf "$dir"
+    return 1
+  fi
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
   assert_contains "$out" "[signal-drift]" "reported by the new check specifically" || result=1
-  assert_contains "$out" "skills/retrospective/SKILL.md:94" "file:line" || result=1
+  assert_contains "$out" "skills/retrospective/SKILL.md:$mutation_line" "file:line" || result=1
   assert_contains "$out" "producer 'compound'" "correct producer guessed from candidate's own word, not the file it lives in" || result=1
   rm -rf "$dir"
   return $result

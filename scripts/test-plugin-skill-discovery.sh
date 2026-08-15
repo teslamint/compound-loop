@@ -38,6 +38,15 @@ if [ ! -d "$skills_dir" ]; then
 fi
 
 echo "ok: skills directory resolves to $skills_dir"
+# The planning skill is shipped as a standalone artifact and must carry its
+# own full schema rather than depending on the repository-root schemas/ copy.
+planning_schema="$skills_dir/planning/schemas/plan-schema.md"
+if [ -s "$planning_schema" ]; then
+  echo "ok: planning artifact includes skills/planning/schemas/plan-schema.md"
+else
+  echo "FAIL: planning artifact missing required skills/planning/schemas/plan-schema.md"
+  fail=$((fail + 1))
+fi
 
 # Check every SKILL.md
 for skill_file in "$skills_dir"/*/SKILL.md; do
