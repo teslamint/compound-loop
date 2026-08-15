@@ -443,6 +443,13 @@ baseline body
     *) expected_baseline_length=0 ;;
   esac
   baseline_length="${#baseline}"
+  object_id_length="$expected_baseline_length"
+  if [ "$object_id_length" -le 0 ]; then
+    object_id_length="$baseline_length"
+  fi
+  printf -v missing_baseline '%*s' "$object_id_length" ''
+  missing_baseline="${missing_baseline// /d}"
+  short_baseline="${baseline:0:$((object_id_length - 1))}"
   if [[ "$baseline" =~ ^[0-9a-f]+$ ]]; then
     baseline_value_class="lowercase-full-hex"
   else
@@ -465,7 +472,7 @@ baseline body
   assert_rc "migration oracle changed body exit" 1 "$changed_rc"
   assert_contains "migration oracle changed-body diagnostic" "$changed_out" "changed-body"
   set +e
-  missing_out="$(cd "$migration_root" && python3 migration-check.py deadbeefdeadbeefdeadbeefdeadbeefdeadbeef docs/plans/migration.md 2>&1)"; missing_rc=$?
+  missing_out="$(cd "$migration_root" && python3 migration-check.py "$missing_baseline" docs/plans/migration.md 2>&1)"; missing_rc=$?
   set -e
   assert_rc "migration oracle missing baseline exit" 1 "$missing_rc"
   assert_contains "migration oracle missing-baseline diagnostic" "$missing_out" "missing-baseline"
@@ -492,7 +499,6 @@ baseline body
   set -e
   assert_rc "migration oracle symlink plan path exit" 1 "$symlink_rc"
   assert_contains "migration oracle symlink plan path diagnostic" "$symlink_out" "symlink-plan-path"
-  short_baseline="${baseline:0:39}"
   set +e
   short_out="$(cd "$migration_root" && python3 migration-check.py "$short_baseline" docs/plans/migration.md 2>&1)"; short_rc=$?
   set -e
@@ -654,7 +660,7 @@ def write_seal(repo: Path, new: str) -> None:
     text = re.sub(r"(?m)^body_seal:.*$", "body_seal: " + new, text, count=1)
     path.write_text(text, encoding="utf-8")
 
-def transition(repo: Path, baseline: str, old: str, new: str, command: str, approval: str | None, injection: str | None) -> tuple[int, str]:
+def transition(repo: Path, baseline: str, old: str, new: str, command: str, approval: str | None, injection: str | None, commit_approval: str | None = None) -> tuple[int, str]:
     if not approval:
         return 1, "missing-approval"
     if git(repo, "status", "--porcelain"):
@@ -674,8 +680,9 @@ def transition(repo: Path, baseline: str, old: str, new: str, command: str, appr
     write_seal(repo, new)
     if injection in {"forced-failure", "post-write-cancel"}:
         return 1, injection
+    committed_approval = approval if commit_approval is None else commit_approval
     message = (f"adoption reseal\n\nbaseline={baseline}\nplan={TARGET}\nold-seal={old}\n"
-               f"new-seal={new}\nreproduction-command={command}\napproval={approval}\n")
+               f"new-seal={new}\nreproduction-command={command}\napproval={committed_approval}\n")
     git(repo, "add", TARGET)
     git(repo, "commit", "-qm", message)
     return 0, "committed"
@@ -787,14 +794,16 @@ for outcome in OUTCOMES:
         rc, output = transition(repo, baseline, old, new, command, "first-hand-explicit", "forced-failure")
         forced = state(repo, pre_bytes)
         rerun_rc, rerun_output = transition(repo, baseline, old, new, command, "first-hand-explicit", None)
-        next_result = f"rerun rc={rerun_rc} output={rerun_output}"
+        rerun_attempt = f"rerun rc={rerun_rc} output={rerun_output}"
         git(repo, "restore", "--source", "HEAD", "--", TARGET)
-        rc, output = transition(repo, baseline, old, new, command, "fresh-approval-after-interruption", None)
+        fresh_approval = "fresh-approval-after-interruption"
+        rc, output = transition(repo, baseline, old, new, command, fresh_approval, None, "first-hand-explicit")
+        next_result = f"{rerun_attempt}; fresh approval evidence={fresh_approval}; compensation rc={rc} output={output}"
         post = state(repo, pre_bytes)
+        ok, mechanism = assert_success(repo, baseline, pre_bytes, old, new, command) if rc == 0 else (False, output)
         ok = (forced["dirty_target_only"] and rerun_rc != 0 and rerun_output == "rerun-fail-closed"
-              and rc == 0 and post["status"] == ""
+              and rc == 0 and ok and post["status"] == ""
               and git(repo, "rev-list", "--count", f"{baseline}..HEAD") == "1")
-        mechanism = "rerun-fail-closed-then-compensated-fresh-approval" if ok else "rerun-boundary-missed"
         if not ok:
             print(f"RED adoption-reseal-{outcome}/{mechanism}", file=sys.stderr)
             failures += 1

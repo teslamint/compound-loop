@@ -478,6 +478,11 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
             ("prefixed-message-field", "prefixed-message-field", ""),
             ("duplicate-message-field", "duplicate-message-field", ""),
             ("conflicting-message-field", "conflicting-message-field", ""),
+            ("wrong-reproduction-command", "wrong-reproduction-command", ""),
+            ("wrong-approval", "wrong-approval", ""),
+            ("wrong-plan", "wrong-plan", ""),
+            ("wrong-old-seal", "wrong-old-seal", ""),
+            ("wrong-new-seal", "wrong-new-seal", ""),
         ]
         for name, mutation, _ in cases:
             repo = fresh(name)
@@ -515,6 +520,20 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
                 elif mutation == "conflicting-message-field":
                     message = message.replace(f"baseline={source_baseline}\n", f"baseline={'0' * 40}\n", 1)
                     message += f"baseline={source_baseline}\n"
+                elif mutation == "wrong-reproduction-command":
+                    message = message.replace(
+                        f"reproduction-command={evidence['reproduction_command']}\n",
+                        f"reproduction-command=python3 migration-check.py {source_baseline} {source_plan} --mutated\n",
+                        1,
+                    )
+                elif mutation == "wrong-approval":
+                    message = message.replace("approval=first-hand-explicit\n", "approval=fresh-approval-after-interruption\n", 1)
+                elif mutation == "wrong-plan":
+                    message = message.replace(f"plan={source_plan}\n", "plan=docs/plans/other.md\n", 1)
+                elif mutation == "wrong-old-seal":
+                    message = message.replace(f"old-seal={evidence['old_seal']}\n", f"old-seal={'1' * 64}\n", 1)
+                elif mutation == "wrong-new-seal":
+                    message = message.replace(f"new-seal={evidence['new_seal']}\n", f"new-seal={'2' * 64}\n", 1)
                 run_git(repo, "add", source_plan)
                 if mutation == "extra-path":
                     run_git(repo, "add", "extra.txt")
@@ -529,6 +548,11 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
                 "prefixed-message-field": "message-evidence",
                 "duplicate-message-field": "message-evidence",
                 "conflicting-message-field": "message-evidence",
+                "wrong-reproduction-command": "message-evidence",
+                "wrong-approval": "message-evidence",
+                "wrong-plan": "message-evidence",
+                "wrong-old-seal": "message-evidence",
+                "wrong-new-seal": "message-evidence",
             }[mutation]
             if valid:
                 emit("FAIL", f"transition-mutation-{name}", "invalid transition accepted")
