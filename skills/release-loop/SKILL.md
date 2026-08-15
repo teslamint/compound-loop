@@ -13,7 +13,40 @@ Orchestrates the full lifecycle. Holds **no phase logic** — every phase is an 
 |------|--------|
 | `--auto` | Minimize human gates. The Design gate remains — spec approval is always human (`enforces: P7`) |
 | `--skip-design` | Start from Plan. Requires `--spec <path>` whose frontmatter records `status: approved` — the persisted approval evidence. A spec without that record rejects the flag and the loop enters Design normally |
-| `--skip-plan` | Start from Implement. Requires `--plan <path>` conforming to `schemas/plan-schema.md` |
+| `--skip-plan` | Start from Implement. Requires the standalone minimum plan contract below; the full planning skill is optional |
+
+## Standalone `--skip-plan` contract
+
+This gate executes only the minimum plan rules listed here; it does not require a planning-skill sibling to exist.
+
+### Shared plan literals
+
+- Required frontmatter field: `schema`.
+- Required frontmatter field: `title`.
+- Required frontmatter field: `type`.
+- Required frontmatter field: `status`.
+- Required frontmatter field: `date`.
+- Required frontmatter field: `execution`.
+- Schema version literal: `plan/v1`.
+- Status literals: `draft | approved | done | superseded`.
+- Execution literals: `code | non-code | ops`.
+- Seal format literal: `64-char lowercase hex SHA-256`.
+- Seal extraction literal: `text.split('---', 2)[2]`.
+
+### Eligibility and validator selection
+
+`--skip-plan` rejects a missing required `schema` field by naming `schema`.
+`--skip-plan` rejects a missing required `title` field by naming `title`.
+`--skip-plan` rejects a missing required `type` field by naming `type`.
+`--skip-plan` rejects a missing required `status` field by naming `status`.
+`--skip-plan` rejects a missing required `date` field by naming `date`.
+`--skip-plan` rejects a missing required `execution` field by naming `execution`.
+`--skip-plan` proceeds only for `schema: plan/v1` with `status: approved`.
+`--skip-plan` rejects an unknown schema version.
+`--skip-plan` rejects every non-approved status.
+When the sibling planning validator is available, `--skip-plan` runs it and requires exit 0.
+When the sibling planning validator is absent, `--skip-plan` uses the local minimum-field fallback and still rejects unknown schema versions.
+The fallback does not guess unknown fields or defer eligibility to an unavailable sibling; implementing performs its own full pre-flight after this gate.
 
 ## Phases
 

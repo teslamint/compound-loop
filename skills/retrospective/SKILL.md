@@ -31,7 +31,25 @@ Gather what's available; degrade gracefully rather than blocking on a missing so
 
 - **Git/PR metrics** (PR-merge mode): **Changed non-test lines**, commit count, review rounds, comments fixed/deferred, CI failures, duration from first spec commit to merge, units planned vs. completed. Shape per `schemas/retro-template.md`'s Release data table.
 - **Session-history search** (session-end mode, no PR): a pluggable capability, not a hard dependency — if a session-search tool is available, use it with a tight payload (topic, time window, one filter rule); if unavailable, skip and note the gap in the doc rather than blocking.
-- **Origin artifact**: read the plan's `origin:` frontmatter field (`schemas/plan-schema.md`) to locate the spec. If no plan exists, check for a spec path directly. Read that spec's `## Success Criteria` section verbatim (`skills/designing/references/spec-template.md` shape: statement + `Measured by`).
+- **Origin artifact**: `origin` is resolved as a repo-relative spec path, while the existing no-plan fallback applies when no plan exists. Read that spec's `## Success Criteria` section verbatim (`skills/designing/references/spec-template.md` shape: statement + `Measured by`).
+
+## Standalone plan contract
+
+Retrospective consumes only the plan frontmatter and the terminal transition rules below; it does not require the full planning skill or its schema file.
+
+### Shared plan literals
+
+- Required frontmatter field: `schema`.
+- Required frontmatter field: `title`.
+- Required frontmatter field: `type`.
+- Required frontmatter field: `status`.
+- Required frontmatter field: `date`.
+- Required frontmatter field: `execution`.
+- Schema version literal: `plan/v1`.
+- Status literals: `draft | approved | done | superseded`.
+- Execution literals: `code | non-code | ops`.
+- Seal format literal: `64-char lowercase hex SHA-256`.
+- Seal extraction literal: `text.split('---', 2)[2]`.
 
 ## Phase 3: Measured vs. Declared (core)
 
@@ -117,7 +135,17 @@ When invoked, pass the qualifying finding as context and expect `compound`'s exa
 
 Commit the retro doc (and any durable-tracker updates from Phase 4) as its own commit, separate from other work in flight.
 
-The plans a retro covers are: the plan path in `.release-loop/progress.md`'s `plan:` field when that ledger exists for the cycle, plus any plan path this retro's Phase 2 data or doc body cites; when neither names a plan (session-end mode), no flip. For every covered plan **first committed after the terminal-state contract landed** (`schemas/plan-schema.md` applicability boundary — pre-contract plans are never flipped), set `status: done` and `completed_by:` naming the commit on the base branch that landed that plan's work, in the plan's frontmatter, in the same commit as the retro doc; a retro covering multiple plans flips every qualifying one, each with its own `completed_by:`; never edit anything in the plan below the frontmatter (mutable-slot boundary, `schemas/plan-schema.md`).
+### Plan terminal transition contract
+
+Only a post-contract plan with `status: approved` may transition to `status: done`.
+The terminal transition mutates only frontmatter `status` and `completed_by`.
+`completed_by` must name the landed base-branch commit; a missing landed commit rejects.
+A pre-contract plan is never retroactively flipped, even when a retro covers it.
+A non-approved plan does not flip to `done`.
+When a retro covers multiple plans, apply the same applicability and approved-status rule to every plan.
+Retrospective never changes the plan body.
+Retrospective rejects any frontmatter mutation other than `status` and `completed_by`.
+Applicability is keyed to the plan's first commit after the terminal-state contract landed, not to its approval date; no terminal state is backfilled onto earlier plans.
 
 Report what was measured, what carried forward, and what — if anything — was compounded.
 

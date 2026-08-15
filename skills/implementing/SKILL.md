@@ -5,20 +5,59 @@ description: Execute an approved plan to completion with review checkpoints, sur
 
 # Implementing
 
-**Entry:** an approved plan file (`schemas/plan-schema.md` contract) or a bare prompt already triaged Trivial/Small-Medium by the caller.
+**Entry:** an approved plan file with the standalone `plan/v1` contract, or a bare prompt already triaged Trivial/Small-Medium by the caller.
 **Exit:** every Implementation Unit complete, tests passing, final branch review clean (or only Minor findings remain).
 **Gate:** AUTO — advances to `reviewing` once every unit passes its review.
 
-Plan consumption follows `schemas/plan-schema.md` exactly; this skill does not restate the unit template.
+## Standalone plan contract
+
+This consumer executes only the plan rules listed here; it does not require the full planning skill or its schema file.
+
+### Shared plan literals
+
+- Required frontmatter field: `schema`.
+- Required frontmatter field: `title`.
+- Required frontmatter field: `type`.
+- Required frontmatter field: `status`.
+- Required frontmatter field: `date`.
+- Required frontmatter field: `execution`.
+- Schema version literal: `plan/v1`.
+- Status literals: `draft | approved | done | superseded`.
+- Execution literals: `code | non-code | ops`.
+- Seal format literal: `64-char lowercase hex SHA-256`.
+- Seal extraction literal: `text.split('---', 2)[2]`.
+
+### Eligibility and unit dispatch
+
+The only accepted plan schema is `plan/v1`; a missing or unknown `schema` rejects before execution.
+A plan with `status: approved` proceeds to contradiction scanning and unit dispatch.
+A plan with `status: draft` rejects with a pending-approval diagnostic.
+A plan with `status: done` rejects and names its recorded `completed_by` commit.
+A `done` plan missing `completed_by` rejects as a terminal-state validator violation; never invent a commit.
+A plan with `status: superseded` rejects and names its `superseded_by` successor path.
+A missing or unknown `status` rejects before any unit is executed.
+
+Each dispatched unit consumes its full handoff: exact values and signatures, `Files`, `Interfaces`, `Test scenarios`, and `Execution note`.
+`execution: code` selects the existing code-unit flow.
+`execution: non-code` selects the existing non-code-unit flow.
+
+### Approval seal and history
+
+A correctly formatted and matching `body_seal` proceeds after stored-versus-computed comparison.
+A malformed or mismatched `body_seal` rejects and reports both stored and computed values.
+Compute the comparison from UTF-8 text read with universal-newline translation, then the exact `text.split('---', 2)[2]` extraction, UTF-8 encoding, and lowercase SHA-256 rendering.
+An approved plan that was never sealed remains valid when its approval history contains no `body_seal`.
+An approved plan whose approval history contained a seal but whose current frontmatter removed it rejects as a removed-seal violation.
+Every post-approval re-seal requires interactive deepening; U4 adoption migration is not an exception in this consumer.
 
 ## Pre-flight
 
 1. Read the plan once. It is a **decision artifact, not an execution script** (`enforces: P8`) — never edit its body during execution; progress lives in commits and the ledger, not plan edits.
-2. **Status check** (when invoked with a plan file): read the plan's `status` field. If `done` → stop with a detectable error naming the recorded `completed_by:` commit ("this plan already executed; its work landed in `<completed_by>`"); when a `done` plan carries no `completed_by:` (a record predating or escaping the validator), report that as a validator violation rather than inventing a commit. If `superseded` → refuse, naming the `superseded_by:` successor path as where to go instead. Neither terminal state ever degrades to executing the plan.
-- **Body-seal check** (runs between status check and contradiction scan): if the plan has a `body_seal` key, verify the current body matches it per the canonical extraction in `schemas/plan-schema.md` "Body seal". If the key is present but the seal is missing or malformed, treat it as a violation. Mismatch or absent value on a sealed plan → stop with a named violation: report the plan path, expected vs actual hash, and direct to either a deviation addendum under `docs/deviations/` or a byte-exact revert. An approved plan whose seal was removed is itself a violation. Only interactive deepening may re-seal an approved plan.
-3. **Contradiction scan**: before Unit 1, scan the whole plan once for units that contradict each other, a Global Constraint, or the plan's Architecture notes, or that mandate something the review rubric below would flag as a defect. Batch every finding into **one** blocking question (`references/question-tools.md` at the plugin root); a clean scan proceeds without comment.
-4. **Ledger resume check**: read `.release-loop/progress.md`. Units it lists complete are done — do not re-dispatch them (`enforces: P8`); trust the ledger and `git log` over recollection. Resume at the first incomplete unit.
-5. **Worktree setup**: invoke `worktree-isolation` to obtain or confirm an isolated workspace before any unit touches files.
+2. **Status check** (when invoked with a plan file): apply the standalone eligibility and terminal-state rules above. For `done`, name the recorded `completed_by` commit; if it is missing, report a validator violation rather than inventing a commit. For `superseded`, name the `superseded_by` successor path. Neither terminal state ever degrades to executing the plan.
+3. **Body-seal check** (runs between status check and contradiction scan): apply the approval-history rules above. A present seal must be lowercase hexadecimal and must match the stored-versus-computed values. A removed seal is a violation; a never-sealed plan remains valid. Only interactive deepening may re-seal an approved plan in this consumer.
+4. **Contradiction scan**: before Unit 1, scan the whole plan once for units that contradict each other, a Global Constraint, or the plan's Architecture notes, or that mandate something the review rubric below would flag as a defect. Batch every finding into **one** blocking question (`references/question-tools.md` at the plugin root); a clean scan proceeds without comment.
+5. **Ledger resume check**: read `.release-loop/progress.md`. Units it lists complete are done — do not re-dispatch them (`enforces: P8`); trust the ledger and `git log` over recollection. Resume at the first incomplete unit.
+6. **Worktree setup**: invoke `worktree-isolation` to obtain or confirm an isolated workspace before any unit touches files.
 
 ## Execution strategy
 
