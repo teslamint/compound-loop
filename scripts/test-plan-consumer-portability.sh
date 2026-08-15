@@ -116,7 +116,7 @@ def policy_violation(policy: dict | None) -> str | None:
     commit = policy.get("migration_commit")
     if not isinstance(commit, dict):
         return "migration-commit"
-    if commit.get("path") != "docs/plans/adoption.md":
+    if commit.get("path") != "repo-relative-evidence":
         return "migration-commit-path"
     if commit.get("diff") != "seal-only":
         return "migration-commit-diff"
@@ -128,7 +128,7 @@ def policy_violation(policy: dict | None) -> str | None:
         return "migration-commit-command"
     if commit.get("approval") != "first-hand-explicit":
         return "migration-commit-approval"
-    if policy.get("later_reseal") != "reject":
+    if policy.get("later_reseal") != "reject-unless-interactive-deepening":
         return "later-reseal"
     retry = policy.get("interrupted_retry")
     if not isinstance(retry, dict) or retry.get("compensation") != "target-only":
@@ -175,12 +175,14 @@ def write_plan(directory: Path, name: str, fields: dict[str, str], body: str, hi
 
 def body_seal(text: str) -> str:
     return hashlib.sha256(text.split("---", 2)[2].encode("utf-8")).hexdigest()
-
+def independent_body_seal(text: str) -> str:
+    canonical = text.split("---", 2)[2]
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 def make_sealed_plan(directory: Path, name: str, fields: dict[str, str], body: str, history: dict | None = None) -> Path:
     path = write_plan(directory, name, fields, body, history)
     fields = dict(fields)
-    fields["body_seal"] = body_seal(path.read_text(encoding="utf-8"))
+    fields["body_seal"] = independent_body_seal(path.read_text(encoding="utf-8"))
     return write_plan(directory, name, fields, body, history)
 
 
@@ -301,6 +303,7 @@ def adoption_cases(directory: Path, consumer: str) -> list[tuple[str, Path]]:
             path.write_text(current_text + "\nchanged body byte\n", encoding="utf-8")
         if name == "adoption-missing-baseline":
             evidence["baseline"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+            evidence["reproduction_command"] = f"python3 migration-check.py {evidence['baseline']} docs/plans/adoption.md"
         for field, suffix in (
             ("approval", "approval"),
             ("plan_path", "plan-path"),
@@ -326,32 +329,53 @@ def adoption_cases(directory: Path, consumer: str) -> list[tuple[str, Path]]:
                 path.write_text(adopted.replace(evidence["new_seal"], "f" * 64, 1), encoding="utf-8")
         cases.append((name, path))
     return cases
-
-def prior_transition(repo: Path, baseline: str, plan_path: str, evidence: dict, policy: dict) -> bool:
+def verify_transition(repo: Path, baseline: str, plan_path: str, evidence: dict, policy: dict, commit: str) -> tuple[bool, str]:
+    try:
+        parent = run_git(repo, "rev-parse", f"{commit}^")
+    except subprocess.CalledProcessError:
+        return False, "parent-missing"
+    if parent != baseline:
+        return False, "parent-mismatch"
+    if commit_paths(repo, commit) != {plan_path}:
+        return False, "changed-paths"
+    parent_text = run_git_text(repo, "show", f"{parent}:{plan_path}")
+    current_text = run_git_text(repo, "show", f"{commit}:{plan_path}")
+    old_line = f"body_seal: {evidence.get('old_seal', '')}\n"
+    new_line = f"body_seal: {evidence.get('new_seal', '')}\n"
+    if parent_text.count(old_line) != 1 or current_text.count(new_line) != 1:
+        return False, "seal-line"
+    if re.sub(r"(?m)^body_seal: [0-9a-f]{64}\n", "", parent_text, count=1) != re.sub(r"(?m)^body_seal: [0-9a-f]{64}\n", "", current_text, count=1):
+        return False, "non-seal-bytes"
     commit_policy = policy["migration_commit"]
-    message_tokens = {
-        "baseline": f"baseline={baseline}",
-        "plan": f"plan={plan_path}",
-        "old-seal": f"old-seal={evidence.get('old_seal', '')}",
-        "new-seal": f"new-seal={evidence.get('new_seal', '')}",
-        "reproduction-command": f"reproduction-command={evidence.get('reproduction_command', '')}",
-        "approval": f"approval={commit_policy['approval']}",
+    expected = {
+        "baseline": baseline,
+        "plan": plan_path,
+        "old-seal": evidence.get("old_seal", ""),
+        "new-seal": evidence.get("new_seal", ""),
+        "reproduction-command": evidence.get("reproduction_command", ""),
+        "approval": commit_policy["approval"],
     }
-    required = tuple(message_tokens[field] for field in commit_policy["message_fields"])
+    parsed: dict[str, str] = {}
+    for line in run_git_text(repo, "show", "-s", "--format=%B", commit).splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key not in expected or key in parsed:
+            return False, "message-evidence"
+        parsed[key] = value
+    if parsed != expected:
+        return False, "message-evidence"
+    return True, "transition-valid"
+
+def prior_transition(repo: Path, baseline: str, plan_path: str, evidence: dict, policy: dict) -> tuple[bool, str]:
     for commit in run_git(repo, "log", "--format=%H", "--", plan_path).splitlines():
-        try:
-            parent = run_git(repo, "rev-parse", f"{commit}^")
-        except subprocess.CalledProcessError:
-            continue
-        if parent != baseline or commit_paths(repo, commit) != {plan_path}:
-            continue
-        diff = run_git_text(repo, "diff", "--no-ext-diff", "--unified=0", parent, commit, "--", plan_path)
-        message = run_git_text(repo, "show", "-s", "--format=%B", commit)
-        if diff.count("+body_seal: ") == 1 and diff.count("-body_seal: ") == 1 and all(token in message for token in required):
-            return True
-    return False
+        valid, detail = verify_transition(repo, baseline, plan_path, evidence, policy, commit)
+        if valid:
+            return True, detail
+    return False, "no-transition"
 
 def adoption_decision(path: Path, fixture: str, consumer: str, policy: dict | None = None) -> tuple[str, str]:
+    del fixture
     policy = adoption_policy if policy is None else policy
     policy_error = policy_violation(policy)
     if policy_error:
@@ -372,12 +396,15 @@ def adoption_decision(path: Path, fixture: str, consumer: str, policy: dict | No
         if not evidence.get(field):
             return "reject", diagnostic_names[field]
     plan_path = evidence["plan_path"]
-    if plan_path.startswith("/") or ".." in Path(plan_path).parts or plan_path != policy["migration_commit"]["path"]:
+    if plan_path.startswith("/") or ".." in Path(plan_path).parts or plan_path != "docs/plans/adoption.md":
         return "reject", "plan path"
+    if evidence.get("approval") != "first-hand explicit approval":
+        return "reject", "approval"
+    expected_command = f"python3 migration-check.py {evidence['baseline']} {plan_path}"
+    if evidence.get("reproduction_command") != expected_command:
+        return "reject", "reproduction command"
     repo = path.parents[2]
-    transition_found = prior_transition(repo, evidence["baseline"], plan_path, evidence, policy)
-    if transition_found and fixture == "reseal-after-adoption":
-        return "reject", "interactive deepening"
+    transition_found, transition_detail = prior_transition(repo, evidence["baseline"], plan_path, evidence, policy)
     try:
         baseline_text = run_git_text(repo, "show", f"{evidence['baseline']}:{plan_path}")
     except subprocess.CalledProcessError:
@@ -389,18 +416,20 @@ def adoption_decision(path: Path, fixture: str, consumer: str, policy: dict | No
     if body_seal(baseline_text) != body_seal(current_text):
         return "reject", "changed-body"
     if consumer == "reviewing" and not transition_found:
-        return "reject", "migration commit"
+        return "reject", f"migration commit:{transition_detail}"
     if not re.fullmatch(r"[0-9a-f]{64}", evidence["old_seal"]):
         return "reject", "old seal"
     if not re.fullmatch(r"[0-9a-f]{64}", evidence["new_seal"]):
         return "reject", "new seal"
     current_fields, _ = parse_frontmatter(path)
+    if transition_found and current_fields.get("body_seal") != evidence["new_seal"]:
+        return "reject", "interactive deepening"
     expected_current_seal = evidence["new_seal"] if consumer == "reviewing" else evidence["old_seal"]
     if current_fields.get("body_seal") != expected_current_seal:
         return "reject", "new seal" if consumer == "reviewing" else "old seal"
-    if evidence["new_seal"] != body_seal(current_text):
+    if evidence["new_seal"] != body_seal(current_text) or evidence["new_seal"] != independent_body_seal(current_text):
         return "reject", "new seal"
-    if policy["later_reseal"] != "reject":
+    if policy["later_reseal"] != "reject-unless-interactive-deepening":
         return "reject", "adoption-policy:later-reseal"
     return "accept", "adoption-approved"
 
@@ -423,6 +452,92 @@ def evaluate_adoption_cases(rows: list[dict], cases: list[tuple[str, Path]], con
             emit("FAIL", fixture, "adoption decision mutated Git state")
         else:
             emit("PASS", fixture, f"{actual}:{detail}")
+    if consumer == "reviewing":
+        complete = dict(cases)["adoption-complete"]
+        complete_meta = complete.with_suffix(complete.suffix + ".adoption.json")
+        transition_mutations(complete, json.loads(complete_meta.read_text(encoding="utf-8")))
+def transition_mutations(complete: Path, evidence: dict) -> None:
+    source_repo = complete.parents[2]
+    source_baseline = evidence["baseline"]
+    source_plan = evidence["plan_path"]
+    mutation_root = Path(tempfile.mkdtemp(prefix="u4-transition-mutations-"))
+    policy = adoption_policy
+    assert policy is not None
+    try:
+        def fresh(name: str) -> Path:
+            destination = mutation_root / name
+            shutil.copytree(source_repo, destination)
+            return destination
+
+        expected_commit = run_git(source_repo, "rev-parse", "HEAD")
+        cases: list[tuple[str, str, str]] = [
+            ("wrong-parent", "wrong-parent", ""),
+            ("extra-path", "extra-path", ""),
+            ("extra-frontmatter", "extra-frontmatter", ""),
+            ("missing-message-field", "missing-message-field", ""),
+            ("prefixed-message-field", "prefixed-message-field", ""),
+            ("duplicate-message-field", "duplicate-message-field", ""),
+            ("conflicting-message-field", "conflicting-message-field", ""),
+        ]
+        for name, mutation, _ in cases:
+            repo = fresh(name)
+            candidate = expected_commit
+            baseline = source_baseline
+            if mutation == "wrong-parent":
+                baseline = run_git(repo, "rev-parse", "HEAD")
+            else:
+                run_git(repo, "reset", "--hard", source_baseline)
+                plan = repo / source_plan
+                text = plan.read_text(encoding="utf-8")
+                adopted = text.replace(
+                    f"body_seal: {evidence['old_seal']}",
+                    f"body_seal: {evidence['new_seal']}",
+                    1,
+                )
+                if mutation == "extra-frontmatter":
+                    adopted = adopted.replace("title: Adoption", "title: Mutated Adoption", 1)
+                plan.write_text(adopted, encoding="utf-8")
+                if mutation == "extra-path":
+                    (repo / "extra.txt").write_text("EXTRA\n", encoding="utf-8")
+                message = (
+                    "adoption reseal\n\n"
+                    f"baseline={source_baseline}\nplan={source_plan}\n"
+                    f"old-seal={evidence['old_seal']}\nnew-seal={evidence['new_seal']}\n"
+                    f"reproduction-command={evidence['reproduction_command']}\n"
+                    "approval=first-hand-explicit\n"
+                )
+                if mutation == "missing-message-field":
+                    message = message.replace(f"baseline={source_baseline}\n", "")
+                elif mutation == "prefixed-message-field":
+                    message = message.replace("baseline=", "x-baseline=", 1)
+                elif mutation == "duplicate-message-field":
+                    message += f"baseline={source_baseline}\n"
+                elif mutation == "conflicting-message-field":
+                    message = message.replace(f"baseline={source_baseline}\n", f"baseline={'0' * 40}\n", 1)
+                    message += f"baseline={source_baseline}\n"
+                run_git(repo, "add", source_plan)
+                if mutation == "extra-path":
+                    run_git(repo, "add", "extra.txt")
+                run_git(repo, "commit", "-qm", message)
+                candidate = run_git(repo, "rev-parse", "HEAD")
+            valid, detail = verify_transition(repo, baseline, source_plan, evidence, policy, candidate)
+            expected_detail = {
+                "wrong-parent": "parent-mismatch",
+                "extra-path": "changed-paths",
+                "extra-frontmatter": "non-seal-bytes",
+                "missing-message-field": "message-evidence",
+                "prefixed-message-field": "message-evidence",
+                "duplicate-message-field": "message-evidence",
+                "conflicting-message-field": "message-evidence",
+            }[mutation]
+            if valid:
+                emit("FAIL", f"transition-mutation-{name}", "invalid transition accepted")
+            elif detail != expected_detail:
+                emit("FAIL", f"transition-mutation-{name}", f"diagnostic drift: expected={expected_detail} got={detail}")
+            else:
+                emit("PASS", f"transition-mutation-{name}", f"rejected:{detail}")
+    finally:
+        shutil.rmtree(mutation_root, ignore_errors=True)
 
 
 def adoption_evidence_deletions(rows: list[dict], cases: list[tuple[str, Path]], consumer: str) -> None:

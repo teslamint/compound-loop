@@ -22,7 +22,7 @@ The reviewing consumer accepts only the complete one-time adoption branch below;
 {"decision":"adoption","fixture":"adoption-missing-new-seal","expected":"reject","diagnostic":"new seal"}
 {"decision":"adoption","fixture":"adoption-missing-reproduction-command","expected":"reject","diagnostic":"reproduction command"}
 {"decision":"adoption","fixture":"reseal-after-adoption","expected":"reject","diagnostic":"interactive deepening"}
-{"decision":"adoption-policy","policy":{"required_evidence":["approval","baseline","plan_path","old_seal","new_seal","reproduction_command"],"baseline_current_body":"equal","migration_commit":{"path":"docs/plans/adoption.md","diff":"seal-only","message_fields":["baseline","plan","old-seal","new-seal","reproduction-command","approval"],"command":"exact","approval":"first-hand-explicit"},"later_reseal":"reject","interrupted_retry":{"compensation":"target-only","fresh_approval":true}}}
+{"decision":"adoption-policy","policy":{"required_evidence":["approval","baseline","plan_path","old_seal","new_seal","reproduction_command"],"baseline_current_body":"equal","migration_commit":{"path":"repo-relative-evidence","diff":"seal-only","message_fields":["baseline","plan","old-seal","new-seal","reproduction-command","approval"],"command":"exact","approval":"first-hand-explicit"},"later_reseal":"reject-unless-interactive-deepening","interrupted_retry":{"compensation":"target-only","fresh_approval":true}}}
 ```
 <!-- end-plan-consumer-contract -->
 

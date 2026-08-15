@@ -155,7 +155,7 @@ assert_parity_case() {
       assert_contains "$label/check14 extraction verdict" "$check_out" "extract"
       assert_contains "$label/shipped print extraction verdict" "$print_out" "extract"
       assert_contains "$label/check14 body-seal diagnostic" "$check_out" "body_seal"
-      assert_contains "$label/shipped body-seal diagnostic" "$print_out" "body_seal"
+      assert_contains "$label/shipped print body-seal diagnostic" "$print_out" "body_seal"
       ;;
   esac
 }
@@ -168,7 +168,7 @@ echo "Fixture group: seven-shape validator/check14 parity"
 d="$(setup_scratch)"
 write_plan "$d" "correct.md" "schema: plan/v1
 title: Correct
- type: feat
+type: feat
 status: approved
 date: 2026-08-15
 execution: code" "
@@ -180,8 +180,6 @@ correct body
 
 body text after an inline delimiter
 "
-# Remove the accidental indentation in the field fixture without touching body.
-sed -i.bak 's/^ type:/type:/' "$d/docs/plans/correct.md"; rm -f "$d/docs/plans/correct.md.bak"
 correct_digest="$(independent_digest "$d/docs/plans/correct.md")"
 correct_digest_2="$(independent_digest_crosscheck "$d/docs/plans/correct.md")"
 if [ "$correct_digest" = "$correct_digest_2" ]; then pass "correct/oracle independent digest agreement"; else fail "correct/oracle independent digest agreement"; fi
@@ -427,7 +425,7 @@ if [ "$oracle_extract_rc" -eq 0 ]; then
   mkdir -p "$migration_root/docs/plans"
   write_plan "$migration_root" "migration.md" "schema: plan/v1
 title: Migration
- type: feat
+type: feat
 status: approved
 date: 2026-08-15
 execution: code" "
@@ -435,12 +433,29 @@ execution: code" "
 
 baseline body
 "
-  sed -i.bak 's/^ type:/type:/' "$migration_root/docs/plans/migration.md"; rm -f "$migration_root/docs/plans/migration.md.bak"
   git -C "$migration_root" add docs/plans/migration.md
   git -C "$migration_root" commit -qm "fixture baseline"
   baseline="$(git -C "$migration_root" rev-parse HEAD)"
+  object_format="$(git -C "$migration_root" rev-parse --show-object-format 2>/dev/null || true)"
+  case "$object_format" in
+    sha1) expected_baseline_length=40 ;;
+    sha256) expected_baseline_length=64 ;;
+    *) expected_baseline_length=0 ;;
+  esac
+  baseline_length="${#baseline}"
+  if [[ "$baseline" =~ ^[0-9a-f]+$ ]]; then
+    baseline_value_class="lowercase-full-hex"
+  else
+    baseline_value_class="not-lowercase-full-hex"
+  fi
+  if [ "$expected_baseline_length" -gt 0 ] && [ "$baseline_length" -eq "$expected_baseline_length" ] && [ "$baseline_value_class" = "lowercase-full-hex" ]; then
+    pass "migration baseline class len=$baseline_length value-class=$baseline_value_class object-format=$object_format"
+  else
+    fail "migration baseline class len=$baseline_length value-class=$baseline_value_class object-format=$object_format expected-length=$expected_baseline_length"
+  fi
   set +e
   unchanged_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" docs/plans/migration.md 2>&1)"; unchanged_rc=$?
+  assert_not_contains "migration oracle unchanged baseline avoids invalid-baseline" "$unchanged_out" "invalid-baseline"
   set -e
   if [ "$unchanged_rc" -eq 0 ]; then pass "migration oracle unchanged baseline"; else fail "migration oracle unchanged baseline — $unchanged_out"; fi
   printf '\nchanged byte\n' >>"$migration_root/docs/plans/migration.md"
@@ -477,6 +492,55 @@ baseline body
   set -e
   assert_rc "migration oracle symlink plan path exit" 1 "$symlink_rc"
   assert_contains "migration oracle symlink plan path diagnostic" "$symlink_out" "symlink-plan-path"
+  short_baseline="${baseline:0:39}"
+  set +e
+  short_out="$(cd "$migration_root" && python3 migration-check.py "$short_baseline" docs/plans/migration.md 2>&1)"; short_rc=$?
+  set -e
+  assert_rc "migration oracle short baseline exit" 1 "$short_rc"
+  assert_contains "migration oracle short baseline diagnostic" "$short_out" "invalid-baseline"
+  uppercase_baseline="A${baseline:1}"
+  set +e
+  uppercase_out="$(cd "$migration_root" && python3 migration-check.py "$uppercase_baseline" docs/plans/migration.md 2>&1)"; uppercase_rc=$?
+  set -e
+  assert_rc "migration oracle uppercase baseline exit" 1 "$uppercase_rc"
+  assert_contains "migration oracle uppercase baseline diagnostic" "$uppercase_out" "invalid-baseline"
+  blob_baseline="$(git -C "$migration_root" hash-object -w "$migration_root/docs/plans/migration.md")"
+  set +e
+  blob_out="$(cd "$migration_root" && python3 migration-check.py "$blob_baseline" docs/plans/migration.md 2>&1)"; blob_rc=$?
+  set -e
+  assert_rc "migration oracle exact-length blob baseline exit" 1 "$blob_rc"
+  assert_contains "migration oracle exact-length blob baseline diagnostic" "$blob_out" "missing-baseline"
+  tree_baseline="$(git -C "$migration_root" rev-parse "$baseline^{tree}")"
+  set +e
+  tree_out="$(cd "$migration_root" && python3 migration-check.py "$tree_baseline" docs/plans/migration.md 2>&1)"; tree_rc=$?
+  set -e
+  assert_rc "migration oracle exact-length non-commit baseline exit" 1 "$tree_rc"
+  assert_contains "migration oracle exact-length non-commit baseline diagnostic" "$tree_out" "missing-baseline"
+  set +e
+  missing_path_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" docs/plans/missing.md 2>&1)"; missing_path_rc=$?
+  set -e
+  assert_rc "migration oracle missing target path exit" 1 "$missing_path_rc"
+  assert_contains "migration oracle missing target path diagnostic" "$missing_path_out" "invalid-plan-path"
+  set +e
+  directory_path_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" docs/plans 2>&1)"; directory_path_rc=$?
+  set -e
+  assert_rc "migration oracle directory target path exit" 1 "$directory_path_rc"
+  assert_contains "migration oracle directory target path diagnostic" "$directory_path_out" "invalid-plan-path"
+  ln -s docs "$migration_root/linked-root"
+  set +e
+  intermediate_symlink_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" linked-root/plans/migration.md 2>&1)"; intermediate_symlink_rc=$?
+  set -e
+  assert_rc "migration oracle intermediate symlink path exit" 1 "$intermediate_symlink_rc"
+  assert_contains "migration oracle intermediate symlink path diagnostic" "$intermediate_symlink_out" "symlink-plan-path"
+  cp "$migration_root/docs/plans/migration.md" "$migration_root/-migration.md"
+  git -C "$migration_root" add -- -migration.md
+  git -C "$migration_root" commit -qm "dash-leading path fixture"
+  dash_baseline="$(git -C "$migration_root" rev-parse HEAD)"
+  set +e
+  dash_out="$(cd "$migration_root" && python3 migration-check.py "$dash_baseline" -migration.md 2>&1)"; dash_rc=$?
+  set -e
+  assert_rc "migration oracle dash-leading regular path exit" 0 "$dash_rc"
+  assert_contains "migration oracle dash-leading regular path diagnostic" "$dash_out" "unchanged-body"
 else
   fail "migration oracle extraction and execution — marker/fence contract absent"
 fi
@@ -616,20 +680,52 @@ def transition(repo: Path, baseline: str, old: str, new: str, command: str, appr
     git(repo, "commit", "-qm", message)
     return 0, "committed"
 
-def assert_success(repo: Path, baseline: str, pre: bytes, old: str, new: str, command: str) -> tuple[bool, str]:
-    current = state(repo, pre)
+def verify_transition(repo: Path, baseline: str, old: str, new: str, command: str) -> tuple[bool, str]:
+    current = state(repo, (repo / TARGET).read_bytes())
     commit = current["head"]
-    parent = git(repo, "rev-parse", f"{commit}^")
+    try:
+        parent = git(repo, "rev-parse", f"{commit}^")
+    except RuntimeError:
+        return False, "success-parent-missing"
+    if parent != baseline:
+        return False, "success-parent-mismatch"
     changed = set(git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", commit).splitlines())
-    diff = git(repo, "diff", "--no-ext-diff", "--unified=0", parent, commit, "--", TARGET)
-    message = git(repo, "show", "-s", "--format=%B", commit)
-    ok = (baseline != commit and current["status"] == "" and changed == {TARGET}
-          and diff.count("+body_seal: ") == 1 and diff.count("-body_seal: ") == 1
-          and "baseline=" + baseline in message and "plan=" + TARGET in message
-          and "old-seal=" + old in message and "new-seal=" + new in message
-          and "reproduction-command=" + command in message
-          and "approval=first-hand-explicit" in message)
-    return ok, "success-state" if ok else "success-state-mismatch"
+    if changed != {TARGET} or current["status"] != "":
+        return False, "success-tree-mismatch"
+    parent_text = git(repo, "show", f"{parent}:{TARGET}", strip=False)
+    current_text = git(repo, "show", f"{commit}:{TARGET}", strip=False)
+    old_line = f"body_seal: {old}\n"
+    new_line = f"body_seal: {new}\n"
+    if parent_text.count(old_line) != 1 or current_text.count(new_line) != 1:
+        return False, "success-seal-line-mismatch"
+    if re.sub(r"(?m)^body_seal: [0-9a-f]{64}\n", "", parent_text, count=1) != re.sub(r"(?m)^body_seal: [0-9a-f]{64}\n", "", current_text, count=1):
+        return False, "success-non-seal-bytes-changed"
+    message = git(repo, "show", "-s", "--format=%B", commit, strip=False)
+    expected = {
+        "baseline": baseline,
+        "plan": TARGET,
+        "old-seal": old,
+        "new-seal": new,
+        "reproduction-command": command,
+        "approval": "first-hand-explicit",
+    }
+    parsed: dict[str, str] = {}
+    for line in message.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key not in expected or key in parsed:
+            return False, "success-message-evidence-mismatch"
+        parsed[key] = value
+    if parsed != expected:
+        return False, "success-message-evidence-mismatch"
+    return True, "success-state"
+
+def assert_success(repo: Path, baseline: str, pre: bytes, old: str, new: str, command: str) -> tuple[bool, str]:
+    parent_bytes = git(repo, "show", f"{baseline}:{TARGET}", strip=False).encode("utf-8")
+    if parent_bytes != pre:
+        return False, "success-baseline-plan-mismatch"
+    return verify_transition(repo, baseline, old, new, command)
 
 def markdown(outcome: str, baseline: str, repo: Path, pre: dict, command: str, rc: int, output: str, post: dict, next_result: str, mechanism: str, sentinel: Path, sentinel_check: dict, checker_log: list[dict]) -> str:
     timestamp = datetime.now(timezone.utc).isoformat()
