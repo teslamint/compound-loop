@@ -17,33 +17,38 @@ Orchestrates the full lifecycle. Holds **no phase logic** — every phase is an 
 
 ## Standalone `--skip-plan` contract
 
+
+<!-- plan-consumer-contract: release-loop/v1 -->
+```json
+{"decision":"literal","fixture":"required-fields","expected":"schema,title,type,status,date,execution","diagnostic":""}
+{"decision":"literal","fixture":"schema","expected":"plan/v1","diagnostic":""}
+{"decision":"literal","fixture":"approved-status","expected":"approved","diagnostic":""}
+{"decision":"required","fixture":"required-missing-schema","expected":"reject","diagnostic":"schema"}
+{"decision":"required","fixture":"required-empty-schema","expected":"reject","diagnostic":"schema"}
+{"decision":"required","fixture":"required-missing-title","expected":"reject","diagnostic":"title"}
+{"decision":"required","fixture":"required-empty-title","expected":"reject","diagnostic":"title"}
+{"decision":"required","fixture":"required-missing-type","expected":"reject","diagnostic":"type"}
+{"decision":"required","fixture":"required-empty-type","expected":"reject","diagnostic":"type"}
+{"decision":"required","fixture":"required-missing-status","expected":"reject","diagnostic":"status"}
+{"decision":"required","fixture":"required-empty-status","expected":"reject","diagnostic":"status"}
+{"decision":"required","fixture":"required-missing-date","expected":"reject","diagnostic":"date"}
+{"decision":"required","fixture":"required-empty-date","expected":"reject","diagnostic":"date"}
+{"decision":"required","fixture":"required-missing-execution","expected":"reject","diagnostic":"execution"}
+{"decision":"required","fixture":"required-empty-execution","expected":"reject","diagnostic":"execution"}
+{"decision":"eligibility","fixture":"valid-validator-exit0","expected":"accept","diagnostic":"validator=available exit=0"}
+{"decision":"eligibility","fixture":"valid-validator-nonzero","expected":"reject","diagnostic":"validator=available nonzero"}
+{"decision":"eligibility","fixture":"valid-validator-fallback","expected":"accept","diagnostic":"validator=fallback"}
+{"decision":"eligibility","fixture":"unknown-schema","expected":"reject","diagnostic":"schema"}
+{"decision":"eligibility","fixture":"non-approved-status","expected":"reject","diagnostic":"status"}
+```
+<!-- end-plan-consumer-contract -->
+
+### Minimum `--skip-plan` contract
+
 This gate executes only the minimum plan rules listed here; it does not require a planning-skill sibling to exist.
-
-### Shared plan literals
-
-- Required frontmatter field: `schema`.
-- Required frontmatter field: `title`.
-- Required frontmatter field: `type`.
-- Required frontmatter field: `status`.
-- Required frontmatter field: `date`.
-- Required frontmatter field: `execution`.
-- Schema version literal: `plan/v1`.
-- Status literals: `draft | approved | done | superseded`.
-- Execution literals: `code | non-code | ops`.
-- Seal format literal: `64-char lowercase hex SHA-256`.
-- Seal extraction literal: `text.split('---', 2)[2]`.
-
-### Eligibility and validator selection
-
-`--skip-plan` rejects a missing required `schema` field by naming `schema`.
-`--skip-plan` rejects a missing required `title` field by naming `title`.
-`--skip-plan` rejects a missing required `type` field by naming `type`.
-`--skip-plan` rejects a missing required `status` field by naming `status`.
-`--skip-plan` rejects a missing required `date` field by naming `date`.
-`--skip-plan` rejects a missing required `execution` field by naming `execution`.
+Each required field (`schema`, `title`, `type`, `status`, `date`, and `execution`) must be present and non-empty; a missing or empty YAML value rejects with that field name.
 `--skip-plan` proceeds only for `schema: plan/v1` with `status: approved`.
-`--skip-plan` rejects an unknown schema version.
-`--skip-plan` rejects every non-approved status.
+`--skip-plan` rejects an unknown schema version and every non-approved status.
 When the sibling planning validator is available, `--skip-plan` runs it and requires exit 0.
 When the sibling planning validator is absent, `--skip-plan` uses the local minimum-field fallback and still rejects unknown schema versions.
 The fallback does not guess unknown fields or defer eligibility to an unavailable sibling; implementing performs its own full pre-flight after this gate.

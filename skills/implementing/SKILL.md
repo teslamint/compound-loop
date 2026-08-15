@@ -13,17 +13,37 @@ description: Execute an approved plan to completion with review checkpoints, sur
 
 This consumer executes only the plan rules listed here; it does not require the full planning skill or its schema file.
 
-### Shared plan literals
+<!-- plan-consumer-contract: implementing/v1 -->
+```json
+{"decision":"literal","fixture":"schema","expected":"plan/v1","diagnostic":""}
+{"decision":"literal","fixture":"statuses","expected":"draft | approved | done | superseded","diagnostic":""}
+{"decision":"literal","fixture":"seal-format","expected":"64-char lowercase hex SHA-256","diagnostic":""}
+{"decision":"literal","fixture":"seal-extraction","expected":"text.split('---', 2)[2]","diagnostic":""}
+{"decision":"schema","fixture":"schema-plan-v1","expected":"accept","diagnostic":""}
+{"decision":"schema","fixture":"schema-missing","expected":"reject","diagnostic":"schema"}
+{"decision":"schema","fixture":"schema-unknown","expected":"reject","diagnostic":"schema"}
+{"decision":"status","fixture":"status-approved","expected":"accept","diagnostic":""}
+{"decision":"status","fixture":"status-draft","expected":"reject","diagnostic":"pending approval"}
+{"decision":"status","fixture":"status-done","expected":"reject","diagnostic":"completed_by"}
+{"decision":"status","fixture":"status-done-missing-evidence","expected":"reject","diagnostic":"completed_by"}
+{"decision":"status","fixture":"status-superseded","expected":"reject","diagnostic":"superseded_by"}
+{"decision":"status","fixture":"status-missing","expected":"reject","diagnostic":"status"}
+{"decision":"status","fixture":"status-unknown","expected":"reject","diagnostic":"status"}
+{"decision":"seal","fixture":"seal-correct","expected":"accept","diagnostic":""}
+{"decision":"seal","fixture":"seal-malformed","expected":"reject","diagnostic":"stored="}
+{"decision":"seal","fixture":"seal-mismatch","expected":"reject","diagnostic":"stored="}
+{"decision":"seal","fixture":"seal-never-sealed","expected":"accept","diagnostic":""}
+{"decision":"seal","fixture":"seal-removed","expected":"reject","diagnostic":"removed seal"}
+{"decision":"reseal","fixture":"reseal-post-approval","expected":"reject","diagnostic":"interactive deepening"}
+{"decision":"unit","fixture":"unit-code","expected":"accept","diagnostic":""}
+{"decision":"unit","fixture":"unit-non-code","expected":"accept","diagnostic":""}
+```
+<!-- end-plan-consumer-contract -->
 
-- Required frontmatter field: `schema`.
-- Required frontmatter field: `title`.
-- Required frontmatter field: `type`.
-- Required frontmatter field: `status`.
-- Required frontmatter field: `date`.
-- Required frontmatter field: `execution`.
+### Shared literals used by implementing
+
 - Schema version literal: `plan/v1`.
 - Status literals: `draft | approved | done | superseded`.
-- Execution literals: `code | non-code | ops`.
 - Seal format literal: `64-char lowercase hex SHA-256`.
 - Seal extraction literal: `text.split('---', 2)[2]`.
 
