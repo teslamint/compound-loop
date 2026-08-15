@@ -50,6 +50,7 @@ Retrospective consumes only repo-relative origin, applicability, terminal-transi
 {"decision":"transition","fixture":"split-commit","expected":"reject","diagnostic":"same-commit"}
 {"decision":"transition","fixture":"omission-commit","expected":"reject","diagnostic":"all-plans"}
 {"decision":"immutability","fixture":"body-mutation","expected":"reject","diagnostic":"body"}
+{"decision":"immutability","fixture":"dirty-worktree-body-mutation","expected":"reject","diagnostic":"body"}
 {"decision":"immutability","fixture":"other-frontmatter-mutation","expected":"reject","diagnostic":"frontmatter"}
 ```
 <!-- end-plan-consumer-contract -->

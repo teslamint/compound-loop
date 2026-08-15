@@ -265,6 +265,7 @@ def retro_cases(directory: Path) -> list[tuple[str, Path]]:
         "split-commit": {"origin": "docs/specs/design.md", "plans": [{"name": "split.md", "status": "approved", "first": "post", "landed": ""}], "ledger": "split.md", "git_mode": "split"},
         "omission-commit": {"origin": "docs/specs/design.md", "plans": [{"name": "kept.md", "status": "approved", "first": "post", "landed": ""}, {"name": "omitted.md", "status": "approved", "first": "post", "landed": ""}], "ledger": "kept.md", "body_cites": ["omitted.md"], "git_mode": "omission"},
         "body-mutation": {"origin": "docs/specs/design.md", "plans": [{"name": "body.md", "status": "approved", "first": "post", "landed": "base-body"}], "ledger": "body.md", "mutation": "body"},
+        "dirty-worktree-body-mutation": {"origin": "docs/specs/design.md", "plans": [{"name": "dirty-body.md", "status": "approved", "first": "post", "landed": "base-dirty-body"}], "ledger": "dirty-body.md", "mutation": "body", "dirty_worktree_restore": True},
         "other-frontmatter-mutation": {"origin": "docs/specs/design.md", "plans": [{"name": "frontmatter.md", "status": "approved", "first": "post", "landed": "base-frontmatter"}], "ledger": "frontmatter.md", "mutation": "other-frontmatter"},
     }
     for name, spec in specs.items():
@@ -344,7 +345,7 @@ def inspect_plan_transition(repo: Path, commit: str, name: str) -> tuple[bool, s
     if not diff:
         return False, set()
     before = run_git_text(repo, "show", f"{parent}:{relative}")
-    after = (repo / relative).read_text(encoding="utf-8")
+    after = run_git_text(repo, "show", f"{commit}:{relative}")
     before_fields = parse_frontmatter_text(before)
     after_fields = parse_frontmatter_text(after)
     changed_fields = {
@@ -426,6 +427,10 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
     run_git(repo, "add", *sorted(required_paths))
     run_git(repo, "commit", "-qm", "retro and plan transitions")
     commit = run_git(repo, "rev-parse", "HEAD")
+    if spec.get("dirty_worktree_restore"):
+        parent = run_git(repo, "rev-parse", f"{commit}^")
+        for name in selected:
+            run_git(repo, "restore", "--source", parent, "--", f"docs/plans/{name}")
     for name in selected:
         body_changed, changed_fields = inspect_plan_transition(repo, commit, name)
         unexpected_fields = changed_fields - {"status", "completed_by"}
