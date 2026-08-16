@@ -287,6 +287,45 @@ PY
   return $result
 }
 
+# --- Case J: multiline terminal-looking candidate (matcher coverage) ---
+# Keep every canonical signal present, then add a separate candidate whose
+# backticked span crosses a newline. A matcher that excludes newlines would
+# miss the mutation and incorrectly pass on canonical coverage alone.
+case_j() {
+  local dir target_line out code result=0
+  dir="$(setup_copy)" || return 1
+  target_line="$(python3 - "$dir/skills/release/SKILL.md" <<'PY'
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+needle = "`Release complete — v<version>`"
+if text.count(needle) != 1:
+    raise SystemExit("expected exactly one canonical release success signal")
+line = text[:text.index(needle)].count("\n") + 1
+text = text.replace(
+    needle,
+    needle + ", `Release complete — v<version>\nmutated`",
+    1,
+)
+open(path, "w", encoding="utf-8").write(text)
+print(line)
+PY
+)" || {
+    echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"
+    rm -rf "$dir"
+    return 1
+  }
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got $code"; result=1; }
+  assert_contains "$out" "[signal-drift]" "reported by check 6 specifically" || result=1
+  assert_contains "$out" "skills/release/SKILL.md:$target_line" "computed file:line" || result=1
+  assert_contains "$out" "Release complete — v<version>\\nmutated" "multiline candidate was inspected" || result=1
+  assert_not_contains "$out" "canonical line not found" "canonical coverage remains present" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -296,6 +335,7 @@ run_case F case_f
 run_case G case_g
 run_case H case_h
 run_case I case_i
+run_case J case_j
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then

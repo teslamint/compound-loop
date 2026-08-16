@@ -133,6 +133,14 @@ assert_parity_case() {
       assert_contains "$label/check14 skip" "$check_out" "skipped"
       assert_contains "$label/shipped success" "$shipped_out" "OK:"
       ;;
+    non_scalar)
+      assert_rc "$label/check14 exit" 1 "$check_rc"
+      assert_rc "$label/shipped validator exit" 1 "$shipped_rc"
+      assert_contains "$label/check14 non-scalar verdict" "$check_out" "FAIL: [body-seal]"
+      assert_contains "$label/check14 non-scalar diagnostic" "$check_out" "body_seal"
+      assert_contains "$label/shipped non-scalar diagnostic" "$shipped_out" "body_seal"
+      assert_contains "$label/shipped scalar diagnostic" "$shipped_out" "must be a scalar value"
+      ;;
     malformed)
       assert_rc "$label/check14 exit" 1 "$check_rc"
       assert_rc "$label/shipped validator exit" 1 "$shipped_rc"
@@ -259,6 +267,106 @@ historical unsealed plan
 "
 assert_parity_case "absent seal" "$d" absent.md absent
 rm -rf "$d"
+# RED parity fixture: a parser-valid quoted canonical seal must be accepted
+# identically by check 14 and the shipped validator.
+d="$(setup_scratch)"
+write_plan "$d" "quoted.md" "schema: plan/v1
+title: Quoted
+type: feat
+status: approved
+date: 2026-08-15
+execution: code" "
+## Goal
+
+quoted canonical body
+"
+quoted_digest="$(independent_digest "$d/docs/plans/quoted.md")"
+python3 - "$d/docs/plans/quoted.md" "$quoted_digest" <<'PY'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+path.write_text(
+    text.replace(
+        "execution: code\n---",
+        'execution: code\nbody_seal: "' + sys.argv[2] + '"\n---',
+    ),
+    encoding="utf-8",
+)
+PY
+assert_parity_case "quoted canonical seal" "$d" quoted.md pass "$quoted_digest"
+rm -rf "$d"
+
+# RED parity fixture: a quoted empty scalar is the shipped validator's
+# unsealed/absent state and must not be treated as malformed by check 14.
+d="$(setup_scratch)"
+write_plan "$d" "quoted-empty.md" "schema: plan/v1
+title: Quoted empty
+type: feat
+status: approved
+date: 2026-08-15
+execution: code
+body_seal: \"\"" "
+## Goal
+
+quoted empty seal
+"
+assert_parity_case "quoted empty seal" "$d" quoted-empty.md absent
+rm -rf "$d"
+
+# A bare empty value is the shipped parser's list placeholder, not an
+# unsealed scalar. Keep this separate from quoted-empty to guard parser parity.
+d="$(setup_scratch)"
+write_plan "$d" "bare-empty.md" "schema: plan/v1
+title: Bare empty
+type: feat
+status: approved
+date: 2026-08-15
+execution: code
+body_seal:" "
+## Goal
+
+bare empty seal
+"
+assert_parity_case "bare empty seal" "$d" bare-empty.md non_scalar
+rm -rf "$d"
+
+# A block sequence is also non-scalar and must fail through each implementation
+# instead of being skipped as an empty seal.
+d="$(setup_scratch)"
+write_plan "$d" "list-valued.md" "schema: plan/v1
+title: List-valued
+type: feat
+status: approved
+date: 2026-08-15
+execution: code
+body_seal:
+  - not-a-seal" "
+## Goal
+
+list-valued seal
+"
+assert_parity_case "list-valued seal" "$d" list-valued.md non_scalar
+rm -rf "$d"
+
+# RED parity fixture: an earlier scalar containing --- must not hide a later
+# mismatching seal from check 14's delimiter-line frontmatter parser.
+d="$(setup_scratch)"
+write_plan "$d" "embedded-delimiter.md" "schema: plan/v1
+title: \"contains --- marker\"
+type: feat
+status: approved
+date: 2026-08-15
+execution: code
+body_seal: 0000000000000000000000000000000000000000000000000000000000000000" "
+## Goal
+
+embedded delimiter mismatch
+"
+embedded_digest="$(independent_digest "$d/docs/plans/embedded-delimiter.md")"
+assert_parity_case "embedded delimiter before mismatching seal" "$d" embedded-delimiter.md mismatch "$embedded_digest"
+rm -rf "$d"
+
 
 d="$(setup_scratch)"
 write_plan "$d" "malformed.md" "schema: plan/v1
@@ -465,6 +573,26 @@ baseline body
   assert_not_contains "migration oracle unchanged baseline avoids invalid-baseline" "$unchanged_out" "invalid-baseline"
   set -e
   if [ "$unchanged_rc" -eq 0 ]; then pass "migration oracle unchanged baseline"; else fail "migration oracle unchanged baseline — $unchanged_out"; fi
+  printf '%s\n' 'malformed current canonical text' >"$migration_root/docs/plans/migration.md"
+  set +e
+  malformed_current_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" docs/plans/migration.md 2>&1)"; malformed_current_rc=$?
+  set -e
+  assert_rc "migration oracle malformed current canonical text exit" 1 "$malformed_current_rc"
+  assert_contains "migration oracle malformed current extraction diagnostic" "$malformed_current_out" "body_seal extraction failed: canonical body requires two '---' delimiters"
+  assert_not_contains "migration oracle malformed current no traceback" "$malformed_current_out" "Traceback"
+  git -C "$migration_root" restore --source HEAD -- docs/plans/migration.md
+  printf '%s\n' 'malformed baseline canonical text' >"$migration_root/docs/plans/migration.md"
+  git -C "$migration_root" add docs/plans/migration.md
+  git -C "$migration_root" commit -qm "fixture malformed baseline"
+  malformed_baseline="$(git -C "$migration_root" rev-parse HEAD)"
+  git -C "$migration_root" restore --source "$baseline" -- docs/plans/migration.md
+  set +e
+  malformed_baseline_out="$(cd "$migration_root" && python3 migration-check.py "$malformed_baseline" docs/plans/migration.md 2>&1)"; malformed_baseline_rc=$?
+  set -e
+  assert_rc "migration oracle malformed baseline canonical text exit" 1 "$malformed_baseline_rc"
+  assert_contains "migration oracle malformed baseline extraction diagnostic" "$malformed_baseline_out" "body_seal extraction failed: canonical body requires two '---' delimiters"
+  assert_not_contains "migration oracle malformed baseline no traceback" "$malformed_baseline_out" "Traceback"
+  git -C "$migration_root" restore --source "$baseline" -- docs/plans/migration.md
   printf '\nchanged byte\n' >>"$migration_root/docs/plans/migration.md"
   set +e
   changed_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" docs/plans/migration.md 2>&1)"; changed_rc=$?
@@ -476,7 +604,7 @@ baseline body
   set -e
   assert_rc "migration oracle missing baseline exit" 1 "$missing_rc"
   assert_contains "migration oracle missing-baseline diagnostic" "$missing_out" "missing-baseline"
-  git -C "$migration_root" restore --source HEAD -- docs/plans/migration.md
+  git -C "$migration_root" restore --source "$baseline" -- docs/plans/migration.md
   set +e
   option_out="$(cd "$migration_root" && python3 migration-check.py --not-a-commit docs/plans/migration.md 2>&1)"; option_rc=$?
   set -e
@@ -538,6 +666,69 @@ baseline body
   set -e
   assert_rc "migration oracle intermediate symlink path exit" 1 "$intermediate_symlink_rc"
   assert_contains "migration oracle intermediate symlink path diagnostic" "$intermediate_symlink_out" "symlink-plan-path"
+  cr_path=$'docs/plans/control\r.md'
+  lf_path=$'docs/plans/control\n.md'
+  cp "$migration_root/docs/plans/migration.md" "$migration_root/$cr_path"
+  cp "$migration_root/docs/plans/migration.md" "$migration_root/$lf_path"
+  git -C "$migration_root" add -- "$cr_path" "$lf_path"
+  git -C "$migration_root" commit -qm "fixture control-bearing paths"
+  control_baseline="$(git -C "$migration_root" rev-parse HEAD)"
+  mkdir -p "$migration_root/no-git-bin"
+  git_probe="$migration_root/git-probe"
+  cat >"$migration_root/no-git-bin/git" <<'SH'
+#!/bin/sh
+printf '%s\n' accessed >"$MIGRATION_GIT_PROBE"
+exit 97
+SH
+  chmod +x "$migration_root/no-git-bin/git"
+  for control_kind in cr lf; do
+    if [ "$control_kind" = cr ]; then
+      control_path="$cr_path"
+    else
+      control_path="$lf_path"
+    fi
+    rm -f "$git_probe"
+    set +e
+    control_out="$(cd "$migration_root" && env MIGRATION_GIT_PROBE="$git_probe" PATH="$migration_root/no-git-bin:$PATH" python3 migration-check.py "$control_baseline" "$control_path" 2>&1)"; control_rc=$?
+    set -e
+    assert_rc "migration oracle $control_kind-bearing plan path exit" 1 "$control_rc"
+    assert_contains "migration oracle $control_kind-bearing plan path diagnostic" "$control_out" "invalid-plan-path"
+    assert_not_contains "migration oracle $control_kind-bearing plan path no traceback" "$control_out" "Traceback"
+    if [ -e "$git_probe" ]; then
+      fail "migration oracle $control_kind-bearing plan path rejects before Git access"
+    else
+      pass "migration oracle $control_kind-bearing plan path rejects before Git access"
+    fi
+  done
+  # UTF-8 byte escapes keep these U+0085/U+2028/U+2029 path fixtures portable across Bash versions.
+  u0085_path=$'docs/plans/control\xc2\x85.md'
+  u2028_path=$'docs/plans/control\xe2\x80\xa8.md'
+  u2029_path=$'docs/plans/control\xe2\x80\xa9.md'
+  cp "$migration_root/docs/plans/migration.md" "$migration_root/$u0085_path"
+  cp "$migration_root/docs/plans/migration.md" "$migration_root/$u2028_path"
+  cp "$migration_root/docs/plans/migration.md" "$migration_root/$u2029_path"
+  git -C "$migration_root" add -- "$u0085_path" "$u2028_path" "$u2029_path"
+  git -C "$migration_root" commit -qm "fixture Unicode line-separator paths"
+  unicode_baseline="$(git -C "$migration_root" rev-parse HEAD)"
+  for unicode_kind in u0085 u2028 u2029; do
+    case "$unicode_kind" in
+      u0085) unicode_path="$u0085_path" ;;
+      u2028) unicode_path="$u2028_path" ;;
+      u2029) unicode_path="$u2029_path" ;;
+    esac
+    rm -f "$git_probe"
+    set +e
+    unicode_out="$(cd "$migration_root" && env MIGRATION_GIT_PROBE="$git_probe" PATH="$migration_root/no-git-bin:$PATH" python3 migration-check.py "$unicode_baseline" "$unicode_path" 2>&1)"; unicode_rc=$?
+    set -e
+    assert_rc "migration oracle $unicode_kind plan path exit" 1 "$unicode_rc"
+    assert_contains "migration oracle $unicode_kind plan path diagnostic" "$unicode_out" "invalid-plan-path"
+    assert_not_contains "migration oracle $unicode_kind plan path no traceback" "$unicode_out" "Traceback"
+    if [ -e "$git_probe" ]; then
+      fail "migration oracle $unicode_kind plan path rejects before Git access"
+    else
+      pass "migration oracle $unicode_kind plan path rejects before Git access"
+    fi
+  done
   cp "$migration_root/docs/plans/migration.md" "$migration_root/-migration.md"
   git -C "$migration_root" add -- -migration.md
   git -C "$migration_root" commit -qm "dash-leading path fixture"
@@ -734,12 +925,87 @@ def assert_success(repo: Path, baseline: str, pre: bytes, old: str, new: str, co
         return False, "success-baseline-plan-mismatch"
     return verify_transition(repo, baseline, old, new, command)
 
-def markdown(outcome: str, baseline: str, repo: Path, pre: dict, command: str, rc: int, output: str, post: dict, next_result: str, mechanism: str, sentinel: Path, sentinel_check: dict, checker_log: list[dict]) -> str:
+def operator_restore(repo: Path) -> dict:
+    argv = ["git", "-C", str(repo), "restore", "--source", "HEAD", "--", TARGET]
+    result = subprocess.run(argv, text=True, capture_output=True)
+    return {
+        "argv": argv,
+        "rc": result.returncode,
+        "output": result.stdout + result.stderr,
+    }
+
+
+def durable_stage(stage_name: str, action: str, rc: int, output: str, state_value: dict, **details: object) -> dict:
+    stage = {
+        "stage": stage_name,
+        "action": action,
+        "rc": rc,
+        "output": output,
+        "state": state_value,
+    }
+    stage.update(details)
+    return stage
+
+def normalized_plan_bytes(data: bytes) -> bytes:
+    return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+
+
+def expected_seal_only_bytes(pre_bytes: bytes, old: str, new: str) -> bytes | None:
+    normalized = normalized_plan_bytes(pre_bytes)
+    pattern = re.compile(rb"(?m)^body_seal: [^\r\n]*\n")
+    matches = list(pattern.finditer(normalized))
+    old_line = f"body_seal: {old}\n".encode("ascii")
+    if len(matches) != 1 or matches[0].group() != old_line:
+        return None
+    match = matches[0]
+    new_line = f"body_seal: {new}\n".encode("ascii")
+    return normalized[:match.start()] + new_line + normalized[match.end():]
+
+
+def exact_seal_only_transition(pre_bytes: bytes, post_bytes: bytes, old: str, new: str) -> bool:
+    expected = expected_seal_only_bytes(pre_bytes, old, new)
+    normalized_post = normalized_plan_bytes(post_bytes)
+    if expected is None or expected == normalized_plan_bytes(pre_bytes) or normalized_post != expected:
+        return False
+    pattern = re.compile(rb"(?m)^body_seal: [^\r\n]*\n")
+    matches = list(pattern.finditer(normalized_post))
+    new_line = f"body_seal: {new}\n".encode("ascii")
+    return len(matches) == 1 and matches[0].group() == new_line
+
+
+def mutate_title_frontmatter_body(repo: Path) -> None:
+    path = repo / TARGET
+    with open(path, encoding="utf-8", newline=None) as handle:
+        text = handle.read()
+    mutations = (
+        ("title: Adoption\n", "title: Mutated Adoption\n"),
+        ("execution: code\n", "execution: docs\nextra_frontmatter: mutation\n"),
+        ("immutable baseline body\n", "immutable baseline body\nextra body mutation\n"),
+    )
+    for before, after in mutations:
+        if text.count(before) != 1:
+            raise RuntimeError("forced-state negative mutation fixture is ambiguous")
+        text = text.replace(before, after, 1)
+    path.write_text(text, encoding="utf-8")
+
+
+def forced_failure_state(state_value: dict, baseline: str, pre_bytes: bytes, post_bytes: bytes, old: str, new: str) -> bool:
+    return (
+        state_value["head"] == baseline
+        and state_value["status"] == f" M {TARGET}"
+        and state_value["dirty_target_only"]
+        and not state_value["plan_equals_pre"]
+        and exact_seal_only_transition(pre_bytes, post_bytes, old, new)
+    )
+
+
+def markdown(outcome: str, baseline: str, repo: Path, pre: dict, command: str, rc: int, output: str, post: dict, next_result: str, stages: list[dict], mechanism: str, sentinel: Path, sentinel_check: dict, checker_log: list[dict]) -> str:
     timestamp = datetime.now(timezone.utc).isoformat()
     inventory = [str(fixture_root), str(repo), str(repo / ".git"), str(repo / TARGET),
                  str(root / "skills/planning/schemas/plan-schema.md"), str(evidence_root), str(sentinel),
                  "remote=none", "outward-stub=not-applicable"]
     safe_output = " ".join(output.split())[:360].replace("|", "/")
+    stage_text = f"- durable stages: `{json.dumps(stages, sort_keys=True)}`\n" if stages else ""
     return f"""# U4 adoption reseal — {outcome}
 
 - plan identity: `{TARGET}`
@@ -757,9 +1023,10 @@ def markdown(outcome: str, baseline: str, repo: Path, pre: dict, command: str, r
 - exit status: `{rc}`
 - concise sanitized output: `{safe_output}`
 - post-state: `{json.dumps(post, sort_keys=True)}`
-- relevant next-invocation result: `{next_result}`
+{stage_text}- relevant next-invocation result: `{next_result}`
 - mechanism check: `{mechanism}`
 """
+
 
 failures = 0
 for outcome in OUTCOMES:
@@ -770,6 +1037,7 @@ for outcome in OUTCOMES:
     rc = 1
     output = ""
     next_result = "not applicable"
+    stages = []
     mechanism = "not-fired"
     if not block_ok:
         output = "missing migration-check block or marker/fence contract"
@@ -785,33 +1053,114 @@ for outcome in OUTCOMES:
     elif outcome == "forced-failure":
         rc, output = transition(repo, baseline, old, new, command, "first-hand-explicit", "forced-failure")
         post = state(repo, pre_bytes)
-        ok = rc != 0 and post["head"] == baseline and post["dirty_target_only"] and post["diff"].count("+body_seal: ") == 1 and post["diff"].count("-body_seal: ") == 1
-        mechanism = "forced-failure-after-seal-before-commit" if ok else "forced-failure-boundary-missed"
+        post_bytes = (repo / TARGET).read_bytes()
+        genuine_forced = rc != 0 and forced_failure_state(post, baseline, pre_bytes, post_bytes, old, new)
+        no_op_rejected = (
+            not forced_failure_state(pre, baseline, pre_bytes, pre_bytes, old, new)
+            and not exact_seal_only_transition(pre_bytes, pre_bytes, old, new)
+        )
+        mutation_error = ""
+        try:
+            mutate_title_frontmatter_body(repo)
+            mutated = state(repo, pre_bytes)
+            mutated_bytes = (repo / TARGET).read_bytes()
+            mutation_rejected = (
+                not forced_failure_state(mutated, baseline, pre_bytes, mutated_bytes, old, new)
+                and not exact_seal_only_transition(pre_bytes, mutated_bytes, old, new)
+            )
+        except RuntimeError as exc:
+            mutation_error = str(exc)
+            mutation_rejected = False
+        restore = operator_restore(repo)
+        if restore["rc"] == 0:
+            write_seal(repo, new)
+        post = state(repo, pre_bytes)
+        post_bytes = (repo / TARGET).read_bytes()
+        ok = (
+            genuine_forced
+            and no_op_rejected
+            and mutation_rejected
+            and restore["rc"] == 0
+            and forced_failure_state(post, baseline, pre_bytes, post_bytes, old, new)
+        )
+        mechanism = "exact-seal-only-dirty-state" if ok else "forced-state-boundary-missed"
+        if mutation_error:
+            output = f"{output} negative-mutation={mutation_error}"
         if not ok:
             print(f"RED adoption-reseal-{outcome}/{mechanism}", file=sys.stderr)
             failures += 1
     elif outcome == "rerun":
-        rc, output = transition(repo, baseline, old, new, command, "first-hand-explicit", "forced-failure")
+        forced_rc, forced_output = transition(repo, baseline, old, new, command, "first-hand-explicit", "forced-failure")
         forced = state(repo, pre_bytes)
+        forced_bytes = (repo / TARGET).read_bytes()
         rerun_rc, rerun_output = transition(repo, baseline, old, new, command, "first-hand-explicit", None)
-        rerun_attempt = f"rerun rc={rerun_rc} output={rerun_output}"
-        git(repo, "restore", "--source", "HEAD", "--", TARGET)
+        rerun_after = state(repo, pre_bytes)
+        restore = operator_restore(repo)
+        compensated = state(repo, pre_bytes)
         fresh_approval = "fresh-approval-after-interruption"
-        rc, output = transition(repo, baseline, old, new, command, fresh_approval, None, "first-hand-explicit")
-        next_result = f"{rerun_attempt}; fresh approval evidence={fresh_approval}; compensation rc={rc} output={output}"
+        retry_rc, retry_output = transition(repo, baseline, old, new, command, fresh_approval, None, "first-hand-explicit")
         post = state(repo, pre_bytes)
-        ok, mechanism = assert_success(repo, baseline, pre_bytes, old, new, command) if rc == 0 else (False, output)
-        ok = (forced["dirty_target_only"] and rerun_rc != 0 and rerun_output == "rerun-fail-closed"
-              and rc == 0 and ok and post["status"] == ""
+        stages = [
+            durable_stage("forced-failure", "seal-write-before-commit", forced_rc, forced_output, forced),
+            durable_stage("rerun", "retry-while-target-dirty", rerun_rc, rerun_output, rerun_after),
+            durable_stage(
+                "compensation",
+                "operator-restore-target-only",
+                restore["rc"],
+                restore["output"],
+                compensated,
+                argv=restore["argv"],
+                result="clean-state-restored",
+            ),
+            durable_stage(
+                "retry",
+                "fresh-approval-success",
+                retry_rc,
+                retry_output,
+                post,
+                approval=fresh_approval,
+                commit_approval="first-hand-explicit",
+            ),
+        ]
+        rc, output = retry_rc, retry_output
+        next_result = "fresh-approval retry committed after target-only restore"
+        ok, mechanism = assert_success(repo, baseline, pre_bytes, old, new, command) if retry_rc == 0 else (False, retry_output)
+        expected_restore_argv = ["git", "-C", str(repo), "restore", "--source", "HEAD", "--", TARGET]
+        ok = (forced_rc != 0
+              and forced_failure_state(forced, baseline, pre_bytes, forced_bytes, old, new)
+              and rerun_rc != 0 and rerun_output == "rerun-fail-closed" and rerun_after == forced
+              and restore["argv"] == expected_restore_argv and restore["rc"] == 0
+              and compensated == pre and retry_rc == 0 and ok
               and git(repo, "rev-list", "--count", f"{baseline}..HEAD") == "1")
         if not ok:
             print(f"RED adoption-reseal-{outcome}/{mechanism}", file=sys.stderr)
             failures += 1
     elif outcome == "compensation":
-        rc, output = transition(repo, baseline, old, new, command, "first-hand-explicit", "forced-failure")
-        git(repo, "restore", "--source", "HEAD", "--", TARGET)
+        forced_rc, forced_output = transition(repo, baseline, old, new, command, "first-hand-explicit", "forced-failure")
+        forced = state(repo, pre_bytes)
+        forced_bytes = (repo / TARGET).read_bytes()
+        restore = operator_restore(repo)
         post = state(repo, pre_bytes)
-        ok = rc != 0 and post["head"] == baseline and post["plan_equals_pre"] and post["status"] == ""
+        stages = [
+            durable_stage("forced-failure", "seal-write-before-commit", forced_rc, forced_output, forced),
+            durable_stage(
+                "compensation",
+                "operator-restore-target-only",
+                restore["rc"],
+                restore["output"],
+                post,
+                argv=restore["argv"],
+                result="clean-state-restored",
+            ),
+        ]
+        rc, output = forced_rc, forced_output
+        ok = (
+            forced_rc != 0
+            and forced_failure_state(forced, baseline, pre_bytes, forced_bytes, old, new)
+            and restore["argv"] == ["git", "-C", str(repo), "restore", "--source", "HEAD", "--", TARGET]
+            and restore["rc"] == 0
+            and post == pre
+        )
         next_result = "operator-owned target-only compensation restored clean state"
         mechanism = "target-only-compensation" if ok else "compensation-boundary-missed"
         if not ok:
@@ -830,12 +1179,28 @@ for outcome in OUTCOMES:
         pre_cancel = state(repo, pre_bytes)
         post_rc, post_output = transition(repo, baseline, old, new, command, "first-hand-explicit", "post-write-cancel")
         forced = state(repo, pre_bytes)
-        git(repo, "restore", "--source", "HEAD", "--", TARGET)
+        forced_bytes = (repo / TARGET).read_bytes()
+        restore = operator_restore(repo)
         post = state(repo, pre_bytes)
-        next_result = f"pre-write rc={rc} output={output}; post-write rc={post_rc} output={post_output}; compensated clean={post['status']==''}"
-        ok = (rc != 0 and output == "pre-write-cancel" and pre_cancel["status"] == ""
-              and post_rc != 0 and forced["dirty_target_only"]
-              and post["status"] == "" and post["head"] == baseline)
+        stages = [
+            durable_stage("pre-write-cancel", "cancel-before-seal-write", rc, output, pre_cancel, result="clean-state-preserved"),
+            durable_stage("forced-failure", "seal-write-before-cancel-return", post_rc, post_output, forced),
+            durable_stage(
+                "compensation",
+                "operator-restore-target-only",
+                restore["rc"],
+                restore["output"],
+                post,
+                argv=restore["argv"],
+                result="clean-state-restored",
+            ),
+        ]
+        next_result = "post-write forced state compensated to clean state"
+        ok = (rc != 0 and output == "pre-write-cancel" and pre_cancel == pre
+              and post_rc != 0
+              and forced_failure_state(forced, baseline, pre_bytes, forced_bytes, old, new)
+              and restore["argv"] == ["git", "-C", str(repo), "restore", "--source", "HEAD", "--", TARGET]
+              and restore["rc"] == 0 and post == pre)
         mechanism = "pre-write-cancel-and-post-write-forced-failure-compensation" if ok else "cancellation-boundary-missed"
         if not ok:
             print(f"RED adoption-reseal-{outcome}/{mechanism}", file=sys.stderr)
@@ -846,6 +1211,15 @@ for outcome in OUTCOMES:
         post = state(repo, pre_bytes)
     elif outcome not in {"rerun", "compensation", "headless", "cancellation"}:
         post = state(repo, pre_bytes)
+    if outcome in {"rerun", "compensation", "cancellation"}:
+        expected_stages = {
+            "rerun": ("forced-failure", "rerun", "compensation", "retry"),
+            "compensation": ("forced-failure", "compensation"),
+            "cancellation": ("pre-write-cancel", "forced-failure", "compensation"),
+        }[outcome]
+        if tuple(stage["stage"] for stage in stages) != expected_stages:
+            print(f"RED adoption-reseal-{outcome}/stage-sequence-mismatch", file=sys.stderr)
+            failures += 1
     sentinel_observed = sentinel.read_bytes() if sentinel.exists() else b""
     sentinel_check = {
         "expected_sha256": hashlib.sha256(sentinel_expected).hexdigest(),
@@ -855,7 +1229,7 @@ for outcome in OUTCOMES:
     if not sentinel_check["unchanged"]:
         print(f"RED adoption-reseal-{outcome}/boundary-sentinel-mutated", file=sys.stderr)
         failures += 1
-    record = markdown(outcome, baseline, repo, pre, command, rc, output, post, next_result, mechanism, sentinel, sentinel_check, checker_runs)
+    record = markdown(outcome, baseline, repo, pre, command, rc, output, post, next_result, stages, mechanism, sentinel, sentinel_check, checker_runs)
     (evidence_root / f"adoption-reseal-{outcome}.md").write_text(record, encoding="utf-8")
 
 records = sorted(evidence_root.glob("adoption-reseal-*.md"))
@@ -872,6 +1246,9 @@ for record in records:
     missing = [field for field in mandatory if field not in text]
     if missing:
         print(f"RED adoption-evidence/{record.name}/missing={','.join(missing)}", file=sys.stderr)
+        failures += 1
+    if record.name in {"adoption-reseal-rerun.md", "adoption-reseal-compensation.md", "adoption-reseal-cancellation.md"} and "- durable stages: `" not in text:
+        print(f"RED adoption-evidence/{record.name}/missing=durable stages:", file=sys.stderr)
         failures += 1
 if failures or not block_ok:
     raise SystemExit(1)

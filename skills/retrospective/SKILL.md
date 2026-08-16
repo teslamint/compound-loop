@@ -38,7 +38,7 @@ Gather what's available; degrade gracefully rather than blocking on a missing so
 Retrospective consumes only repo-relative origin, applicability, terminal-transition, coverage-selection, and frontmatter-immutability rules; it does not require the full planning skill or its schema file.
 
 <!-- plan-consumer-contract: retrospective/v1 -->
-```json
+~~~json
 {"decision":"origin","fixture":"origin-repo-relative","expected":"accept","diagnostic":"repo-relative origin"}
 {"decision":"coverage","fixture":"no-plan-no-flip","expected":"no-flip","diagnostic":"no-plan"}
 {"decision":"coverage","fixture":"ledger-plan","expected":"transition","diagnostic":"same-commit"}
@@ -52,7 +52,7 @@ Retrospective consumes only repo-relative origin, applicability, terminal-transi
 {"decision":"immutability","fixture":"body-mutation","expected":"reject","diagnostic":"body"}
 {"decision":"immutability","fixture":"dirty-worktree-body-mutation","expected":"reject","diagnostic":"body"}
 {"decision":"immutability","fixture":"other-frontmatter-mutation","expected":"reject","diagnostic":"frontmatter"}
-```
+~~~
 <!-- end-plan-consumer-contract -->
 
 ### Origin and coverage selection

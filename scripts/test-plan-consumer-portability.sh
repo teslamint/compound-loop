@@ -62,6 +62,7 @@ mode, consumer, skill_file, fixture_root = sys.argv[1:]
 skill_path = Path(skill_file)
 root = Path(fixture_root)
 adoption_policy: dict | None = None
+INTERACTIVE_DEEPENING_MARKER = "interactive-deepening=first-hand-explicit"
 failures = 0
 
 
@@ -84,7 +85,7 @@ def parse_contract(path: Path) -> tuple[list[dict], str | None]:
     in_fence = False
     for line in block.splitlines():
         stripped = line.strip()
-        if stripped.startswith("```"):
+        if stripped.startswith(("```", "~~~")):
             in_fence = not in_fence
             continue
         if in_fence and stripped.startswith("{"):
@@ -175,6 +176,13 @@ def write_plan(directory: Path, name: str, fields: dict[str, str], body: str, hi
 
 def body_seal(text: str) -> str:
     return hashlib.sha256(text.split("---", 2)[2].encode("utf-8")).hexdigest()
+def canonical_body(text: str) -> str:
+    parts = text.split("---", 2)
+    if len(parts) != 3:
+        raise ValueError("malformed canonical body")
+    return parts[2]
+
+
 def independent_body_seal(text: str) -> str:
     canonical = text.split("---", 2)[2]
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -301,6 +309,12 @@ def adoption_cases(directory: Path, consumer: str) -> list[tuple[str, Path]]:
         evidence["reproduction_command"] = f"python3 migration-check.py {baseline} docs/plans/adoption.md"
         if name == "adoption-changed-body":
             path.write_text(current_text + "\nchanged body byte\n", encoding="utf-8")
+        if consumer == "reviewing" and name == "adoption-complete":
+            upgraded = current_text.replace("title: Adoption", "title: Upgraded Adoption", 1)
+            path.write_text(upgraded, encoding="utf-8")
+            run_git(repo, "add", "docs/plans/adoption.md")
+            run_git(repo, "commit", "-qm", "adoption upgrade")
+            current_text = upgraded
         if name == "adoption-missing-baseline":
             evidence["baseline"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
             evidence["reproduction_command"] = f"python3 migration-check.py {evidence['baseline']} docs/plans/adoption.md"
@@ -326,7 +340,13 @@ def adoption_cases(directory: Path, consumer: str) -> list[tuple[str, Path]]:
             )
             run_git(repo, "commit", "-qm", message)
             if name == "reseal-after-adoption":
-                path.write_text(adopted.replace(evidence["new_seal"], "f" * 64, 1), encoding="utf-8")
+                resealed = adopted.replace(evidence["new_seal"], "f" * 64, 1)
+                path.write_text(resealed, encoding="utf-8")
+                run_git(repo, "add", "docs/plans/adoption.md")
+                run_git(repo, "commit", "-qm", "unauthorized adoption reseal-away")
+                path.write_text(adopted, encoding="utf-8")
+                run_git(repo, "add", "docs/plans/adoption.md")
+                run_git(repo, "commit", "-qm", "restored adoption seal")
         cases.append((name, path))
     return cases
 def verify_transition(repo: Path, baseline: str, plan_path: str, evidence: dict, policy: dict, commit: str) -> tuple[bool, str]:
@@ -334,12 +354,25 @@ def verify_transition(repo: Path, baseline: str, plan_path: str, evidence: dict,
         parent = run_git(repo, "rev-parse", f"{commit}^")
     except subprocess.CalledProcessError:
         return False, "parent-missing"
-    if parent != baseline:
+    if baseline == commit:
+        return False, "parent-mismatch"
+    try:
+        run_git(repo, "merge-base", "--is-ancestor", baseline, commit)
+    except subprocess.CalledProcessError:
         return False, "parent-mismatch"
     if commit_paths(repo, commit) != {plan_path}:
         return False, "changed-paths"
-    parent_text = run_git_text(repo, "show", f"{parent}:{plan_path}")
-    current_text = run_git_text(repo, "show", f"{commit}:{plan_path}")
+    try:
+        parent_text = run_git_text(repo, "show", f"{parent}:{plan_path}")
+        current_text = run_git_text(repo, "show", f"{commit}:{plan_path}")
+        baseline_text = run_git_text(repo, "show", f"{baseline}:{plan_path}")
+    except subprocess.CalledProcessError:
+        return False, "missing-baseline"
+    try:
+        if canonical_body(baseline_text) != canonical_body(current_text):
+            return False, "baseline-body-mismatch"
+    except ValueError:
+        return False, "malformed-body"
     old_line = f"body_seal: {evidence.get('old_seal', '')}\n"
     new_line = f"body_seal: {evidence.get('new_seal', '')}\n"
     if parent_text.count(old_line) != 1 or current_text.count(new_line) != 1:
@@ -367,12 +400,160 @@ def verify_transition(repo: Path, baseline: str, plan_path: str, evidence: dict,
         return False, "message-evidence"
     return True, "transition-valid"
 
-def prior_transition(repo: Path, baseline: str, plan_path: str, evidence: dict, policy: dict) -> tuple[bool, str]:
+
+def verify_later_transition(repo: Path, plan_path: str, commit: str) -> tuple[bool, str]:
+    try:
+        parent = run_git(repo, "rev-parse", f"{commit}^")
+        parent_text = run_git_text(repo, "show", f"{parent}:{plan_path}")
+        current_text = run_git_text(repo, "show", f"{commit}:{plan_path}")
+    except subprocess.CalledProcessError:
+        return False, ""
+    paths = commit_paths(repo, commit)
+    seal_pattern = re.compile(r"(?m)^body_seal: ([0-9a-f]{64})$")
+    parent_seals = seal_pattern.findall(parent_text)
+    current_seals = seal_pattern.findall(current_text)
+    if len(parent_seals) != 1 or len(current_seals) != 1:
+        return False, ""
+    parent_seal, current_seal = parent_seals[0], current_seals[0]
+    try:
+        if parent_seal != body_seal(parent_text) or parent_seal != independent_body_seal(parent_text):
+            return False, ""
+    except (IndexError, ValueError):
+        return False, ""
+
+    parent_fields = parse_frontmatter_text(parent_text)
+    current_fields = parse_frontmatter_text(current_text)
+    if parent_fields.get("schema") != "plan/v1" or current_fields.get("schema") != "plan/v1":
+        return False, ""
+
+    if parent_seal == current_seal:
+        # An unchanged seal has exactly two legal terminal shapes.  Both
+        # mutate only the status and its evidence slot, preserve the
+        # canonical body, and carry exactly one same-commit companion.
+        if plan_path not in paths:
+            return False, ""
+        companion = paths - {plan_path}
+        if len(companion) != 1:
+            return False, ""
+        companion_path = next(iter(companion))
+        if parent_fields.get("status") != "approved":
+            return False, ""
+        changed_fields = {
+            key
+            for key in set(parent_fields) | set(current_fields)
+            if parent_fields.get(key) != current_fields.get(key)
+        }
+        try:
+            if canonical_body(parent_text) != canonical_body(current_text):
+                return False, ""
+        except ValueError:
+            return False, ""
+
+        if current_fields.get("status") == "done":
+            # Done requires a non-empty docs/retros/*.md companion and a
+            # completed_by commit.
+            retro_parts = Path(companion_path).parts
+            if (
+                len(retro_parts) != 3
+                or retro_parts[:2] != ("docs", "retros")
+                or not retro_parts[2].endswith(".md")
+            ):
+                return False, ""
+            try:
+                retro_text = run_git_text(repo, "show", f"{commit}:{companion_path}")
+            except subprocess.CalledProcessError:
+                return False, ""
+            if not retro_text.strip():
+                return False, ""
+            if changed_fields != {"status", "completed_by"}:
+                return False, ""
+            completed_by = current_fields.get("completed_by")
+            if not completed_by:
+                return False, ""
+            try:
+                run_git(repo, "cat-file", "-e", f"{completed_by}^{{commit}}")
+            except subprocess.CalledProcessError:
+                return False, ""
+            return True, current_seal
+
+        if current_fields.get("status") == "superseded":
+            # Superseded requires a repo-relative docs/plans/*.md successor
+            # companion whose path is recorded in superseded_by and exists
+            # as a committed file in this exact transition.
+            superseded_by = current_fields.get("superseded_by")
+            successor_parts = Path(companion_path).parts
+            if (
+                not superseded_by
+                or superseded_by != companion_path
+                or len(successor_parts) != 3
+                or successor_parts[:2] != ("docs", "plans")
+                or not successor_parts[2].endswith(".md")
+            ):
+                return False, ""
+            try:
+                if run_git(repo, "cat-file", "-t", f"{commit}:{companion_path}") != "blob":
+                    return False, ""
+            except subprocess.CalledProcessError:
+                return False, ""
+            if changed_fields != {"status", "superseded_by"}:
+                return False, ""
+            return True, current_seal
+
+        return False, ""
+    # Interactive deepening must be a real body edit paired with a digest
+    # update.  Its same-commit message must carry the exact shared
+    # first-hand authorization marker.
+    if paths != {plan_path}:
+        return False, ""
+    if {
+        key
+        for key in set(parent_fields) | set(current_fields)
+        if key != "body_seal" and parent_fields.get(key) != current_fields.get(key)
+    }:
+        return False, ""
+    try:
+        if canonical_body(parent_text) == canonical_body(current_text):
+            return False, ""
+        if current_seal != body_seal(current_text) or current_seal != independent_body_seal(current_text):
+            return False, ""
+    except (IndexError, ValueError):
+        return False, ""
+    marker_key = INTERACTIVE_DEEPENING_MARKER.partition("=")[0] + "="
+    marker_count = 0
+    for line in run_git_text(repo, "show", "-s", "--format=%B", commit).splitlines():
+        stripped = line.strip()
+        if stripped.startswith(marker_key):
+            if line != INTERACTIVE_DEEPENING_MARKER:
+                return False, ""
+            marker_count += 1
+    if marker_count != 1:
+        return False, ""
+    return True, current_seal
+
+
+def prior_transition(repo: Path, baseline: str, plan_path: str, evidence: dict, policy: dict) -> tuple[bool, str, str | None, str | None]:
+    valid_commits: list[str] = []
     for commit in run_git(repo, "log", "--format=%H", "--", plan_path).splitlines():
-        valid, detail = verify_transition(repo, baseline, plan_path, evidence, policy, commit)
+        valid, _ = verify_transition(repo, baseline, plan_path, evidence, policy, commit)
         if valid:
-            return True, detail
-    return False, "no-transition"
+            valid_commits.append(commit)
+    if not valid_commits:
+        return False, "no-transition", None, None
+    if len(valid_commits) != 1:
+        return False, "multiple-transitions", None, None
+    migration = valid_commits[0]
+    try:
+        migration_text = run_git_text(repo, "show", f"{migration}:{plan_path}")
+    except subprocess.CalledProcessError:
+        return False, "no-transition", None, None
+    latest_seal = evidence["new_seal"]
+    later_commits = run_git(repo, "log", "--reverse", "--format=%H", f"{migration}..HEAD", "--", plan_path).splitlines()
+    for commit in later_commits:
+        authorized, later_seal = verify_later_transition(repo, plan_path, commit)
+        if not authorized:
+            return False, "interactive deepening", None, None
+        latest_seal = later_seal
+    return True, "transition-valid", latest_seal, migration_text
 
 def adoption_decision(path: Path, fixture: str, consumer: str, policy: dict | None = None) -> tuple[str, str]:
     del fixture
@@ -404,7 +585,9 @@ def adoption_decision(path: Path, fixture: str, consumer: str, policy: dict | No
     if evidence.get("reproduction_command") != expected_command:
         return "reject", "reproduction command"
     repo = path.parents[2]
-    transition_found, transition_detail = prior_transition(repo, evidence["baseline"], plan_path, evidence, policy)
+    transition_found, transition_detail, transition_seal, migration_text = prior_transition(
+        repo, evidence["baseline"], plan_path, evidence, policy
+    )
     try:
         baseline_text = run_git_text(repo, "show", f"{evidence['baseline']}:{plan_path}")
     except subprocess.CalledProcessError:
@@ -413,7 +596,17 @@ def adoption_decision(path: Path, fixture: str, consumer: str, policy: dict | No
         current_text = handle.read()
     if policy["baseline_current_body"] != "equal":
         return "reject", "adoption-policy:baseline-current-equality"
-    if body_seal(baseline_text) != body_seal(current_text):
+    if transition_detail == "interactive deepening":
+        return "reject", "interactive deepening"
+    comparison_text = migration_text if transition_found and migration_text is not None else current_text
+    try:
+        # Adoption proves the baseline against the migration snapshot.  Later
+        # legal terminal/deepening commits are evaluated independently.
+        if canonical_body(baseline_text) != canonical_body(comparison_text):
+            return "reject", "changed-body"
+    except ValueError:
+        return "reject", "malformed-body"
+    if body_seal(baseline_text) != body_seal(comparison_text):
         return "reject", "changed-body"
     if consumer == "reviewing" and not transition_found:
         return "reject", f"migration commit:{transition_detail}"
@@ -422,12 +615,19 @@ def adoption_decision(path: Path, fixture: str, consumer: str, policy: dict | No
     if not re.fullmatch(r"[0-9a-f]{64}", evidence["new_seal"]):
         return "reject", "new seal"
     current_fields, _ = parse_frontmatter(path)
-    if transition_found and current_fields.get("body_seal") != evidence["new_seal"]:
+    expected_current_seal = (
+        transition_seal
+        if consumer == "reviewing" and transition_found
+        else evidence["new_seal"]
+        if consumer == "reviewing"
+        else evidence["old_seal"]
+    )
+    if transition_found and current_fields.get("body_seal") != expected_current_seal:
         return "reject", "interactive deepening"
-    expected_current_seal = evidence["new_seal"] if consumer == "reviewing" else evidence["old_seal"]
     if current_fields.get("body_seal") != expected_current_seal:
         return "reject", "new seal" if consumer == "reviewing" else "old seal"
-    if evidence["new_seal"] != body_seal(current_text) or evidence["new_seal"] != independent_body_seal(current_text):
+    expected_body_seal = expected_current_seal if consumer == "reviewing" else evidence["new_seal"]
+    if expected_body_seal != body_seal(current_text) or expected_body_seal != independent_body_seal(current_text):
         return "reject", "new seal"
     if policy["later_reseal"] != "reject-unless-interactive-deepening":
         return "reject", "adoption-policy:later-reseal"
@@ -560,6 +760,198 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
                 emit("FAIL", f"transition-mutation-{name}", f"diagnostic drift: expected={expected_detail} got={detail}")
             else:
                 emit("PASS", f"transition-mutation-{name}", f"rejected:{detail}")
+        def evaluate_later_history(name: str, repo: Path, expected: str) -> None:
+            candidate_plan = repo / source_plan
+            candidate_plan.with_suffix(candidate_plan.suffix + ".adoption.json").write_text(
+                json.dumps(evidence), encoding="utf-8"
+            )
+            actual, detail = adoption_decision(candidate_plan, name, "reviewing")
+            if actual == expected and (
+                (expected == "accept" and detail == "adoption-approved")
+                or (expected == "reject" and detail == "interactive deepening")
+            ):
+                emit("PASS", f"later-history-{name}", f"{actual}:{detail}")
+            else:
+                emit("FAIL", f"later-history-{name}", f"expected={expected} got={actual}:{detail}")
+
+        # Legal retrospective completion: the plan changes only its terminal
+        # mutable slots, and the same commit carries its companion retro.
+        retro_repo = fresh("retrospective-terminal")
+        retro_plan = retro_repo / source_plan
+        retro_text = retro_plan.read_text(encoding="utf-8")
+        retro_text = retro_text.replace("status: approved\n", "status: done\n", 1)
+        retro_text = retro_text.replace(
+            f"body_seal: {evidence['new_seal']}\n",
+            f"body_seal: {evidence['new_seal']}\ncompleted_by: {expected_commit}\n",
+            1,
+        )
+        retro_plan.write_text(retro_text, encoding="utf-8")
+        retro_path = retro_repo / "docs/retros/adoption.md"
+        retro_path.parent.mkdir(parents=True, exist_ok=True)
+        retro_path.write_text("# Adoption retrospective\n\nCompleted.\n", encoding="utf-8")
+        run_git(retro_repo, "add", source_plan, "docs/retros/adoption.md")
+        run_git(retro_repo, "commit", "-qm", "retrospective terminal transition")
+        evaluate_later_history("retrospective-terminal", retro_repo, "accept")
+
+        # The same frontmatter transition without its retro companion is not
+        # an authorized mutable-slot shape.
+        missing_retro_repo = fresh("retrospective-missing-companion")
+        missing_retro_plan = missing_retro_repo / source_plan
+        missing_retro_text = missing_retro_plan.read_text(encoding="utf-8")
+        missing_retro_text = missing_retro_text.replace("status: approved\n", "status: done\n", 1)
+        missing_retro_text = missing_retro_text.replace(
+            f"body_seal: {evidence['new_seal']}\n",
+            f"body_seal: {evidence['new_seal']}\ncompleted_by: {expected_commit}\n",
+            1,
+        )
+        missing_retro_plan.write_text(missing_retro_text, encoding="utf-8")
+        run_git(missing_retro_repo, "add", source_plan)
+        run_git(missing_retro_repo, "commit", "-qm", "terminal transition without retro")
+        evaluate_later_history("retrospective-missing-companion", missing_retro_repo, "reject")
+
+        # A retro transition with an unrelated frontmatter edit is also
+        # unauthorized, despite preserving the unchanged seal.
+        extra_retro_repo = fresh("retrospective-extra-frontmatter")
+        extra_retro_plan = extra_retro_repo / source_plan
+        extra_retro_text = extra_retro_plan.read_text(encoding="utf-8")
+        extra_retro_text = extra_retro_text.replace("status: approved\n", "status: done\n", 1)
+        extra_retro_text = extra_retro_text.replace(
+            f"body_seal: {evidence['new_seal']}\n",
+            f"body_seal: {evidence['new_seal']}\ncompleted_by: {expected_commit}\n",
+            1,
+        ).replace("title: Upgraded Adoption\n", "title: Mutated Adoption\n", 1)
+        extra_retro_plan.write_text(extra_retro_text, encoding="utf-8")
+        extra_retro_path = extra_retro_repo / "docs/retros/adoption.md"
+        extra_retro_path.parent.mkdir(parents=True, exist_ok=True)
+        extra_retro_path.write_text("# Adoption retrospective\n\nCompleted.\n", encoding="utf-8")
+        run_git(extra_retro_repo, "add", source_plan, "docs/retros/adoption.md")
+        run_git(extra_retro_repo, "commit", "-qm", "terminal transition with extra mutation")
+        evaluate_later_history("retrospective-extra-frontmatter", extra_retro_repo, "reject")
+
+        def make_superseded_repo(
+            name: str,
+            successor_field: str = "docs/plans/successor.md",
+            companion_path: str | None = "docs/plans/successor.md",
+            extra_path: str | None = None,
+            mutation: str | None = None,
+        ) -> Path:
+            repo = fresh(name)
+            plan = repo / source_plan
+            text = plan.read_text(encoding="utf-8")
+            text = text.replace("status: approved\n", "status: superseded\n", 1)
+            text = text.replace(
+                f"body_seal: {evidence['new_seal']}\n",
+                f"body_seal: {evidence['new_seal']}\nsuperseded_by: {successor_field}\n",
+                1,
+            )
+            if mutation == "extra-frontmatter":
+                text = text.replace("title: ", "title: Mutated ", 1)
+            elif mutation == "body":
+                text = text.rstrip("\n") + "\n\n## Unauthorized mutation\n\nRejected.\n"
+            plan.write_text(text, encoding="utf-8")
+            if companion_path is not None:
+                successor = repo / companion_path
+                successor.parent.mkdir(parents=True, exist_ok=True)
+                write_plan(
+                    successor.parent,
+                    successor.name,
+                    {
+                        "schema": "plan/v1",
+                        "title": "Successor",
+                        "type": "fix",
+                        "status": "approved",
+                        "date": "2026-08-16",
+                        "execution": "code",
+                    },
+                    "## Goal\n\nSuccessor fixture.\n",
+                )
+            if extra_path is not None:
+                extra = repo / extra_path
+                extra.parent.mkdir(parents=True, exist_ok=True)
+                extra.write_text("EXTRA\n", encoding="utf-8")
+            run_git(repo, "add", source_plan)
+            if companion_path is not None:
+                run_git(repo, "add", companion_path)
+            if extra_path is not None:
+                run_git(repo, "add", extra_path)
+            run_git(repo, "commit", "-qm", "superseded terminal transition")
+            return repo
+
+        # A post-adoption supersession must carry its repo-relative successor
+        # plan in the same commit as the unchanged-seal predecessor transition.
+        superseded_repo = make_superseded_repo("superseded-terminal")
+        evaluate_later_history("superseded-terminal", superseded_repo, "accept")
+
+        # Missing, misplaced, extra-path, and plan-byte mutations all reject.
+        missing_successor_repo = make_superseded_repo(
+            "superseded-missing-successor", companion_path=None
+        )
+        evaluate_later_history("superseded-missing-successor", missing_successor_repo, "reject")
+        wrong_successor_path_repo = make_superseded_repo(
+            "superseded-wrong-successor-path",
+            successor_field="docs/retros/successor.md",
+            companion_path="docs/retros/successor.md",
+        )
+        evaluate_later_history("superseded-wrong-successor-path", wrong_successor_path_repo, "reject")
+        extra_successor_path_repo = make_superseded_repo(
+            "superseded-extra-path", extra_path="extra.txt"
+        )
+        evaluate_later_history("superseded-extra-path", extra_successor_path_repo, "reject")
+        extra_successor_frontmatter_repo = make_superseded_repo(
+            "superseded-extra-frontmatter", mutation="extra-frontmatter"
+        )
+        evaluate_later_history(
+            "superseded-extra-frontmatter", extra_successor_frontmatter_repo, "reject"
+        )
+        extra_successor_body_repo = make_superseded_repo(
+            "superseded-extra-body", mutation="body"
+        )
+        evaluate_later_history("superseded-extra-body", extra_successor_body_repo, "reject")
+
+        def make_deepening_repo(name: str, authorization: str | None, seal_override: str | None = None) -> Path:
+            repo = fresh(name)
+            plan = repo / source_plan
+            text = plan.read_text(encoding="utf-8")
+            deepened = text.rstrip("\n") + "\n\n## Interactive deepening\n\nAccepted finding.\n"
+            deepened_seal = independent_body_seal(deepened)
+            if seal_override is not None:
+                deepened_seal = seal_override
+            deepened = deepened.replace(
+                f"body_seal: {evidence['new_seal']}\n",
+                f"body_seal: {deepened_seal}\n",
+                1,
+            )
+            plan.write_text(deepened, encoding="utf-8")
+            message = "interactive plan deepening\n\n"
+            if authorization is not None:
+                message += f"{authorization}\n"
+            run_git(repo, "add", source_plan)
+            run_git(repo, "commit", "-qm", message)
+            return repo
+
+        # Authorized deepening must change both the body and its digest.
+        deepening_repo = make_deepening_repo("interactive-deepening", INTERACTIVE_DEEPENING_MARKER)
+        evaluate_later_history("interactive-deepening", deepening_repo, "accept")
+
+        # A body change carrying a stale/wrong digest is not deepening.
+        wrong_digest_repo = make_deepening_repo(
+            "deepening-wrong-digest", INTERACTIVE_DEEPENING_MARKER, "e" * 64
+        )
+        evaluate_later_history("deepening-wrong-digest", wrong_digest_repo, "reject")
+
+        # Missing and incorrect authorization are real commit mutations, not
+        # policy-object substitutions, and must fail through the same history
+        # verifier.
+        missing_auth_repo = make_deepening_repo("deepening-missing-authorization", None)
+        evaluate_later_history("deepening-missing-authorization", missing_auth_repo, "reject")
+        wrong_auth_repo = make_deepening_repo(
+            "deepening-wrong-authorization",
+            f"{INTERACTIVE_DEEPENING_MARKER.split('=', 1)[0]}=fresh-approval-after-interruption",
+        )
+        evaluate_later_history("deepening-wrong-authorization", wrong_auth_repo, "reject")
+
+
+
     finally:
         shutil.rmtree(mutation_root, ignore_errors=True)
 
@@ -1143,6 +1535,7 @@ elif [ -f "$ROOT/schemas/plan-schema.md" ]; then
 fi
 if [ -z "$ssot" ]; then
   fail "shared SSOT fallback finds skills/planning/schemas/plan-schema.md or schemas/plan-schema.md"
+else
   mkdir -p "$fixture/skills/planning/schemas"
   cp "$ssot" "$fixture/skills/planning/schemas/plan-schema.md"
   for consumer in implementing release-loop retrospective; do

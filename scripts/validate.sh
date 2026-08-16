@@ -138,7 +138,7 @@ if contract_text is not None:
         canonical = {}
 
 seen = set()
-candidate_re = re.compile(r"`([^`\n]+)`")
+candidate_re = re.compile(r"`([^`]+)`")
 state_re = re.compile(r"^(Documentation|Refresh|Retrospective|Release|Publication)\s+(complete|skipped|failed)\b", re.I)
 state_key = {"complete": "success", "skipped": "skipped", "failed": "failed"}
 producer_key = {"documentation": "compound", "refresh": "compound-refresh", "retrospective": "retrospective", "release": "release", "publication": "release publish"}
@@ -678,6 +678,43 @@ if not plans:
     print(f"ok:   {TAG} no plan files — skipped")
     sys.exit(0)
 
+def extract_frontmatter(text):
+    lines = text.split("\n")
+    if not lines or lines[0].rstrip() != "---":
+        raise ValueError("file does not start with '---' frontmatter delimiter line")
+
+    end_idx = None
+    for i in range(1, len(lines)):
+        if lines[i].rstrip() == "---":
+            end_idx = i
+            break
+    if end_idx is None:
+        raise ValueError("frontmatter not closed (no '---' line after the opening delimiter)")
+
+    return lines[1:end_idx]
+
+def unquote(value):
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+def body_seal_scalar(fm_lines):
+    value = None
+    for line in fm_lines:
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if line.startswith((" ", "\t")) or ":" not in line:
+            continue
+        key, _, raw = line.partition(":")
+        if key.strip() != "body_seal":
+            continue
+        raw = raw.strip()
+        # Match the shipped parser: an empty raw value is its list placeholder,
+        # while quotes are removed before scalar validation.
+        value = unquote(raw) if raw else []
+    return value
+
 failures = []
 checked = 0
 skipped = 0
@@ -687,17 +724,30 @@ for plan in plans:
     with open(plan, encoding="utf-8", newline=None) as handle:
         text = handle.read()
 
-    parts = text.split("---", 2)
-    frontmatter = parts[1] if len(parts) > 1 else ""
-    key_match = re.search(r"^body_seal:[ \t]*(.*)$", frontmatter, re.M)
-    if not key_match:
+    try:
+        fm_lines = extract_frontmatter(text)
+    except ValueError:
+        failures.append(
+            f"FAIL: {TAG} {rel}: body_seal extraction failed: "
+            "canonical body requires two '---' delimiters"
+        )
+        continue
+
+    stored = body_seal_scalar(fm_lines)
+    if stored is None or stored == "":
         skipped += 1
         continue
 
-    raw_value = key_match.group(1).strip()
-    if not re.fullmatch(r"[0-9a-f]{64}", raw_value):
+    if not isinstance(stored, str):
         failures.append(
-            f"FAIL: {TAG} {rel}: body_seal present but malformed: '{raw_value}'"
+            f"FAIL: {TAG} {rel}: body_seal present but non-scalar: "
+            "expected a scalar value"
+        )
+        continue
+
+    if not re.fullmatch(r"[0-9a-f]{64}", stored):
+        failures.append(
+            f"FAIL: {TAG} {rel}: body_seal present but malformed: '{stored}'"
         )
         continue
 
@@ -710,7 +760,6 @@ for plan in plans:
         )
         continue
 
-    stored = raw_value
     computed = hashlib.sha256(body.encode("utf-8")).hexdigest()
 
     if stored != computed:
