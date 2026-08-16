@@ -63,6 +63,7 @@ skill_path = Path(skill_file)
 root = Path(fixture_root)
 adoption_policy: dict | None = None
 INTERACTIVE_DEEPENING_MARKER = "interactive-deepening=first-hand-explicit"
+_TRACKER_UNSPECIFIED = object()
 failures = 0
 
 
@@ -223,7 +224,65 @@ def canonical_body(text: str) -> str:
 
 
 def independent_body_seal(text: str) -> str:
-    return hashlib.sha256(canonical_body_bytes(text.encode("utf-8"))).hexdigest()
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    try:
+        body = normalized.split("---", 2)[2]
+    except IndexError:
+        raise ValueError("malformed independent body")
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def seal_discriminator_cases(directory: Path) -> None:
+    base = {
+        "schema": "plan/v1",
+        "title": "Fixture",
+        "type": "fix",
+        "status": "approved",
+        "date": "2026-08-15",
+        "execution": "code",
+    }
+    cases = (
+        (
+            "seal-literal-split",
+            dict(base),
+            "## Goal\n\nprefix\n---\nsuffix\n",
+        ),
+        (
+            "seal-frontmatter-inline-delimiter",
+            {**base, "title": "Fixture --- inline delimiter"},
+            "## Goal\n\nfixture\n",
+        ),
+    )
+    for name, fields, body in cases:
+        path = write_plan(directory, f"{name}.md", fields, body)
+        expected = independent_body_seal(path.read_text(encoding="utf-8"))
+        sealed_fields = dict(fields)
+        sealed_fields["body_seal"] = (
+            "0" * 64 if name == "seal-frontmatter-inline-delimiter" else expected
+        )
+        path = write_plan(directory, f"{name}.md", sealed_fields, body)
+        expected = independent_body_seal(path.read_text(encoding="utf-8"))
+        actual_seal = body_seal(path.read_text(encoding="utf-8"))
+        actual_raw_seal = raw_body_seal(path.read_bytes())
+        if actual_seal != expected or actual_raw_seal != expected:
+            emit(
+                "FAIL",
+                f"{name}-seal-parity",
+                f"independent={expected} body={actual_seal} raw={actual_raw_seal}",
+            )
+        else:
+            emit("PASS", f"{name}-seal-parity", "independent/shipped seal parity")
+        actual, detail = implementing_decision(path, name)
+        if name == "seal-frontmatter-inline-delimiter":
+            if actual == "reject" and "stored=" in detail and "computed=" in detail:
+                emit("PASS", f"{name}-decision", f"{actual}:ambiguous inline delimiter")
+            else:
+                emit("FAIL", f"{name}-decision", f"expected=reject got={actual}:{detail}")
+        elif actual == "accept" and not detail:
+            emit("PASS", f"{name}-decision", f"{actual}:literal extraction")
+        else:
+            emit("FAIL", f"{name}-decision", f"expected=accept got={actual}:{detail}")
+
 
 def make_sealed_plan(directory: Path, name: str, fields: dict[str, str], body: str, history: dict | None = None) -> Path:
     path = write_plan(directory, name, fields, body, history)
@@ -471,8 +530,18 @@ def verify_transition(repo: Path, baseline: str, plan_path: str, evidence: dict,
     return True, "transition-valid"
 
 
-def verify_later_transition(repo: Path, plan_path: str, commit: str) -> tuple[bool, str]:
-    terminal_valid, terminal_detail = verify_plan_terminal_transition(repo, plan_path, commit)
+def verify_later_transition(
+    repo: Path,
+    plan_path: str,
+    commit: str,
+    tracker_path: str | None | object = _TRACKER_UNSPECIFIED,
+) -> tuple[bool, str]:
+    terminal_valid, terminal_detail = verify_plan_terminal_transition(
+        repo,
+        plan_path,
+        commit,
+        tracker_path=tracker_path,
+    )
     if terminal_valid:
         return True, terminal_detail
     if terminal_detail != "not-terminal":
@@ -565,7 +634,14 @@ def classify_pre_migration_commit(repo: Path, plan_path: str, commit: str) -> st
     return "frontmatter"
 
 
-def prior_transition(repo: Path, baseline: str, plan_path: str, evidence: dict, policy: dict) -> tuple[bool, str, str | None, str | None]:
+def prior_transition(
+    repo: Path,
+    baseline: str,
+    plan_path: str,
+    evidence: dict,
+    policy: dict,
+    tracker_path: str | None | object = _TRACKER_UNSPECIFIED,
+) -> tuple[bool, str, str | None, str | None]:
     valid_commits: list[str] = []
     for commit in run_git(repo, "log", "--format=%H", "--", plan_path).splitlines():
         valid, _ = verify_transition(repo, baseline, plan_path, evidence, policy, commit)
@@ -594,13 +670,24 @@ def prior_transition(repo: Path, baseline: str, plan_path: str, evidence: dict, 
     latest_seal = evidence["new_seal"]
     later_commits = run_git(repo, "log", "--reverse", "--format=%H", f"{migration}..HEAD", "--", plan_path).splitlines()
     for commit in later_commits:
-        authorized, later_seal = verify_later_transition(repo, plan_path, commit)
+        authorized, later_seal = verify_later_transition(
+            repo,
+            plan_path,
+            commit,
+            tracker_path=tracker_path,
+        )
         if not authorized:
             return False, "interactive deepening", None, None
         latest_seal = later_seal
     return True, "transition-valid", latest_seal, migration_text
 
-def adoption_decision(path: Path, fixture: str, consumer: str, policy: dict | None = None) -> tuple[str, str]:
+def adoption_decision(
+    path: Path,
+    fixture: str,
+    consumer: str,
+    policy: dict | None = None,
+    tracker_path: str | None | object = _TRACKER_UNSPECIFIED,
+) -> tuple[str, str]:
     del fixture
     policy = adoption_policy if policy is None else policy
     policy_error = policy_violation(policy)
@@ -631,7 +718,12 @@ def adoption_decision(path: Path, fixture: str, consumer: str, policy: dict | No
         return "reject", "reproduction command"
     repo = path.parents[2]
     transition_found, transition_detail, transition_seal, migration_text = prior_transition(
-        repo, evidence["baseline"], plan_path, evidence, policy
+        repo,
+        evidence["baseline"],
+        plan_path,
+        evidence,
+        policy,
+        tracker_path=tracker_path,
     )
     try:
         baseline_raw = git_blob(repo, evidence["baseline"], plan_path)
@@ -692,7 +784,12 @@ def evaluate_adoption_cases(rows: list[dict], cases: list[tuple[str, Path]], con
         repo = path.parents[2]
         before_head = run_git(repo, "rev-parse", "HEAD")
         before_bytes = path.read_bytes()
-        actual, detail = adoption_decision(path, fixture, consumer)
+        actual, detail = adoption_decision(
+            path,
+            fixture,
+            consumer,
+            tracker_path=None,
+        )
         after_head = run_git(repo, "rev-parse", "HEAD")
         after_bytes = path.read_bytes()
         if actual != row["expected"] or row["diagnostic"] not in detail:
@@ -1425,6 +1522,51 @@ def adoption_history_boundaries(cases: list[tuple[str, Path]], consumer: str) ->
                 "adoption-mixed-terminal",
                 f"expected=reject:interactive deepening got={actual}:{detail}",
             )
+        def evaluate_modeled_tracker(name: str, extra_tracker: bool = False) -> None:
+            repo = clone(name)
+            plan = repo / "docs/plans/adoption.md"
+            parent = run_git(repo, "rev-parse", "HEAD")
+            done_plan(plan, parent)
+            retro = repo / "docs/retros/adoption.md"
+            retro.parent.mkdir(parents=True, exist_ok=True)
+            retro.write_text("# Adoption retrospective\n\nCompleted.\n", encoding="utf-8")
+            modeled_tracker = "docs/tracking/adoption.md"
+            tracker = repo / modeled_tracker
+            tracker.parent.mkdir(parents=True, exist_ok=True)
+            tracker.write_text("base tracker\nretro update\n", encoding="utf-8")
+            extra = repo / "UNMODELED.md"
+            if extra_tracker:
+                extra.write_text("unmodeled tracker\n", encoding="utf-8")
+            add_paths = [
+                "docs/plans/adoption.md",
+                "docs/retros/adoption.md",
+                modeled_tracker,
+            ]
+            if extra_tracker:
+                add_paths.append("UNMODELED.md")
+            run_git(repo, "add", *add_paths)
+            run_git(repo, "commit", "-qm", "adoption terminal transition with modeled tracker")
+            actual, detail = adoption_decision(
+                plan,
+                name,
+                "reviewing",
+                tracker_path=modeled_tracker,
+            )
+            expected = "reject" if extra_tracker else "accept"
+            if (
+                actual == expected
+                and (
+                    (expected == "accept" and detail == "adoption-approved")
+                    or (expected == "reject" and detail == "interactive deepening")
+                )
+            ):
+                emit("PASS", name, f"{actual}:{detail}")
+            else:
+                emit("FAIL", name, f"expected={expected} got={actual}:{detail}")
+
+        evaluate_modeled_tracker("adoption-custom-tracker")
+        evaluate_modeled_tracker("adoption-extra-unmodeled-tracker", extra_tracker=True)
+
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1485,10 +1627,15 @@ def git_blob(repo: Path, revision: str, relative: str) -> bytes:
 
 def canonical_body_bytes(raw: bytes) -> bytes:
     try:
-        _, _, body_start = _frontmatter_bounds(raw)
-    except ValueError:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
         raise ValueError("malformed canonical body")
-    return _universal_newlines(raw[body_start:])
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    try:
+        body = text.split("---", 2)[2]
+    except IndexError:
+        raise ValueError("malformed canonical body")
+    return body.encode("utf-8")
 
 
 def raw_body_seal(raw: bytes) -> str:
@@ -1620,7 +1767,6 @@ def terminal_plan_blob(repo: Path, plan_path: str, commit: str) -> tuple[bool, s
     return False, "not-terminal"
 
 
-_TRACKER_UNSPECIFIED = object()
 def verify_plan_terminal_transition(
     repo: Path,
     plan_path: str,
@@ -1856,7 +2002,7 @@ def mutate_transition_target(path: Path, mutation: str) -> None:
         fields = dict(before_fields)
         fields["date"] = "2099-12-31"
         frontmatter = "\n".join(f"{key}: {value}" for key, value in fields.items())
-        after = f"---\n{frontmatter}\n---\n{before_body}"
+        after = f"---\n{frontmatter}\n---{before_body}"
     else:
         raise ValueError(f"unknown transition mutation: {mutation}")
     after_fields = parse_frontmatter_text(after)
@@ -1915,6 +2061,26 @@ def retro_history_mutations(cases: list[tuple[str, Path]]) -> None:
             spec.update(overrides)
             (case_dir / "case.json").write_text(json.dumps(spec), encoding="utf-8")
             actual, detail = retro_decision(case_dir)
+            if name == "extra-tracker-artifact":
+                commit = run_git(repo, "rev-parse", "HEAD")
+                direct = verify_plan_terminal_transition(
+                    repo,
+                    "docs/plans/one.md",
+                    commit,
+                    tracker_path=spec.get("tracker"),
+                )
+                if direct != (False, "terminal-tracker"):
+                    emit(
+                        "FAIL",
+                        "retro-extra-tracker-terminal",
+                        f"expected=(False, 'terminal-tracker') got={direct}",
+                    )
+                else:
+                    emit(
+                        "PASS",
+                        "retro-extra-tracker-terminal",
+                        "terminal validator rejected unmodeled tracker",
+                    )
             if actual == expected and diagnostic in detail:
                 emit("PASS", f"retro-history-{name}", f"{actual}:{detail}")
             else:
@@ -2310,7 +2476,9 @@ if mode == "fixtures":
     else:
         if consumer == "implementing":
             cases = implementing_cases(root / "implementing")
+            evaluate_cases(rows, cases, implementing_decision)
             diagnostic_mutations(rows, cases, implementing_decision)
+            seal_discriminator_cases(root / "implementing")
             body_yaml_boundary(root / "implementing")
         elif consumer == "release-loop":
             cases = release_cases(root / "release-loop")
