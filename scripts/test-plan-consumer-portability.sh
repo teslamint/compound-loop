@@ -147,13 +147,52 @@ def find_row(rows: list[dict], fixture: str) -> dict | None:
     return matches[0]
 
 
+def _raw_line_spans(raw: bytes) -> list[tuple[int, int, int]]:
+    spans: list[tuple[int, int, int]] = []
+    start = 0
+    while start < len(raw):
+        cursor = start
+        while cursor < len(raw) and raw[cursor : cursor + 1] not in (b"\r", b"\n"):
+            cursor += 1
+        content_end = cursor
+        if cursor == len(raw):
+            end = cursor
+        elif raw[cursor : cursor + 2] == b"\r\n":
+            end = cursor + 2
+        else:
+            end = cursor + 1
+        spans.append((start, content_end, end))
+        start = end
+    return spans
+
+
+def _frontmatter_bounds(raw: bytes) -> tuple[int, int, int]:
+    spans = _raw_line_spans(raw)
+    if not spans or raw[spans[0][0] : spans[0][1]] != b"---":
+        raise ValueError("malformed frontmatter")
+    for start, content_end, end in spans[1:]:
+        if raw[start:content_end] == b"---":
+            return spans[0][2], start, end
+    raise ValueError("malformed frontmatter")
+
+
+def _frontmatter_region(raw: bytes) -> bytes:
+    open_end, close_start, _ = _frontmatter_bounds(raw)
+    return raw[open_end:close_start]
+
+
+def _universal_newlines(raw: bytes) -> bytes:
+    return raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def parse_frontmatter_text(text: str) -> dict[str, str]:
-    parts = text.split("---", 2)
-    if len(parts) < 3:
+    try:
+        region = _frontmatter_region(text.encode("utf-8"))
+    except (UnicodeEncodeError, ValueError):
         return {}
     values: dict[str, str] = {}
-    for line in parts[1].splitlines():
-        match = re.match(r"^([a-z_]+):(?:[ \t]*(.*))?$", line)
+    for line in region.splitlines():
+        match = re.match(r"^([a-z_]+):(?:[ \t]*(.*))?$", line.decode("utf-8"))
         if match:
             values[match.group(1)] = (match.group(2) or "").strip()
     return values
@@ -175,23 +214,38 @@ def write_plan(directory: Path, name: str, fields: dict[str, str], body: str, hi
 
 
 def body_seal(text: str) -> str:
-    return hashlib.sha256(text.split("---", 2)[2].encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical_body_bytes(text.encode("utf-8"))).hexdigest()
+
+
 def canonical_body(text: str) -> str:
-    parts = text.split("---", 2)
-    if len(parts) != 3:
-        raise ValueError("malformed canonical body")
-    return parts[2]
+    return canonical_body_bytes(text.encode("utf-8")).decode("utf-8")
+
 
 
 def independent_body_seal(text: str) -> str:
-    canonical = text.split("---", 2)[2]
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical_body_bytes(text.encode("utf-8"))).hexdigest()
 
 def make_sealed_plan(directory: Path, name: str, fields: dict[str, str], body: str, history: dict | None = None) -> Path:
     path = write_plan(directory, name, fields, body, history)
     fields = dict(fields)
     fields["body_seal"] = independent_body_seal(path.read_text(encoding="utf-8"))
     return write_plan(directory, name, fields, body, history)
+def body_yaml_boundary(directory: Path) -> None:
+    body = "## Goal\n\nfixture\n\n```yaml\n---\nstatus: approved\n---\n```\n"
+    fields = {
+        "schema": "plan/v1",
+        "title": "Body YAML",
+        "type": "fix",
+        "status": "approved",
+        "date": "2026-08-15",
+        "execution": "code",
+    }
+    path = make_sealed_plan(directory, "seal-body-yaml.md", fields, body)
+    actual, detail = implementing_decision(path, "seal-body-yaml")
+    if actual == "accept" and not detail:
+        emit("PASS", "seal-body-yaml", "column-zero body YAML delimiters ignored")
+    else:
+        emit("FAIL", "seal-body-yaml", f"expected=accept got={actual}:{detail}")
 
 
 def implementing_cases(directory: Path) -> list[tuple[str, Path]]:
@@ -369,15 +423,24 @@ def verify_transition(repo: Path, baseline: str, plan_path: str, evidence: dict,
         return False, "malformed-body"
     old_value = evidence.get("old_seal", "").encode("ascii", "ignore")
     new_value = evidence.get("new_seal", "").encode("ascii", "ignore")
-    old_line = re.compile(rb"(?m)^body_seal: " + re.escape(old_value) + rb"(?:\r\n|\n|\r|$)")
-    new_line = re.compile(rb"(?m)^body_seal: " + re.escape(new_value) + rb"(?:\r\n|\n|\r|$)")
-    if len(old_line.findall(parent_raw)) != 1 or len(new_line.findall(current_raw)) != 1:
-        return False, "seal-line"
-    seal_line = re.compile(rb"(?m)^body_seal: [0-9a-f]{64}(?P<ending>\r\n|\n|\r|$)")
-    def seal_placeholder(match: re.Match[bytes]) -> bytes:
-        return b"body_seal: <seal>" + match.group("ending")
-    parent_without = seal_line.sub(seal_placeholder, parent_raw, count=1)
-    current_without = seal_line.sub(seal_placeholder, current_raw, count=1)
+    old_line = re.compile(
+        rb"(?m)^body_seal: " + re.escape(old_value) + rb"(?:\r\n|\n|\r|$)"
+    )
+    new_line = re.compile(
+        rb"(?m)^body_seal: " + re.escape(new_value) + rb"(?:\r\n|\n|\r|$)"
+    )
+    try:
+        parent_region = _frontmatter_region(parent_raw)
+        current_region = _frontmatter_region(current_raw)
+        if (
+            len(old_line.findall(parent_region)) != 1
+            or len(new_line.findall(current_region)) != 1
+        ):
+            return False, "seal-line"
+        parent_without = _frontmatter_seal_placeholder(parent_raw)
+        current_without = _frontmatter_seal_placeholder(current_raw)
+    except ValueError:
+        return False, "malformed-body"
     if parent_without != current_without:
         return False, "non-seal-bytes"
     commit_policy = policy["migration_commit"]
@@ -420,8 +483,11 @@ def verify_later_transition(repo: Path, plan_path: str, commit: str) -> tuple[bo
         return False, ""
     parent_fields = parse_frontmatter_text(parent_text)
     current_fields = parse_frontmatter_text(current_text)
-    parent_seals = re.findall(rb"(?m)^body_seal: ([0-9a-f]{64})(?:\r\n|\n|\r|$)", parent_raw)
-    current_seals = re.findall(rb"(?m)^body_seal: ([0-9a-f]{64})(?:\r\n|\n|\r|$)", current_raw)
+    try:
+        parent_seals = _frontmatter_field_values(parent_raw, "body_seal")
+        current_seals = _frontmatter_field_values(current_raw, "body_seal")
+    except ValueError:
+        return False, ""
     if len(parent_seals) != 1 or len(current_seals) != 1:
         return False, ""
     if parent_fields.get("schema") != "plan/v1" or current_fields.get("schema") != "plan/v1":
@@ -468,12 +534,18 @@ def classify_pre_migration_commit(repo: Path, plan_path: str, commit: str) -> st
     try:
         if canonical_body_bytes(parent_raw) != canonical_body_bytes(current_raw):
             return "body"
+        _, _, parent_body_start = _frontmatter_bounds(parent_raw)
+        _, _, current_body_start = _frontmatter_bounds(current_raw)
+        if parent_raw[parent_body_start:] != current_raw[current_body_start:]:
+            return "body"
+        parent_seals = _frontmatter_field_lines(parent_raw, "body_seal")
+        current_seals = _frontmatter_field_lines(current_raw, "body_seal")
+        if parent_seals != current_seals:
+            return "seal"
+        if _frontmatter_payload_shape(parent_raw) != _frontmatter_payload_shape(current_raw):
+            return "frontmatter-layout"
     except ValueError:
-        return "body"
-    parent_seals = re.findall(rb"(?m)^body_seal:[^\r\n]*(?:\r\n|\n|\r|$)", parent_raw)
-    current_seals = re.findall(rb"(?m)^body_seal:[^\r\n]*(?:\r\n|\n|\r|$)", current_raw)
-    if parent_seals != current_seals:
-        return "seal"
+        return "frontmatter"
     parent_fields = parse_frontmatter_text(parent_text)
     current_fields = parse_frontmatter_text(current_text)
     if parent_fields.get("schema") != "plan/v1" or current_fields.get("schema") != "plan/v1":
@@ -807,6 +879,19 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
             )
             commit_plan(migrated, migration_message())
 
+        def selective_nonseal_crlf_restore_migration(repo: Path, baseline_text: str, commit_plan, migration_message) -> None:
+            changed = baseline_text.replace(
+                "title: Adoption\n", "title: Adoption\r\n", 1
+            )
+            commit_plan(changed, "unauthorized selective frontmatter CRLF rewrite")
+            commit_plan(baseline_text, "restored selective frontmatter line ending")
+            migrated = baseline_text.replace(
+                f"body_seal: {evidence['old_seal']}\n",
+                f"body_seal: {evidence['new_seal']}\n",
+                1,
+            )
+            commit_plan(migrated, migration_message())
+
         def crlf_change_restore_migration(repo: Path, baseline_text: str, commit_plan, migration_message) -> None:
             changed = baseline_text.replace("\n", "\r\n")
             changed = changed.replace(
@@ -844,6 +929,10 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
         evaluate_pre_migration_history(
             "crlf-change-restoration-migration",
             crlf_change_restore_migration,
+        )
+        evaluate_pre_migration_history(
+            "selective-nonsealing-crlf-restoration-migration",
+            selective_nonseal_crlf_restore_migration,
         )
         evaluate_pre_migration_history(
             "title-upgrade-migration",
@@ -1172,6 +1261,7 @@ def adoption_evidence_deletions(rows: list[dict], cases: list[tuple[str, Path]],
         "approval": "approval",
         "baseline": "baseline commit",
         "plan_path": "plan path",
+
         "old_seal": "old seal",
         "new_seal": "new seal",
         "reproduction_command": "reproduction command",
@@ -1213,6 +1303,105 @@ def adoption_policy_mutations(cases: list[tuple[str, Path]], consumer: str) -> N
             emit("FAIL", f"operative-policy-mutation-{name}", "weakened adoption policy was accepted")
         else:
             emit("PASS", f"operative-policy-mutation-{name}", f"policy mutation rejected:{detail}")
+def adoption_history_boundaries(cases: list[tuple[str, Path]], consumer: str) -> None:
+    if consumer != "reviewing":
+        return
+    complete = dict(cases)["adoption-complete"]
+    source_case = complete.parents[3]
+    root = Path(tempfile.mkdtemp(prefix="adoption-history-boundaries-"))
+
+    def clone(name: str) -> Path:
+        destination = root / name
+        shutil.copytree(source_case, destination)
+        return destination / "repo"
+
+    def done_plan(plan: Path, parent: str) -> None:
+        raw = _set_frontmatter_payload(plan.read_bytes(), "status", "done")
+        plan.write_bytes(_insert_frontmatter_field(raw, "completed_by", parent))
+
+    try:
+        dated_repo = clone("dated-retro")
+        dated_plan = dated_repo / "docs/plans/adoption.md"
+        dated_parent = run_git(dated_repo, "rev-parse", "HEAD")
+        done_plan(dated_plan, dated_parent)
+        dated_retro = dated_repo / "docs/retros/2026-08-16-adoption-retro.md"
+        dated_retro.parent.mkdir(parents=True, exist_ok=True)
+        dated_retro.write_text("# Dated adoption retrospective\n", encoding="utf-8")
+        run_git(
+            dated_repo,
+            "add",
+            "docs/plans/adoption.md",
+            "docs/retros/2026-08-16-adoption-retro.md",
+        )
+        run_git(dated_repo, "commit", "-qm", "dated retro terminal transition")
+        actual, detail = adoption_decision(dated_plan, "adoption-dated-retro", "reviewing")
+        if actual == "accept" and detail == "adoption-approved":
+            emit("PASS", "adoption-dated-retro", f"{actual}:{detail}")
+        else:
+            emit("FAIL", "adoption-dated-retro", f"expected=accept got={actual}:{detail}")
+
+        mixed_repo = clone("mixed-terminal")
+        sibling = make_sealed_plan(
+            mixed_repo / "docs/plans",
+            "sibling.md",
+            {
+                "schema": "plan/v1",
+                "title": "Sibling",
+                "type": "fix",
+                "status": "approved",
+                "date": "2026-08-16",
+                "execution": "code",
+            },
+            "## Goal\n\nSibling fixture.\n",
+        )
+        write_plan(
+            mixed_repo / "docs/plans",
+            "successor.md",
+            {
+                "schema": "plan/v1",
+                "title": "Successor",
+                "type": "fix",
+                "status": "approved",
+                "date": "2026-08-16",
+                "execution": "code",
+            },
+            "## Goal\n\nSuccessor fixture.\n",
+        )
+        run_git(mixed_repo, "add", "docs/plans/sibling.md", "docs/plans/successor.md")
+        run_git(mixed_repo, "commit", "-qm", "mixed terminal setup")
+        mixed_parent = run_git(mixed_repo, "rev-parse", "HEAD")
+        mixed_plan = mixed_repo / "docs/plans/adoption.md"
+        done_plan(mixed_plan, mixed_parent)
+        sibling_raw = _set_frontmatter_payload(sibling.read_bytes(), "status", "superseded")
+        sibling.write_bytes(
+            _insert_frontmatter_field(
+                sibling_raw, "superseded_by", "docs/plans/successor.md"
+            )
+        )
+        mixed_retro = mixed_repo / "docs/retros/2026-08-16-mixed-retro.md"
+        mixed_retro.parent.mkdir(parents=True, exist_ok=True)
+        mixed_retro.write_text("# Mixed terminal retrospective\n", encoding="utf-8")
+        run_git(
+            mixed_repo,
+            "add",
+            "docs/plans/adoption.md",
+            "docs/plans/sibling.md",
+            "docs/retros/2026-08-16-mixed-retro.md",
+        )
+        run_git(mixed_repo, "commit", "-qm", "mixed done and superseded transition")
+        actual, detail = adoption_decision(
+            mixed_plan, "adoption-mixed-terminal", "reviewing"
+        )
+        if actual == "reject" and detail == "interactive deepening":
+            emit("PASS", "adoption-mixed-terminal", f"{actual}:{detail}")
+        else:
+            emit(
+                "FAIL",
+                "adoption-mixed-terminal",
+                f"expected=reject:interactive deepening got={actual}:{detail}",
+            )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 def release_cases(directory: Path) -> list[tuple[str, Path]]:
     required = ("schema", "title", "type", "status", "date", "execution")
@@ -1270,32 +1459,76 @@ def git_blob(repo: Path, revision: str, relative: str) -> bytes:
 
 
 def canonical_body_bytes(raw: bytes) -> bytes:
-    parts = raw.split(b"---", 2)
-    if len(parts) != 3:
+    try:
+        _, _, body_start = _frontmatter_bounds(raw)
+    except ValueError:
         raise ValueError("malformed canonical body")
-    return parts[2]
+    return _universal_newlines(raw[body_start:])
 
 
 def raw_body_seal(raw: bytes) -> str:
     return hashlib.sha256(canonical_body_bytes(raw)).hexdigest()
 
 
-def raw_without_terminal_fields(raw: bytes, fields: tuple[str, ...]) -> bytes:
-    names = b"|".join(re.escape(field.encode("ascii")) for field in fields)
-    pattern = re.compile(rb"(?m)^(" + names + rb"):[^\r\n]*(?:\r\n|\n|\r|$)")
+def _frontmatter_field_pattern(field: str | bytes) -> re.Pattern[bytes]:
+    name = field.encode("ascii") if isinstance(field, str) else field
+    return re.compile(rb"(?m)^" + re.escape(name) + rb":[^\r\n]*(?:\r\n|\n|\r|$)")
+
+
+def _frontmatter_field_lines(raw: bytes, field: str | bytes) -> list[bytes]:
+    return _frontmatter_field_pattern(field).findall(_frontmatter_region(raw))
+
+
+def _frontmatter_sub(
+    raw: bytes, pattern: re.Pattern[bytes], replace, count: int = 0
+) -> bytes:
+    open_end, close_start, _ = _frontmatter_bounds(raw)
+    region = raw[open_end:close_start]
+    return raw[:open_end] + pattern.sub(replace, region, count=count) + raw[close_start:]
+
+
+def _frontmatter_field_values(raw: bytes, field: str | bytes) -> list[bytes]:
+    name = field.encode("ascii") if isinstance(field, str) else field
+    pattern = re.compile(
+        rb"(?m)^" + re.escape(name) + rb":[ \t]*([^\r\n]*)(?:\r\n|\n|\r|$)"
+    )
+    return pattern.findall(_frontmatter_region(raw))
+
+
+def _frontmatter_payload_shape(raw: bytes) -> bytes:
+    pattern = re.compile(
+        rb"(?m)^([a-z_]+:[ \t]*)[^\r\n]*(?P<ending>\r\n|\n|\r|$)"
+    )
 
     def replace(match: re.Match[bytes]) -> bytes:
-        key = match.group(1)
-        ending = b""
-        if match.group(0).endswith(b"\r\n"):
-            ending = b"\r\n"
-        elif match.group(0).endswith((b"\n", b"\r")):
-            ending = match.group(0)[-1:]
-        if key == b"status":
-            return b"status:<terminal>" + ending
+        return match.group(1) + b"<payload>" + match.group("ending")
+
+    return _frontmatter_sub(raw, pattern, replace)
+
+
+def _frontmatter_seal_placeholder(raw: bytes) -> bytes:
+    pattern = re.compile(
+        rb"(?m)^body_seal: [0-9a-f]{64}(?P<ending>\r\n|\n|\r|$)"
+    )
+
+    def replace(match: re.Match[bytes]) -> bytes:
+        return b"body_seal: <seal>" + match.group("ending")
+
+    return _frontmatter_sub(raw, pattern, replace, count=1)
+
+
+def raw_without_terminal_fields(raw: bytes, fields: tuple[str, ...]) -> bytes:
+    names = b"|".join(re.escape(field.encode("ascii")) for field in fields)
+    pattern = re.compile(
+        rb"(?m)^(" + names + rb")(?P<separator>:[ \t]*)[^\r\n]*(?P<ending>\r\n|\n|\r|$)"
+    )
+
+    def replace(match: re.Match[bytes]) -> bytes:
+        if match.group(1) == b"status":
+            return match.group(1) + match.group("separator") + b"<terminal>" + match.group("ending")
         return b""
 
-    return pattern.sub(replace, raw)
+    return _frontmatter_sub(raw, pattern, replace)
 
 
 def terminal_plan_blob(repo: Path, plan_path: str, commit: str) -> tuple[bool, str]:
@@ -1310,8 +1543,8 @@ def terminal_plan_blob(repo: Path, plan_path: str, commit: str) -> tuple[bool, s
         current_text = current_raw.decode("utf-8")
         parent_fields = parse_frontmatter_text(parent_text)
         current_fields = parse_frontmatter_text(current_text)
-        parent_seals = re.findall(rb"(?m)^body_seal: ([0-9a-f]{64})(?:\r\n|\n|\r|$)", parent_raw)
-        current_seals = re.findall(rb"(?m)^body_seal: ([0-9a-f]{64})(?:\r\n|\n|\r|$)", current_raw)
+        parent_seals = _frontmatter_field_values(parent_raw, "body_seal")
+        current_seals = _frontmatter_field_values(current_raw, "body_seal")
     except (UnicodeDecodeError, ValueError):
         return False, "terminal-seal"
     if len(parent_seals) != 1 or len(current_seals) != 1:
@@ -1327,18 +1560,14 @@ def terminal_plan_blob(repo: Path, plan_path: str, commit: str) -> tuple[bool, s
         return False, "terminal-seal"
     if parent_seals[0] != current_seals[0]:
         return False, "terminal-seal"
-    status_lines_parent = re.findall(rb"(?m)^status:[^\r\n]*(?:\r\n|\n|\r|$)", parent_raw)
-    status_lines_current = re.findall(rb"(?m)^status:[^\r\n]*(?:\r\n|\n|\r|$)", current_raw)
+    status_lines_parent = _frontmatter_field_lines(parent_raw, "status")
+    status_lines_current = _frontmatter_field_lines(current_raw, "status")
     if len(status_lines_parent) != 1 or len(status_lines_current) != 1:
         return False, "terminal-frontmatter"
     status = current_fields.get("status")
     if status == "done":
-        completed_lines_parent = re.findall(
-            rb"(?m)^completed_by:[^\r\n]*(?:\r\n|\n|\r|$)", parent_raw
-        )
-        completed_lines_current = re.findall(
-            rb"(?m)^completed_by:[^\r\n]*(?:\r\n|\n|\r|$)", current_raw
-        )
+        completed_lines_parent = _frontmatter_field_lines(parent_raw, "completed_by")
+        completed_lines_current = _frontmatter_field_lines(current_raw, "completed_by")
         if len(completed_lines_parent) != 0 or len(completed_lines_current) != 1:
             return False, "terminal-completed_by"
         if parent_fields.get("status") != "approved" or parent_fields.get("completed_by"):
@@ -1351,12 +1580,8 @@ def terminal_plan_blob(repo: Path, plan_path: str, commit: str) -> tuple[bool, s
             return False, "terminal-frontmatter"
         return True, current_seals[0].decode("ascii")
     if status == "superseded":
-        successor_lines_parent = re.findall(
-            rb"(?m)^superseded_by:[^\r\n]*(?:\r\n|\n|\r|$)", parent_raw
-        )
-        successor_lines_current = re.findall(
-            rb"(?m)^superseded_by:[^\r\n]*(?:\r\n|\n|\r|$)", current_raw
-        )
+        successor_lines_parent = _frontmatter_field_lines(parent_raw, "superseded_by")
+        successor_lines_current = _frontmatter_field_lines(current_raw, "superseded_by")
         if len(successor_lines_parent) != 0 or len(successor_lines_current) != 1:
             return False, "terminal-successor"
         successor = current_fields.get("superseded_by")
@@ -1374,7 +1599,7 @@ def verify_plan_terminal_transition(
     repo: Path,
     plan_path: str,
     commit: str,
-    retro_path: str = "docs/retros/adoption.md",
+    retro_path: str | None = None,
 ) -> tuple[bool, str]:
     paths = commit_paths(repo, commit)
     if plan_path not in paths:
@@ -1410,6 +1635,7 @@ def verify_plan_terminal_transition(
         and path.endswith(".md")
     }
     retro_paths = {
+
         path
         for path in paths
         if len(Path(path).parts) == 3
@@ -1417,13 +1643,25 @@ def verify_plan_terminal_transition(
         and path.endswith(".md")
     }
     tracker_paths = paths - plan_paths - retro_paths
-    if not plan_paths or retro_paths != {retro_path}:
+    if not plan_paths or len(retro_paths) != 1:
+        return False, "terminal-retro"
+    derived_retro_path = next(iter(retro_paths))
+    if retro_path is not None and derived_retro_path != retro_path:
         return False, "terminal-retro"
     try:
-        if not git_blob(repo, commit, retro_path).strip():
+        if not git_blob(repo, commit, derived_retro_path).strip():
             return False, "terminal-retro"
     except subprocess.CalledProcessError:
         return False, "terminal-retro"
+    for candidate in sorted(plan_paths):
+        try:
+            candidate_fields = parse_frontmatter_text(
+                git_blob(repo, commit, candidate).decode("utf-8")
+            )
+        except (subprocess.CalledProcessError, UnicodeDecodeError):
+            return False, "terminal-status"
+        if candidate_fields.get("status") != "done":
+            return False, "terminal-status"
     if tracker_paths and tracker_paths != {"ROADMAP.md"}:
         return False, "terminal-tracker"
     if tracker_paths:
@@ -1499,31 +1737,84 @@ def retro_cases(directory: Path) -> list[tuple[str, Path]]:
     return cases
 
 
+def retro_crlf_terminal_boundary(directory: Path) -> None:
+    source_case = directory / "multi-plan"
+    root = Path(tempfile.mkdtemp(prefix="retro-crlf-terminal-"))
+    case_dir = root / "crlf-terminal"
+    shutil.copytree(source_case, case_dir)
+    try:
+        repo = case_dir / "repo"
+        for name in ("one.md", "two.md"):
+            path = repo / "docs/plans" / name
+            path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+        run_git(repo, "add", "docs/plans/one.md", "docs/plans/two.md")
+        run_git(repo, "commit", "-qm", "CRLF sealed plans baseline")
+        crlf_commit = run_git(repo, "rev-parse", "HEAD")
+        spec = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+        spec["base_commit"] = crlf_commit
+        for plan in spec["plans"]:
+            plan["landed"] = crlf_commit
+        (case_dir / "case.json").write_text(json.dumps(spec), encoding="utf-8")
+        actual, detail = retro_decision(case_dir)
+        if actual == "transition" and detail == "all-plans same-commit":
+            emit("PASS", "retro-crlf-terminal", f"{actual}:{detail}")
+        else:
+            emit(
+                "FAIL",
+                "retro-crlf-terminal",
+                f"expected=transition got={actual}:{detail}",
+            )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+def _set_frontmatter_payload(raw: bytes, field: str, value: str) -> bytes:
+    pattern = re.compile(
+        rb"(?m)^(" + re.escape(field.encode("ascii")) + rb":[ \t]*)[^\r\n]*(?P<ending>\r\n|\n|\r|$)"
+    )
+
+    def replace(match: re.Match[bytes]) -> bytes:
+        return match.group(1) + value.encode("utf-8") + match.group("ending")
+
+    return _frontmatter_sub(raw, pattern, replace, count=1)
+
+
+def _insert_frontmatter_field(raw: bytes, field: str, value: str) -> bytes:
+    _, close_start, _ = _frontmatter_bounds(raw)
+    region = _frontmatter_region(raw)
+    if region.endswith(b"\r\n"):
+        ending = b"\r\n"
+    elif region.endswith((b"\n", b"\r")):
+        ending = region[-1:]
+    else:
+        ending = b"\n"
+    line = f"{field}: {value}".encode("utf-8") + ending
+    return raw[:close_start] + line + raw[close_start:]
+
+
 def update_plan(repo: Path, name: str, landed: str, completed_by: str | None = None) -> None:
     path = repo / "docs/plans" / name
-    fields, text = parse_frontmatter(path)
-    fields = dict(fields)
-    fields["status"] = "done"
-    fields["completed_by"] = landed if completed_by is None else completed_by
-    frontmatter = "\n".join(f"{key}: {value}" for key, value in fields.items())
-    path.write_text(f"---\n{frontmatter}\n---{text.split('---', 2)[2]}", encoding="utf-8")
+    raw = path.read_bytes()
+    raw = _set_frontmatter_payload(raw, "status", "done")
+    raw = _insert_frontmatter_field(
+        raw, "completed_by", landed if completed_by is None else completed_by
+    )
+    path.write_bytes(raw)
 
 
 def mutate_transition_target(path: Path, mutation: str) -> None:
     before = path.read_text(encoding="utf-8")
     before_fields = parse_frontmatter_text(before)
-    before_body = before.split("---", 2)[2]
+    before_body = canonical_body(before)
     if mutation == "body":
         after = before.rstrip("\n") + "\n\nfixture body mutation\n"
     elif mutation == "other-frontmatter":
         fields = dict(before_fields)
         fields["date"] = "2099-12-31"
         frontmatter = "\n".join(f"{key}: {value}" for key, value in fields.items())
-        after = f"---\n{frontmatter}\n---{before.split('---', 2)[2]}"
+        after = f"---\n{frontmatter}\n---\n{before_body}"
     else:
         raise ValueError(f"unknown transition mutation: {mutation}")
     after_fields = parse_frontmatter_text(after)
-    after_body = after.split("---", 2)[2]
+    after_body = canonical_body(after)
     if mutation == "body":
         if before_fields != after_fields or before_body == after_body:
             raise AssertionError("body mutation setup changed more than the plan body")
@@ -1561,7 +1852,11 @@ def retro_history_mutations(cases: list[tuple[str, Path]]) -> None:
                 run_git(repo, "add", "unrelated-existing.txt")
                 run_git(repo, "commit", "-qm", "unrelated existing commit")
                 unrelated = run_git(repo, "rev-parse", "HEAD")
-                spec["completed_by_override"] = {"one.md": unrelated}
+                older_non_parent = run_git(repo, "rev-parse", f"{unrelated}^")
+                spec["completed_by_override"] = {
+                    "one.md": older_non_parent,
+                    "two.md": unrelated,
+                }
             spec.update(overrides)
             (case_dir / "case.json").write_text(json.dumps(spec), encoding="utf-8")
             actual, detail = retro_decision(case_dir)
@@ -1632,7 +1927,7 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
             return "reject", "completed_by"
     if not selected:
         return "no-flip", "no-plan"
-    retro_rel = "docs/retros/fixture.md"
+    retro_rel = str(spec.get("retro_path", "docs/retros/fixture.md"))
     tracker_rel = spec.get("tracker")
     required_paths = {retro_rel} | {f"docs/plans/{name}" for name in selected}
     if tracker_rel:
@@ -1709,7 +2004,7 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
             run_git(repo, "restore", "--source", parent, "--", f"docs/plans/{name}")
     for name in selected:
         valid, terminal_detail = verify_plan_terminal_transition(
-            repo, f"docs/plans/{name}", commit, retro_rel
+            repo, f"docs/plans/{name}", commit
         )
         if not valid:
             diagnostic = {
@@ -1731,10 +2026,11 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
         for path in changed_paths
         if Path(path).parts[:2] == ("docs", "retros") and path.endswith(".md")
     }
-    if retro_paths != {retro_rel}:
+    if len(retro_paths) != 1:
         return "reject", "retro"
+    derived_retro = next(iter(retro_paths))
     try:
-        if not run_git_text(repo, "show", f"{commit}:{retro_rel}").strip():
+        if not run_git_text(repo, "show", f"{commit}:{derived_retro}").strip():
             return "reject", "retro"
     except subprocess.CalledProcessError:
         return "reject", "retro"
@@ -1943,7 +2239,6 @@ def shared_literals(path: Path, fixture: Path) -> None:
     if not expected:
         emit("PASS", "shared-subset", "retrospective carries no full-schema literal copy")
 
-
 if mode == "fixtures":
     rows, error = parse_contract(skill_path)
     if error:
@@ -1952,12 +2247,14 @@ if mode == "fixtures":
         if consumer == "implementing":
             cases = implementing_cases(root / "implementing")
             diagnostic_mutations(rows, cases, implementing_decision)
+            body_yaml_boundary(root / "implementing")
         elif consumer == "release-loop":
             cases = release_cases(root / "release-loop")
             evaluate_cases(rows, cases, release_decision)
         elif consumer == "retrospective":
             cases = retro_cases(root / "retrospective")
             retro_history_mutations(cases)
+            retro_crlf_terminal_boundary(root / "retrospective")
             evaluate_cases(rows, cases, lambda path: retro_decision(path))
         else:
             emit("FAIL", "consumer", "unknown consumer")
@@ -1970,7 +2267,7 @@ elif mode == "adoption":
     else:
         cases = adoption_cases(root / "adoption", consumer)
         adoption_policy_mutations(cases, consumer)
-        evaluate_adoption_cases(rows, cases, consumer)
+        adoption_history_boundaries(cases, consumer)
         adoption_evidence_deletions(rows, cases, consumer)
         deletion_mutations(rows, cases)
 elif mode == "shared":
