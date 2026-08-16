@@ -1053,12 +1053,40 @@ def crlf_forced_state_fixture() -> bool:
         print("RED crlf-forced-state/ambiguous-old-seal", file=sys.stderr)
         return False
     expected = pre_bytes.replace(old_line, new_line, 1)
+    valid_exact = exact_seal_only_transition(
+        pre_bytes, post_bytes, old, new, post_state["diff"]
+    )
+    valid_forced = forced_failure_state(
+        post_state, baseline, pre_bytes, post_bytes, old, new
+    )
     if (
         rc == 0
         or post_bytes != expected
-        or not forced_failure_state(post_state, baseline, pre_bytes, post_bytes, old, new)
+        or not valid_exact
+        or not valid_forced
     ):
         print("RED crlf-forced-state/whole-file-rewrite-or-missing-seal", file=sys.stderr)
+        return False
+
+    restore = operator_restore(repo)
+    if restore["rc"] != 0:
+        print("RED crlf-forced-state/cannot-restore-baseline", file=sys.stderr)
+        return False
+    invalid_post_bytes = expected.replace(b"\r\n", b"\n")
+    if b"\r\n" in invalid_post_bytes:
+        print("RED crlf-forced-state/incomplete-crlf-normalization", file=sys.stderr)
+        return False
+    (repo / TARGET).write_bytes(invalid_post_bytes)
+    invalid_state = state(repo, pre_bytes)
+    invalid_bytes = (repo / TARGET).read_bytes()
+    invalid_exact = exact_seal_only_transition(
+        pre_bytes, invalid_bytes, old, new, invalid_state["diff"]
+    )
+    invalid_forced = forced_failure_state(
+        invalid_state, baseline, pre_bytes, invalid_bytes, old, new
+    )
+    if invalid_exact or invalid_forced:
+        print("RED crlf-forced-state/normalized-invalid-state-accepted", file=sys.stderr)
         return False
     return True
 
