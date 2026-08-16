@@ -26,7 +26,7 @@ for s in schemas/lane-findings.schema.json schemas/review-envelope.schema.json; 
     fail "$s missing or invalid JSON"
   fi
 done
-for s in schemas/plan-schema.md schemas/retro-template.md schemas/headless-contract.md; do
+for s in skills/planning/schemas/plan-schema.md schemas/retro-template.md schemas/headless-contract.md; do
   [ -s "$ROOT/$s" ] && ok "$s present" || fail "$s missing or empty"
 done
 
@@ -585,7 +585,7 @@ def check_contiguity(numbers, label):
 
 skill_path = root / "skills" / "planning" / "SKILL.md"
 deepening_path = root / "skills" / "planning" / "references" / "deepening.md"
-schema_path = root / "schemas" / "plan-schema.md"
+schema_path = root / "skills" / "planning" / "schemas" / "plan-schema.md"
 
 for p in (skill_path, deepening_path, schema_path):
     if not p.exists():
@@ -624,14 +624,14 @@ if hf_match:
         schema_items.add(str(n))
         schema_int_items.append(n)
     schema_int_items.sort()
-    check_contiguity(schema_int_items, "schemas/plan-schema.md hard-floor items")
+    check_contiguity(schema_int_items, "skills/planning/schemas/plan-schema.md hard-floor items")
 else:
-    fail("schemas/plan-schema.md: '## Document body — hard floor' section not found")
+    fail("skills/planning/schemas/plan-schema.md: '## Document body — hard floor' section not found")
 
 all_files = {
     "skills/planning/SKILL.md": skill_text,
     "skills/planning/references/deepening.md": deepening_text,
-    "schemas/plan-schema.md": schema_text,
+    "skills/planning/schemas/plan-schema.md": schema_text,
 }
 for ref_dir in (root / "skills" / "planning" / "references").iterdir():
     if ref_dir.suffix == ".md" and ref_dir.name != "deepening.md":
@@ -649,7 +649,7 @@ for m in re.finditer(r"\bitem (\d+)", schema_text, re.I):
     ref = m.group(1)
     if ref not in schema_items:
         line = schema_text[:m.start()].count("\n") + 1
-        fail(f"schemas/plan-schema.md:{line}: 'item {ref}' references nonexistent hard-floor item")
+        fail(f"skills/planning/schemas/plan-schema.md:{line}: 'item {ref}' references nonexistent hard-floor item")
 
 if failures:
     print("\n".join(failures))
@@ -678,33 +678,96 @@ if not plans:
     print(f"ok:   {TAG} no plan files — skipped")
     sys.exit(0)
 
+def extract_frontmatter(text):
+    lines = text.split("\n")
+    if not lines or lines[0].rstrip() != "---":
+        raise ValueError("file does not start with '---' frontmatter delimiter line")
+
+    end_idx = None
+    for i in range(1, len(lines)):
+        if lines[i].rstrip() == "---":
+            end_idx = i
+            break
+    if end_idx is None:
+        raise ValueError("frontmatter not closed (no '---' line after the opening delimiter)")
+
+    return lines[1:end_idx]
+
+def unquote(value):
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+def body_seal_scalar(fm_lines):
+    value = None
+    current_key = None
+    for line in fm_lines:
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if line.startswith((" ", "\t")):
+            if stripped.startswith("- ") and current_key == "body_seal":
+                item = unquote(stripped[2:].strip())
+                if isinstance(value, list):
+                    value.append(item)
+                else:
+                    value = [item]
+            continue
+        if ":" not in line:
+            continue
+        key, _, raw = line.partition(":")
+        current_key = key.strip()
+        if current_key != "body_seal":
+            continue
+        raw = raw.strip()
+        value = unquote(raw) if raw else []
+    return value
+
 failures = []
 checked = 0
 skipped = 0
 
 for plan in plans:
-    text = plan.read_text(encoding="utf-8")
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        skipped += 1
-        continue
-    frontmatter = parts[1]
-    body = parts[2]
-
-    key_match = re.search(r"^body_seal:[ \t]*(.*)$", frontmatter, re.M)
-    if not key_match:
-        skipped += 1
-        continue
-
-    raw_value = key_match.group(1).strip()
     rel = plan.relative_to(root)
-    if not re.fullmatch(r"[0-9a-f]{64}", raw_value):
+    with open(plan, encoding="utf-8", newline=None) as handle:
+        text = handle.read()
+
+    try:
+        fm_lines = extract_frontmatter(text)
+    except ValueError:
         failures.append(
-            f"FAIL: {TAG} {rel}: body_seal present but malformed: '{raw_value}'"
+            f"FAIL: {TAG} {rel}: body_seal extraction failed: "
+            "canonical body requires two '---' delimiters"
         )
         continue
 
-    stored = raw_value
+    stored = body_seal_scalar(fm_lines)
+    if stored is None or stored == "":
+        skipped += 1
+        continue
+
+    if not isinstance(stored, str):
+        failures.append(
+            f"FAIL: {TAG} {rel}: body_seal present but non-scalar: "
+            "expected a scalar value"
+        )
+        continue
+
+    if not re.fullmatch(r"[0-9a-f]{64}", stored):
+        failures.append(
+            f"FAIL: {TAG} {rel}: body_seal present but malformed: '{stored}'"
+        )
+        continue
+
+    try:
+        body = text.split('---', 2)[2]
+    except IndexError:
+        failures.append(
+            f"FAIL: {TAG} {rel}: 'body_seal' extraction failed: "
+            "canonical body requires two '---' delimiters"
+        )
+        continue
+
     computed = hashlib.sha256(body.encode("utf-8")).hexdigest()
 
     if stored != computed:

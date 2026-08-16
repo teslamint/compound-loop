@@ -31,7 +31,50 @@ Gather what's available; degrade gracefully rather than blocking on a missing so
 
 - **Git/PR metrics** (PR-merge mode): **Changed non-test lines**, commit count, review rounds, comments fixed/deferred, CI failures, duration from first spec commit to merge, units planned vs. completed. Shape per `schemas/retro-template.md`'s Release data table.
 - **Session-history search** (session-end mode, no PR): a pluggable capability, not a hard dependency — if a session-search tool is available, use it with a tight payload (topic, time window, one filter rule); if unavailable, skip and note the gap in the doc rather than blocking.
-- **Origin artifact**: read the plan's `origin:` frontmatter field (`schemas/plan-schema.md`) to locate the spec. If no plan exists, check for a spec path directly. Read that spec's `## Success Criteria` section verbatim (`skills/designing/references/spec-template.md` shape: statement + `Measured by`).
+- **Origin artifact**: Follow `Origin and coverage selection` below; with no plan, preserve the existing no-plan fallback. Otherwise, read the selected spec's `## Success Criteria` section verbatim (`skills/designing/references/spec-template.md` shape: statement + `Measured by`).
+
+## Standalone plan contract
+
+Retrospective consumes only repo-relative origin, applicability, terminal-transition, coverage-selection, and frontmatter-immutability rules; it does not require the full planning skill or its schema file.
+
+<!-- plan-consumer-contract: retrospective/v1 -->
+~~~json
+{"decision":"origin","fixture":"origin-repo-relative","expected":"accept","diagnostic":"repo-relative origin"}
+{"decision":"coverage","fixture":"no-plan-no-flip","expected":"no-flip","diagnostic":"no-plan"}
+{"decision":"coverage","fixture":"ledger-plan","expected":"transition","diagnostic":"same-commit"}
+{"decision":"coverage","fixture":"body-cited-plan","expected":"transition","diagnostic":"same-commit"}
+{"decision":"coverage","fixture":"multi-plan","expected":"transition","diagnostic":"all-plans"}
+{"decision":"applicability","fixture":"pre-contract","expected":"no-flip","diagnostic":"pre-contract"}
+{"decision":"applicability","fixture":"non-approved","expected":"no-flip","diagnostic":"non-approved"}
+{"decision":"transition","fixture":"missing-landed-commit","expected":"reject","diagnostic":"completed_by"}
+{"decision":"transition","fixture":"split-commit","expected":"reject","diagnostic":"same-commit"}
+{"decision":"transition","fixture":"omission-commit","expected":"reject","diagnostic":"all-plans"}
+{"decision":"immutability","fixture":"body-mutation","expected":"reject","diagnostic":"body"}
+{"decision":"immutability","fixture":"dirty-worktree-body-mutation","expected":"reject","diagnostic":"body"}
+{"decision":"immutability","fixture":"other-frontmatter-mutation","expected":"reject","diagnostic":"frontmatter"}
+~~~
+<!-- end-plan-consumer-contract -->
+
+### Origin and coverage selection
+
+`origin` is resolved as a repo-relative spec path, while the existing no-plan fallback applies when no plan exists.
+The covered-plan set is the progress ledger's `plan:` value plus every plan cited by Phase 2 data or the retrospective body.
+When neither the ledger nor Phase 2/body cites a plan, no plan is selected and no terminal flip occurs.
+When multiple qualifying plans are selected, apply the same applicability and transition rules to every plan.
+
+### Plan terminal transition contract
+
+Only a post-contract plan with `status: approved` may transition to `status: done`.
+The terminal transition mutates only frontmatter `status` and `completed_by`.
+`completed_by` must name the landed base-branch commit; a missing landed commit rejects.
+A pre-contract plan is never retroactively flipped, even when a retro covers it.
+A non-approved plan does not flip to `done`.
+Each qualifying plan's `status` and `completed_by` change in the same commit as the retro document.
+Retrospective never changes the plan body.
+Retrospective rejects any frontmatter mutation other than `status` and `completed_by`.
+Applicability is keyed to the plan's first commit after the terminal-state contract landed, not to its approval date; no terminal state is backfilled onto earlier plans.
+
+Transition validation inspects the actual parent-to-retro commit diff for every selected plan. It compares the committed plan bytes before and after that commit, allowing only `status` and `completed_by` frontmatter changes and rejecting any body or other-frontmatter mutation; mutation metadata never supplies the immutability verdict.
 
 ## Phase 3: Measured vs. Declared (core)
 
@@ -115,9 +158,8 @@ When invoked, pass the qualifying finding as context and expect `compound`'s exa
 
 **Pre-commit check** (`enforces: P8`): the doc contains an Interview Transcript section with a valid independence level and a rounds-used count; in `self-checklist` mode the rows are the checklist answers. A missing section blocks the commit. A degraded level — `in-thread (approximated independence)` or `self-checklist` — must also name the capability that was absent, on the same `- Rounds used:` line; an unnamed capability blocks the commit. `mode:headless` is not an absent capability: the flag governs whether the user is asked blocking questions, not which worker dispatch the harness can perform. A strict dispatch budget is not an absent capability either: a budget is a choice about spend, not a missing primitive. A `self-checklist` claim names both facilitator channels of the ladder as absent — `no subagent primitive` and `no external facilitator CLI` — because rung 1 of `references/dispatch-degradation.md` (plugin root) names an external CLI facilitator that does not depend on the subagent primitive, so an absent subagent primitive alone still leaves a reachable facilitator. An `in-thread (approximated independence)` claim names why fresh context was unavailable.
 
-Commit the retro doc (and any durable-tracker updates from Phase 4) as its own commit, separate from other work in flight.
+Commit the retro document, every qualifying plan's `status`/`completed_by` frontmatter transition, and every applicable tracker update together in one commit. A retro commit that omits a qualifying plan or splits any transition into another commit is invalid.
 
-The plans a retro covers are: the plan path in `.release-loop/progress.md`'s `plan:` field when that ledger exists for the cycle, plus any plan path this retro's Phase 2 data or doc body cites; when neither names a plan (session-end mode), no flip. For every covered plan **first committed after the terminal-state contract landed** (`schemas/plan-schema.md` applicability boundary — pre-contract plans are never flipped), set `status: done` and `completed_by:` naming the commit on the base branch that landed that plan's work, in the plan's frontmatter, in the same commit as the retro doc; a retro covering multiple plans flips every qualifying one, each with its own `completed_by:`; never edit anything in the plan below the frontmatter (mutable-slot boundary, `schemas/plan-schema.md`).
 
 Report what was measured, what carried forward, and what — if anything — was compounded.
 

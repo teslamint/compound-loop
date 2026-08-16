@@ -7,6 +7,25 @@ description: "Multi-lane code review producing verified, deduplicated findings (
 
 Purpose: produce multi-perspective findings that are verified and deduplicated -- or process someone else's findings without performative agreement. Every lane emits the identical `schemas/lane-findings.schema.json` shape so merge logic never special-cases a lane.
 
+## Standalone plan contract
+
+The reviewing consumer accepts only the complete one-time adoption branch below; all other post-approval reseals remain unauthorized.
+
+<!-- plan-consumer-contract: reviewing/v1 -->
+```json
+{"decision":"adoption","fixture":"adoption-complete","expected":"accept","diagnostic":"adoption-approved"}
+{"decision":"adoption","fixture":"adoption-changed-body","expected":"reject","diagnostic":"changed-body"}
+{"decision":"adoption","fixture":"adoption-missing-baseline","expected":"reject","diagnostic":"missing-baseline"}
+{"decision":"adoption","fixture":"adoption-missing-approval","expected":"reject","diagnostic":"approval"}
+{"decision":"adoption","fixture":"adoption-missing-plan-path","expected":"reject","diagnostic":"plan path"}
+{"decision":"adoption","fixture":"adoption-missing-old-seal","expected":"reject","diagnostic":"old seal"}
+{"decision":"adoption","fixture":"adoption-missing-new-seal","expected":"reject","diagnostic":"new seal"}
+{"decision":"adoption","fixture":"adoption-missing-reproduction-command","expected":"reject","diagnostic":"reproduction command"}
+{"decision":"adoption","fixture":"reseal-after-adoption","expected":"reject","diagnostic":"interactive deepening"}
+{"decision":"adoption-policy","policy":{"required_evidence":["approval","baseline","plan_path","old_seal","new_seal","reproduction_command"],"baseline_current_body":"equal","migration_commit":{"path":"repo-relative-evidence","diff":"seal-only","message_fields":["baseline","plan","old-seal","new-seal","reproduction-command","approval"],"command":"exact","approval":"first-hand-explicit"},"later_reseal":"reject-unless-interactive-deepening","interrupted_retry":{"compensation":"target-only","fresh_approval":true}}}
+```
+<!-- end-plan-consumer-contract -->
+
 ## Entry / Exit / Gate
 
 - **Entry**: a diff to review (standalone), or all implementation tasks complete (phase-gate, called from `implementing`).
@@ -85,7 +104,15 @@ Full pipeline in `references/merge-pipeline.md` (fingerprint dedup, cross-lane p
 
 Requirements Completeness rule: if the diff confirms observable behavior absent from or contradictory to the approved artifact set, and no separate committed deviation addendum records that behavior, the finding stays actionable and the verdict cannot be `clean`. Preserve the existing plan-conflict handling outside this skill's suppression logic: a plan-mandated conflict still goes back to the caller/human rather than being silently authorized by the addendum rule.
 
-Plan-body immutability rule: a plan whose body has been modified post-approval — detected by body_seal mismatch, body diff against the approved commit, or an unauthorized re-seal (any re-seal not performed by interactive deepening) — is an actionable finding that blocks `clean`. Only interactive deepening is an authorized re-seal path.
+Plan-body immutability rule: a plan whose body has been modified post-approval — detected by body_seal mismatch, body diff against the approved commit, or an unauthorized re-seal (any re-seal not performed by interactive deepening or the complete one-time adoption branch) — is an actionable finding that blocks `clean`. Only the complete, baseline-proven, first-hand-approved adoption branch described below can suppress this finding outside interactive deepening.
+
+### Adoption-only review branch
+
+The reviewing consumer may suppress the ordinary unauthorized-reseal finding only for one complete, first-hand-approved adoption migration. The review must verify the exact baseline commit and repo-relative plan path, old and new seals, canonical reproduction command, and byte-identical canonical bodies under the shared UTF-8/universal-newline read and literal extraction. It must also verify that the migration commit changes only `body_seal` and records `(baseline commit, plan path, old seal, new seal)`, the reproduction command, and the approval.
+
+Changed baseline bodies reject with `changed-body`; an unavailable baseline rejects with `missing-baseline`; and missing evidence rejects while naming exactly `approval`, `baseline commit`, `plan path`, `old seal`, `new seal`, or `reproduction command`. A later reseal is still unauthorized and must be rejected with `interactive deepening`. If the transition was interrupted, review requires compensation to a clean target-only state and fresh first-hand approval before any retry.
+
+The review must account for all six durable outcomes: `success` is one clean seal-only commit; `forced-failure` is an unchanged HEAD with one dirty target-plan seal diff and no migration commit; `rerun` fails closed until compensation and fresh approval; `compensation` restores only the target plan while HEAD stays unchanged; `headless` rejects before any write for missing approval; and `cancellation` distinguishes clean pre-write cancellation from post-write forced failure followed by operator-owned compensation. No generic reseal bypass is reviewable.
 
 Outward-publication recognition check: a plan carrying the stateless fallback ("No stateful ceremony") whose units include outward-publication transitions (push to remote, create remote repository, publish to registry, create platform release, change visibility) has a matrix-requirement gap that blocks `clean`.
 

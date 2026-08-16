@@ -2,13 +2,14 @@
 
 Usage:
     python3 validate-plan-frontmatter.py <plan-path>
+    python3 validate-plan-frontmatter.py --print-seal <plan-path>
 
 Exit codes:
     0 — frontmatter passes all checks
     1 — validation failure (diagnostics on stderr)
     2 — usage error (bad arguments, missing file)
 
-Scope: this script checks two things, both required by schemas/plan-schema.md
+Scope: this script checks three things, all required by schemas/plan-schema.md
 (the `## Status lifecycle` section) and skills/planning/SKILL.md:
 
   1. Parser-safety — frontmatter that a strict YAML parser would silently
@@ -21,6 +22,8 @@ Scope: this script checks two things, both required by schemas/plan-schema.md
      `status: done` requires non-empty `completed_by`; `status: superseded`
      requires `superseded_by` resolving to an existing file; `origin`, when
      present, resolves to an existing file. Unknown fields are always valid.
+  3. Body seal verification — when a plan has a `body_seal` field, verify it
+     matches the canonical extraction and SHA-256 hash of the body.
 
 Path resolution for `superseded_by:` / `origin:` is repo-root-relative, where
 the root is derived by ascending from the plan file's directory to the
@@ -34,6 +37,7 @@ simple `- item` lists under a key). Pure stdlib, no PyYAML or other deps.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -44,11 +48,9 @@ EXECUTIONS = {"code", "non-code", "ops"}
 REQUIRED = ["schema", "title", "type", "status", "date", "execution"]
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-
 def usage_fail(msg: str) -> "NoReturn":
     sys.stderr.write(f"validate-plan-frontmatter: {msg}\n")
     sys.exit(2)
-
 
 def extract_frontmatter(text: str) -> list[str]:
     """Return the frontmatter lines (between the two '---' delimiters), or
@@ -66,7 +68,6 @@ def extract_frontmatter(text: str) -> list[str]:
         raise ValueError("frontmatter not closed (no '---' line after the opening delimiter)")
 
     return lines[1:end_idx]
-
 
 def parse_frontmatter(fm_lines: list[str]) -> dict:
     """Minimal top-level-key / list-value parser. Scalars are unquoted in
@@ -99,12 +100,14 @@ def parse_frontmatter(fm_lines: list[str]) -> dict:
             data[key] = []  # placeholder; filled by subsequent "- item" lines if any
     return data
 
-
 def _unquote(val: str) -> str:
     if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
         return val[1:-1]
     return val
 
+def compute_body_seal(text: str) -> str:
+    """Compute the canonical body_seal using the literal schema extraction."""
+    return hashlib.sha256(text.split('---', 2)[2].encode("utf-8")).hexdigest()
 
 def check_parser_safety(fm_lines: list[str]) -> list[str]:
     """Port of compound-engineering's silent-corruption checks: unquoted
@@ -138,7 +141,6 @@ def check_parser_safety(fm_lines: list[str]) -> list[str]:
             )
     return issues
 
-
 def find_repo_root(start_dir: str) -> "str | None":
     """Ascend from start_dir to the nearest ancestor containing a docs/
     directory. Returns None if no ancestor qualifies."""
@@ -152,7 +154,7 @@ def find_repo_root(start_dir: str) -> "str | None":
         current = parent
 
 
-def check_schema(data: dict, repo_root: str) -> list[str]:
+def check_schema(data: dict, repo_root: str, text: str) -> list[str]:
     issues = []
     for field in REQUIRED:
         if not data.get(field):
@@ -207,24 +209,56 @@ def check_schema(data: dict, repo_root: str) -> list[str]:
         issues.append(f"'origin' value '{origin_val}' does not resolve to an existing file")
 
     body_seal_val = scalar("body_seal")
-    if body_seal_val and not re.fullmatch(r"[0-9a-f]{64}", body_seal_val):
-        issues.append(
-            f"'body_seal' value '{body_seal_val}' is not a valid 64-char lowercase hex SHA-256"
-        )
-
+    if body_seal_val:
+        if not re.fullmatch(r"[0-9a-f]{64}", body_seal_val):
+            issues.append(
+                f"'body_seal' value '{body_seal_val}' is not a valid 64-char lowercase hex SHA-256"
+            )
+        else:
+            try:
+                computed = compute_body_seal(text)
+            except IndexError:
+                issues.append(
+                    "'body_seal' extraction failed: canonical body requires two '---' delimiters"
+                )
+            else:
+                if computed != body_seal_val:
+                    issues.append(
+                        f"'body_seal' mismatch: expected={body_seal_val} actual={computed}. "
+                        "Body was modified post-approval without re-sealing, or the seal was manually edited."
+                    )
     return issues
 
-
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
+    if len(argv) == 1:
         usage_fail(f"usage: {os.path.basename(argv[0])} <plan-path>")
 
-    plan_path = argv[1]
+    print_seal_mode = False
+    if len(argv) == 2 and argv[1] != "--print-seal":
+        plan_path = argv[1]
+    elif len(argv) == 3 and argv[1] == "--print-seal":
+        print_seal_mode = True
+        plan_path = argv[2]
+    else:
+        usage_fail(f"usage: {os.path.basename(argv[0])} <plan-path>")
+
     if not os.path.isfile(plan_path):
         usage_fail(f"file not found: {plan_path}")
 
-    with open(plan_path) as f:
+    with open(plan_path, encoding="utf-8", newline=None) as f:
         text = f.read()
+
+    if print_seal_mode:
+        try:
+            seal = compute_body_seal(text)
+        except IndexError:
+            sys.stderr.write(
+                f"FAIL: {plan_path}\n"
+                "  body_seal extraction failed: canonical body requires two '---' delimiters\n"
+            )
+            return 1
+        print(seal)
+        return 0
 
     try:
         fm_lines = extract_frontmatter(text)
@@ -236,7 +270,7 @@ def main(argv: list[str]) -> int:
 
     issues = check_parser_safety(fm_lines)
     data = parse_frontmatter(fm_lines)
-    issues.extend(check_schema(data, repo_root))
+    issues.extend(check_schema(data, repo_root, text))
 
     if issues:
         sys.stderr.write(f"FAIL: {plan_path}\n")
@@ -246,7 +280,6 @@ def main(argv: list[str]) -> int:
 
     print(f"OK: {plan_path}")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))

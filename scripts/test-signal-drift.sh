@@ -108,23 +108,31 @@ PY
   return $result
 }
 
-# --- Case D: one-byte drift in skills/retrospective/SKILL.md:94 (cross-quoted compound line) ---
+# --- Case D: one-byte drift in retrospective's cross-quoted compound line ---
 case_d() {
-  local dir out code result=0
+  local dir out code result=0 mutation_line
   dir="$(setup_copy)" || return 1
-  python3 - "$dir/skills/retrospective/SKILL.md" <<'PY' || { echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"; rm -rf "$dir"; return 1; }
+  if ! mutation_line="$(python3 - "$dir/skills/retrospective/SKILL.md" <<'PY'
 import sys
 path = sys.argv[1]
 lines = open(path, encoding="utf-8").read().split("\n")
-i = 93  # 0-indexed line 94 - the cross-quoted `compound` triplet in Phase 7
-assert "`Documentation complete — <path>`" in lines[i], "fixture assumption broken: expected span not found on line 94"
-lines[i] = lines[i].replace("Documentation complete — <path>", "Documentation complete — <pat>", 1)
+needle = "`Documentation complete — <path>`"
+matches = [index for index, line in enumerate(lines) if needle in line]
+assert len(matches) == 1, f"fixture assumption broken: expected one cross-quoted span, found {len(matches)}"
+index = matches[0]
+lines[index] = lines[index].replace("Documentation complete — <path>", "Documentation complete — <pat>", 1)
 open(path, "w", encoding="utf-8").write("\n".join(lines))
+print(index + 1)
 PY
+)"; then
+    echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"
+    rm -rf "$dir"
+    return 1
+  fi
   out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
   [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got 0"; result=1; }
   assert_contains "$out" "[signal-drift]" "reported by the new check specifically" || result=1
-  assert_contains "$out" "skills/retrospective/SKILL.md:94" "file:line" || result=1
+  assert_contains "$out" "skills/retrospective/SKILL.md:$mutation_line" "file:line" || result=1
   assert_contains "$out" "producer 'compound'" "correct producer guessed from candidate's own word, not the file it lives in" || result=1
   rm -rf "$dir"
   return $result
@@ -279,6 +287,45 @@ PY
   return $result
 }
 
+# --- Case J: multiline terminal-looking candidate (matcher coverage) ---
+# Keep every canonical signal present, then add a separate candidate whose
+# backticked span crosses a newline. A matcher that excludes newlines would
+# miss the mutation and incorrectly pass on canonical coverage alone.
+case_j() {
+  local dir target_line out code result=0
+  dir="$(setup_copy)" || return 1
+  target_line="$(python3 - "$dir/skills/release/SKILL.md" <<'PY'
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+needle = "`Release complete — v<version>`"
+if text.count(needle) != 1:
+    raise SystemExit("expected exactly one canonical release success signal")
+line = text[:text.index(needle)].count("\n") + 1
+text = text.replace(
+    needle,
+    needle + ", `Release complete — v<version>\nmutated`",
+    1,
+)
+open(path, "w", encoding="utf-8").write(text)
+print(line)
+PY
+)" || {
+    echo "  harness error: fixture mutation failed (see traceback above) -- fixture assumption likely broken"
+    rm -rf "$dir"
+    return 1
+  }
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero exit, got $code"; result=1; }
+  assert_contains "$out" "[signal-drift]" "reported by check 6 specifically" || result=1
+  assert_contains "$out" "skills/release/SKILL.md:$target_line" "computed file:line" || result=1
+  assert_contains "$out" "Release complete — v<version>\\nmutated" "multiline candidate was inspected" || result=1
+  assert_not_contains "$out" "canonical line not found" "canonical coverage remains present" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -288,6 +335,7 @@ run_case F case_f
 run_case G case_g
 run_case H case_h
 run_case I case_i
+run_case J case_j
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then
