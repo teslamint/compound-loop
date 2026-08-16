@@ -313,6 +313,44 @@ quoted empty seal
 "
 assert_parity_case "quoted empty seal" "$d" quoted-empty.md absent
 rm -rf "$d"
+# RED parity fixture: a scalar followed by an indented sequence item is
+# converted to a list by the shipped parser and must not remain a scalar in
+# check 14.
+d="$(setup_scratch)"
+write_plan "$d" "scalar-followed-by-item.md" "schema: plan/v1
+title: Scalar followed by item
+type: feat
+status: approved
+date: 2026-08-15
+execution: code
+body_seal: 0000000000000000000000000000000000000000000000000000000000000000
+  - not-a-seal" "
+## Goal
+
+scalar followed by item
+"
+assert_parity_case "scalar followed by indented item" "$d" scalar-followed-by-item.md non_scalar
+rm -rf "$d"
+
+# RED parity fixture: quoted-empty followed by an indented sequence item is
+# also converted to a list by the shipped parser, rather than skipped as an
+# absent seal.
+d="$(setup_scratch)"
+write_plan "$d" "quoted-empty-followed-by-item.md" "schema: plan/v1
+title: Quoted empty followed by item
+type: feat
+status: approved
+date: 2026-08-15
+execution: code
+body_seal: \"\"
+  - not-a-seal" "
+## Goal
+
+quoted empty followed by item
+"
+assert_parity_case "quoted empty followed by indented item" "$d" quoted-empty-followed-by-item.md non_scalar
+rm -rf "$d"
+
 
 # A bare empty value is the shipped parser's list placeholder, not an
 # unsealed scalar. Keep this separate from quoted-empty to guard parser parity.
@@ -822,16 +860,25 @@ def state(repo: Path, pre_bytes: bytes) -> dict:
         "dirty_target_only": status == f" M {TARGET}",
     }
 
-def new_repo(outcome: str) -> tuple[Path, str, str, str, bytes, str, bytes]:
+def new_repo(outcome: str, line_ending: str = "\n") -> tuple[Path, str, str, str, bytes, str, bytes]:
     repo = fixture_root / ("repo-" + outcome)
     (repo / "docs/plans").mkdir(parents=True)
     git(repo, "init", "-q")
     git(repo, "config", "user.email", "fixture@example.invalid")
     git(repo, "config", "user.name", "Adoption Fixture")
-    body = "\n## Goal\n\nimmutable baseline body\n"
+    body = line_ending + "## Goal" + line_ending + line_ending + "immutable baseline body" + line_ending
     old = "0" * 64
-    plan_text = "---\nschema: plan/v1\ntitle: Adoption\ntype: feat\nstatus: approved\ndate: 2026-08-15\nexecution: code\nbody_seal: " + old + "\n---" + body
-    (repo / TARGET).write_text(plan_text, encoding="utf-8")
+    plan_text = line_ending.join((
+        "---",
+        "schema: plan/v1",
+        "title: Adoption",
+        "type: feat",
+        "status: approved",
+        "date: 2026-08-15",
+        "execution: code",
+        "body_seal: " + old,
+    )) + line_ending + "---" + body
+    (repo / TARGET).write_bytes(plan_text.encode("utf-8"))
     (repo / "sentinel.txt").write_text("BOUNDARY_SENTINEL_UNTOUCHED\n", encoding="utf-8")
     sentinel_bytes = (repo / "sentinel.txt").read_bytes()
     git(repo, "add", ".")
@@ -844,12 +891,12 @@ def new_repo(outcome: str) -> tuple[Path, str, str, str, bytes, str, bytes]:
     command = f"python3 {checker_path} {baseline} {TARGET}"
     return repo, baseline, old, new, pre_bytes, command, sentinel_bytes
 
-def write_seal(repo: Path, new: str) -> None:
+def write_seal(repo: Path, old: str, new: str) -> None:
     path = repo / TARGET
-    with open(path, encoding="utf-8", newline=None) as handle:
-        text = handle.read()
-    text = re.sub(r"(?m)^body_seal:.*$", "body_seal: " + new, text, count=1)
-    path.write_text(text, encoding="utf-8")
+    updated = replace_seal_line(path.read_bytes(), old, new)
+    if updated is None:
+        raise RuntimeError("seal-line replacement requires exactly one matching seal line")
+    path.write_bytes(updated)
 
 def transition(repo: Path, baseline: str, old: str, new: str, command: str, approval: str | None, injection: str | None, commit_approval: str | None = None) -> tuple[int, str]:
     if not approval:
@@ -868,7 +915,7 @@ def transition(repo: Path, baseline: str, old: str, new: str, command: str, appr
         return 1, "new-seal-mismatch"
     if injection == "pre-write-cancel":
         return 1, "pre-write-cancel"
-    write_seal(repo, new)
+    write_seal(repo, old, new)
     if injection in {"forced-failure", "post-write-cancel"}:
         return 1, injection
     committed_approval = approval if commit_approval is None else commit_approval
@@ -892,11 +939,12 @@ def verify_transition(repo: Path, baseline: str, old: str, new: str, command: st
         return False, "success-tree-mismatch"
     parent_text = git(repo, "show", f"{parent}:{TARGET}", strip=False)
     current_text = git(repo, "show", f"{commit}:{TARGET}", strip=False)
-    old_line = f"body_seal: {old}\n"
-    new_line = f"body_seal: {new}\n"
-    if parent_text.count(old_line) != 1 or current_text.count(new_line) != 1:
+    parent_bytes = parent_text.encode("utf-8")
+    current_bytes = current_text.encode("utf-8")
+    expected_current = expected_seal_only_bytes(parent_bytes, old, new)
+    if expected_current is None:
         return False, "success-seal-line-mismatch"
-    if re.sub(r"(?m)^body_seal: [0-9a-f]{64}\n", "", parent_text, count=1) != re.sub(r"(?m)^body_seal: [0-9a-f]{64}\n", "", current_text, count=1):
+    if expected_current != current_bytes:
         return False, "success-non-seal-bytes-changed"
     message = git(repo, "show", "-s", "--format=%B", commit, strip=False)
     expected = {
@@ -946,31 +994,74 @@ def durable_stage(stage_name: str, action: str, rc: int, output: str, state_valu
     stage.update(details)
     return stage
 
-def normalized_plan_bytes(data: bytes) -> bytes:
-    return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+_SEAL_LINE_RE = re.compile(rb"(?:^|(?<=\r)|(?<=\n))body_seal: ([0-9a-f]{64})(\r\n|\r|\n)", re.MULTILINE)
+
+
+def replace_seal_line(data: bytes, old: str, new: str) -> bytes | None:
+    matches = list(_SEAL_LINE_RE.finditer(data))
+    if len(matches) != 1 or matches[0].group(1) != old.encode("ascii"):
+        return None
+    match = matches[0]
+    replacement = b"body_seal: " + new.encode("ascii") + match.group(2)
+    return data[:match.start()] + replacement + data[match.end():]
 
 
 def expected_seal_only_bytes(pre_bytes: bytes, old: str, new: str) -> bytes | None:
-    normalized = normalized_plan_bytes(pre_bytes)
-    pattern = re.compile(rb"(?m)^body_seal: [^\r\n]*\n")
-    matches = list(pattern.finditer(normalized))
-    old_line = f"body_seal: {old}\n".encode("ascii")
-    if len(matches) != 1 or matches[0].group() != old_line:
-        return None
-    match = matches[0]
-    new_line = f"body_seal: {new}\n".encode("ascii")
-    return normalized[:match.start()] + new_line + normalized[match.end():]
+    return replace_seal_line(pre_bytes, old, new)
 
 
-def exact_seal_only_transition(pre_bytes: bytes, post_bytes: bytes, old: str, new: str) -> bool:
+def exact_seal_diff(diff: str, old: str, new: str) -> bool:
+    lines = diff.splitlines()
+    hunks = [line for line in lines if line.startswith("@@")]
+    removed = [line for line in lines if line.startswith("-") and not line.startswith("---")]
+    added = [line for line in lines if line.startswith("+") and not line.startswith("+++")]
+    return (
+        len(hunks) == 1
+        and len(removed) == 1
+        and len(added) == 1
+        and removed[0] == "-body_seal: " + old
+        and added[0] == "+body_seal: " + new
+    )
+
+
+def exact_seal_only_transition(
+    pre_bytes: bytes,
+    post_bytes: bytes,
+    old: str,
+    new: str,
+    diff: str | None = None,
+) -> bool:
     expected = expected_seal_only_bytes(pre_bytes, old, new)
-    normalized_post = normalized_plan_bytes(post_bytes)
-    if expected is None or expected == normalized_plan_bytes(pre_bytes) or normalized_post != expected:
+    if expected is None or expected == pre_bytes or post_bytes != expected:
         return False
-    pattern = re.compile(rb"(?m)^body_seal: [^\r\n]*\n")
-    matches = list(pattern.finditer(normalized_post))
-    new_line = f"body_seal: {new}\n".encode("ascii")
-    return len(matches) == 1 and matches[0].group() == new_line
+    matches = list(_SEAL_LINE_RE.finditer(post_bytes))
+    if len(matches) != 1 or matches[0].group(1) != new.encode("ascii"):
+        return False
+    return diff is None or exact_seal_diff(diff, old, new)
+
+# RED forced-state fixture: a failed reseal against a CRLF plan must retain
+# CRLF bytes. A whole-file universal-newline rewrite is not an exact seal-only
+# transition and must be rejected.
+def crlf_forced_state_fixture() -> bool:
+    repo, baseline, old, new, pre_bytes, command, _ = new_repo("crlf-forced", "\r\n")
+    rc, _ = transition(repo, baseline, old, new, command, "first-hand-explicit", "forced-failure")
+    post_state = state(repo, pre_bytes)
+    post_bytes = (repo / TARGET).read_bytes()
+    old_line = ("body_seal: " + old + "\r\n").encode("ascii")
+    new_line = ("body_seal: " + new + "\r\n").encode("ascii")
+    if pre_bytes.count(old_line) != 1:
+        print("RED crlf-forced-state/ambiguous-old-seal", file=sys.stderr)
+        return False
+    expected = pre_bytes.replace(old_line, new_line, 1)
+    if (
+        rc == 0
+        or post_bytes != expected
+        or not forced_failure_state(post_state, baseline, pre_bytes, post_bytes, old, new)
+    ):
+        print("RED crlf-forced-state/whole-file-rewrite-or-missing-seal", file=sys.stderr)
+        return False
+    return True
+
 
 
 def mutate_title_frontmatter_body(repo: Path) -> None:
@@ -995,7 +1086,7 @@ def forced_failure_state(state_value: dict, baseline: str, pre_bytes: bytes, pos
         and state_value["status"] == f" M {TARGET}"
         and state_value["dirty_target_only"]
         and not state_value["plan_equals_pre"]
-        and exact_seal_only_transition(pre_bytes, post_bytes, old, new)
+        and exact_seal_only_transition(pre_bytes, post_bytes, old, new, state_value["diff"])
     )
 
 
@@ -1029,6 +1120,11 @@ def markdown(outcome: str, baseline: str, repo: Path, pre: dict, command: str, r
 
 
 failures = 0
+if block_ok and not crlf_forced_state_fixture():
+    failures += 1
+elif not block_ok:
+    print("RED crlf-forced-state/missing-migration-check", file=sys.stderr)
+    failures += 1
 for outcome in OUTCOMES:
     checker_runs = []
     repo, baseline, old, new, pre_bytes, command, sentinel_expected = new_repo(outcome)
@@ -1073,7 +1169,7 @@ for outcome in OUTCOMES:
             mutation_rejected = False
         restore = operator_restore(repo)
         if restore["rc"] == 0:
-            write_seal(repo, new)
+            write_seal(repo, old, new)
         post = state(repo, pre_bytes)
         post_bytes = (repo / TARGET).read_bytes()
         ok = (

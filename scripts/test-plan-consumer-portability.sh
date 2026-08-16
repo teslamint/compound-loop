@@ -309,12 +309,6 @@ def adoption_cases(directory: Path, consumer: str) -> list[tuple[str, Path]]:
         evidence["reproduction_command"] = f"python3 migration-check.py {baseline} docs/plans/adoption.md"
         if name == "adoption-changed-body":
             path.write_text(current_text + "\nchanged body byte\n", encoding="utf-8")
-        if consumer == "reviewing" and name == "adoption-complete":
-            upgraded = current_text.replace("title: Adoption", "title: Upgraded Adoption", 1)
-            path.write_text(upgraded, encoding="utf-8")
-            run_git(repo, "add", "docs/plans/adoption.md")
-            run_git(repo, "commit", "-qm", "adoption upgrade")
-            current_text = upgraded
         if name == "adoption-missing-baseline":
             evidence["baseline"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
             evidence["reproduction_command"] = f"python3 migration-check.py {evidence['baseline']} docs/plans/adoption.md"
@@ -546,6 +540,15 @@ def prior_transition(repo: Path, baseline: str, plan_path: str, evidence: dict, 
         migration_text = run_git_text(repo, "show", f"{migration}:{plan_path}")
     except subprocess.CalledProcessError:
         return False, "no-transition", None, None
+    # The one-time adoption is the first and only plan-touching commit after
+    # the baseline.  A reseal, body edit, or even a repaired intermediate
+    # state is still unauthorized history; restoring bytes before the valid
+    # migration does not erase that touch from the audit trail.
+    history_commits = run_git(
+        repo, "log", "--reverse", "--format=%H", f"{baseline}..{migration}", "--", plan_path
+    ).splitlines()
+    if migration not in history_commits or any(commit != migration for commit in history_commits):
+        return False, "pre-migration-history", None, None
     latest_seal = evidence["new_seal"]
     later_commits = run_git(repo, "log", "--reverse", "--format=%H", f"{migration}..HEAD", "--", plan_path).splitlines()
     for commit in later_commits:
@@ -760,6 +763,85 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
                 emit("FAIL", f"transition-mutation-{name}", f"diagnostic drift: expected={expected_detail} got={detail}")
             else:
                 emit("PASS", f"transition-mutation-{name}", f"rejected:{detail}")
+        def evaluate_pre_migration_history(name: str, build_history) -> None:
+            repo = fresh(name)
+            run_git(repo, "reset", "--hard", source_baseline)
+            baseline_text = (repo / source_plan).read_text(encoding="utf-8")
+
+            def commit_plan(text: str, message: str) -> None:
+                (repo / source_plan).write_text(text, encoding="utf-8")
+                run_git(repo, "add", source_plan)
+                run_git(repo, "commit", "-qm", message)
+
+            def migration_message() -> str:
+                return (
+                    "adoption reseal\n\n"
+                    f"baseline={source_baseline}\nplan={source_plan}\n"
+                    f"old-seal={evidence['old_seal']}\nnew-seal={evidence['new_seal']}\n"
+                    f"reproduction-command={evidence['reproduction_command']}\n"
+                    "approval=first-hand-explicit\n"
+                )
+
+            build_history(repo, baseline_text, commit_plan, migration_message)
+            candidate_plan = repo / source_plan
+            candidate_plan.with_suffix(candidate_plan.suffix + ".adoption.json").write_text(
+                json.dumps(evidence), encoding="utf-8"
+            )
+            actual, detail = adoption_decision(candidate_plan, name, "reviewing")
+            if actual == "reject" and "pre-migration-history" in detail:
+                emit("PASS", f"pre-migration-history-{name}", f"{actual}:{detail}")
+            else:
+                emit(
+                    "FAIL",
+                    f"pre-migration-history-{name}",
+                    f"expected=reject:pre-migration-history got={actual}:{detail}",
+                )
+
+        def reseal_away_restore_migration(repo: Path, baseline_text: str, commit_plan, migration_message) -> None:
+            resealed = baseline_text.replace(
+                f"body_seal: {evidence['old_seal']}\n",
+                f"body_seal: {'f' * 64}\n",
+                1,
+            )
+            commit_plan(resealed, "unauthorized pre-migration reseal-away")
+            restored = resealed.replace(
+                f"body_seal: {'f' * 64}\n",
+                f"body_seal: {evidence['old_seal']}\n",
+                1,
+            )
+            commit_plan(restored, "restored pre-migration seal")
+            migrated = restored.replace(
+                f"body_seal: {evidence['old_seal']}\n",
+                f"body_seal: {evidence['new_seal']}\n",
+                1,
+            )
+            commit_plan(migrated, migration_message())
+
+        def body_change_restore_migration(repo: Path, baseline_text: str, commit_plan, migration_message) -> None:
+            changed = baseline_text.rstrip("\n") + "\n\npre-migration body byte\n"
+            changed = changed.replace(
+                f"body_seal: {evidence['old_seal']}\n",
+                f"body_seal: {independent_body_seal(changed)}\n",
+                1,
+            )
+            commit_plan(changed, "unauthorized pre-migration body change")
+            commit_plan(baseline_text, "restored pre-migration body")
+            migrated = baseline_text.replace(
+                f"body_seal: {evidence['old_seal']}\n",
+                f"body_seal: {evidence['new_seal']}\n",
+                1,
+            )
+            commit_plan(migrated, migration_message())
+
+        evaluate_pre_migration_history(
+            "reseal-away-restoration-migration",
+            reseal_away_restore_migration,
+        )
+        evaluate_pre_migration_history(
+            "body-change-restoration-migration",
+            body_change_restore_migration,
+        )
+
         def evaluate_later_history(name: str, repo: Path, expected: str) -> None:
             candidate_plan = repo / source_plan
             candidate_plan.with_suffix(candidate_plan.suffix + ".adoption.json").write_text(
@@ -819,7 +901,7 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
             f"body_seal: {evidence['new_seal']}\n",
             f"body_seal: {evidence['new_seal']}\ncompleted_by: {expected_commit}\n",
             1,
-        ).replace("title: Upgraded Adoption\n", "title: Mutated Adoption\n", 1)
+        ).replace("title: Adoption\n", "title: Mutated Adoption\n", 1)
         extra_retro_plan.write_text(extra_retro_text, encoding="utf-8")
         extra_retro_path = extra_retro_repo / "docs/retros/adoption.md"
         extra_retro_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1067,9 +1149,9 @@ def retro_cases(directory: Path) -> list[tuple[str, Path]]:
         "missing-landed-commit": {"origin": "docs/specs/design.md", "plans": [{"name": "missing.md", "status": "approved", "first": "post", "landed": ""}], "ledger": "missing.md", "missing_landed": True},
         "split-commit": {"origin": "docs/specs/design.md", "plans": [{"name": "split.md", "status": "approved", "first": "post", "landed": ""}], "ledger": "split.md", "git_mode": "split"},
         "omission-commit": {"origin": "docs/specs/design.md", "plans": [{"name": "kept.md", "status": "approved", "first": "post", "landed": ""}, {"name": "omitted.md", "status": "approved", "first": "post", "landed": ""}], "ledger": "kept.md", "body_cites": ["omitted.md"], "git_mode": "omission"},
-        "body-mutation": {"origin": "docs/specs/design.md", "plans": [{"name": "body.md", "status": "approved", "first": "post", "landed": "base-body"}], "ledger": "body.md", "mutation": "body"},
-        "dirty-worktree-body-mutation": {"origin": "docs/specs/design.md", "plans": [{"name": "dirty-body.md", "status": "approved", "first": "post", "landed": "base-dirty-body"}], "ledger": "dirty-body.md", "mutation": "body", "dirty_worktree_restore": True},
-        "other-frontmatter-mutation": {"origin": "docs/specs/design.md", "plans": [{"name": "frontmatter.md", "status": "approved", "first": "post", "landed": "base-frontmatter"}], "ledger": "frontmatter.md", "mutation": "other-frontmatter"},
+        "body-mutation": {"origin": "docs/specs/design.md", "plans": [{"name": "body.md", "status": "approved", "first": "post", "landed": ""}], "ledger": "body.md", "mutation": "body"},
+        "dirty-worktree-body-mutation": {"origin": "docs/specs/design.md", "plans": [{"name": "dirty-body.md", "status": "approved", "first": "post", "landed": ""}], "ledger": "dirty-body.md", "mutation": "body", "dirty_worktree_restore": True},
+        "other-frontmatter-mutation": {"origin": "docs/specs/design.md", "plans": [{"name": "frontmatter.md", "status": "approved", "first": "post", "landed": ""}], "ledger": "frontmatter.md", "mutation": "other-frontmatter"},
     }
     for name, spec in specs.items():
         case_dir = directory / name
@@ -1080,7 +1162,18 @@ def retro_cases(directory: Path) -> list[tuple[str, Path]]:
         run_git(repo, "config", "user.email", "fixture@example.invalid")
         run_git(repo, "config", "user.name", "Fixture")
         for plan in spec.get("plans", []):
-            write_plan(repo / "docs/plans", plan["name"], {"schema": "plan/v1", "title": plan["name"], "type": "fix", "status": plan["status"], "date": "2026-08-15", "execution": "code"}, "## Goal\n\nfixture")
+            body = "## Goal\n\nfixture"
+            fields = {
+                "schema": "plan/v1",
+                "title": plan["name"],
+                "type": "fix",
+                "status": plan["status"],
+                "date": "2026-08-15",
+                "execution": "code",
+            }
+            path = write_plan(repo / "docs/plans", plan["name"], fields, body)
+            fields["body_seal"] = independent_body_seal(path.read_text(encoding="utf-8"))
+            write_plan(repo / "docs/plans", plan["name"], fields, body)
         if spec.get("ledger"):
             (repo / ".release-loop").mkdir(parents=True, exist_ok=True)
             (repo / ".release-loop/progress.md").write_text(f"plan: {spec['ledger']}\n", encoding="utf-8")
@@ -1100,12 +1193,12 @@ def retro_cases(directory: Path) -> list[tuple[str, Path]]:
     return cases
 
 
-def update_plan(repo: Path, name: str, landed: str) -> None:
+def update_plan(repo: Path, name: str, landed: str, completed_by: str | None = None) -> None:
     path = repo / "docs/plans" / name
     fields, text = parse_frontmatter(path)
     fields = dict(fields)
     fields["status"] = "done"
-    fields["completed_by"] = landed
+    fields["completed_by"] = landed if completed_by is None else completed_by
     frontmatter = "\n".join(f"{key}: {value}" for key, value in fields.items())
     path.write_text(f"---\n{frontmatter}\n---{text.split('---', 2)[2]}", encoding="utf-8")
 
@@ -1158,6 +1251,63 @@ def inspect_plan_transition(repo: Path, commit: str, name: str) -> tuple[bool, s
     return before.split("---", 2)[2] != after.split("---", 2)[2], changed_fields
 
 
+def retro_history_mutations(cases: list[tuple[str, Path]]) -> None:
+    source_case = dict(cases)["multi-plan"]
+    mutation_root = Path(tempfile.mkdtemp(prefix="retro-history-mutations-"))
+
+    try:
+        def fresh(name: str) -> Path:
+            destination = mutation_root / name
+            shutil.copytree(source_case, destination)
+            return destination
+
+        def evaluate(name: str, expected: str, diagnostic: str, **overrides: object) -> None:
+            case_dir = fresh(name)
+            spec = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+            if overrides.pop("unrelated_completed_by", False):
+                repo = case_dir / "repo"
+                (repo / "unrelated-existing.txt").write_text("unrelated\n", encoding="utf-8")
+                run_git(repo, "add", "unrelated-existing.txt")
+                run_git(repo, "commit", "-qm", "unrelated existing commit")
+                unrelated = run_git(repo, "rev-parse", "HEAD")
+                spec["completed_by_override"] = {"one.md": unrelated}
+            spec.update(overrides)
+            (case_dir / "case.json").write_text(json.dumps(spec), encoding="utf-8")
+            actual, detail = retro_decision(case_dir)
+            if actual == expected and diagnostic in detail:
+                emit("PASS", f"retro-history-{name}", f"{actual}:{detail}")
+            else:
+                emit(
+                    "FAIL",
+                    f"retro-history-{name}",
+                    f"expected={expected}:{diagnostic} got={actual}:{detail}",
+                )
+
+        # A legal multi-plan terminal commit carries exactly one retro, both
+        # sibling plan transitions, and only the modeled tracker update.
+        evaluate("multi-plan-legal", "transition", "all-plans")
+        evaluate("missing-retro", "reject", "retro", retro_count=0)
+        evaluate("extra-retro", "reject", "retro", retro_count=2)
+        evaluate(
+            "sibling-body-mutation",
+            "reject",
+            "body",
+            mutation="body",
+            mutation_plan="two.md",
+        )
+        evaluate(
+            "sibling-frontmatter-mutation",
+            "reject",
+            "frontmatter",
+            mutation="other-frontmatter",
+            mutation_plan="two.md",
+        )
+        evaluate("extra-tracker-artifact", "reject", "tracker", extra_tracker="UNMODELED.md")
+        evaluate("unrelated-completed-by", "reject", "completed_by", unrelated_completed_by=True)
+    finally:
+        shutil.rmtree(mutation_root, ignore_errors=True)
+
+
 def retro_decision(case_dir: Path) -> tuple[str, str]:
     spec = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
     repo = case_dir / "repo"
@@ -1176,10 +1326,19 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
         selected.update(re.findall(r"^Covers plan:\s*(\S+)", body.read_text(encoding="utf-8"), re.MULTILINE))
     plans = {plan["name"]: plan for plan in spec.get("plans", [])}
     for name in selected:
-        plan = plans[name]
-        if plan["first"] != "post": return "no-flip", "pre-contract"
-        if plan["status"] != "approved": return "no-flip", "non-approved"
-        if not plan["landed"]: return "reject", "completed_by"
+        plan = plans.get(name)
+        if plan is None:
+            return "reject", "all-plans"
+        if plan["first"] != "post":
+            return "no-flip", "pre-contract"
+        if plan["status"] != "approved":
+            return "no-flip", "non-approved"
+        if not plan["landed"]:
+            return "reject", "completed_by"
+        try:
+            run_git(repo, "cat-file", "-e", f"{plan['landed']}^{{commit}}")
+        except subprocess.CalledProcessError:
+            return "reject", "completed_by"
     if not selected:
         return "no-flip", "no-plan"
     retro_rel = "docs/retros/fixture.md"
@@ -1187,6 +1346,13 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
     required_paths = {retro_rel} | {f"docs/plans/{name}" for name in selected}
     if tracker_rel:
         required_paths.add(tracker_rel)
+
+    def completed_by_for(name: str) -> str:
+        overrides = spec.get("completed_by_override", {})
+        if isinstance(overrides, dict) and name in overrides:
+            return str(overrides[name])
+        return str(plans[name]["landed"])
+
     mode = spec.get("git_mode", "together")
     retro_path = repo / retro_rel
     retro_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1196,7 +1362,7 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
         run_git(repo, "commit", "-qm", "retro document")
         retro_commit = run_git(repo, "rev-parse", "HEAD")
         for name in selected:
-            update_plan(repo, name, plans[name]["landed"])
+            update_plan(repo, name, plans[name]["landed"], completed_by_for(name))
         transition_paths = [f"docs/plans/{name}" for name in selected]
         run_git(repo, "add", *transition_paths)
         transition_commit = run_git(repo, "commit", "-qm", "plan transition")
@@ -1204,45 +1370,84 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
             return "reject", "same-commit"
         return "reject", "same-commit"
     if mode == "omission":
-        ordered = sorted(selected)
         retro_path.write_text("retro fixture\n", encoding="utf-8")
-        update_plan(repo, ordered[0], plans[ordered[0]]["landed"])
+        ordered = sorted(selected)
+        update_plan(repo, ordered[0], plans[ordered[0]]["landed"], completed_by_for(ordered[0]))
         first_paths = [retro_rel, f"docs/plans/{ordered[0]}"]
         run_git(repo, "add", *first_paths)
         run_git(repo, "commit", "-qm", "retro with omitted plan")
         retro_commit = run_git(repo, "rev-parse", "HEAD")
         first_commit_paths = commit_paths(repo, retro_commit)
         for name in ordered[1:]:
-            update_plan(repo, name, plans[name]["landed"])
+            update_plan(repo, name, plans[name]["landed"], completed_by_for(name))
         run_git(repo, "add", *[f"docs/plans/{name}" for name in ordered[1:]])
         run_git(repo, "commit", "-qm", "omitted plan transition")
         if not required_paths.issubset(first_commit_paths):
             return "reject", "all-plans"
         return "reject", "all-plans"
-    retro_path.write_text("retro fixture\n", encoding="utf-8")
+    retro_count = int(spec.get("retro_count", 1))
+    if retro_count > 0:
+        retro_path.write_text("retro fixture\n", encoding="utf-8")
+    if retro_count > 1:
+        (repo / "docs/retros/extra.md").write_text("extra retro fixture\n", encoding="utf-8")
     for name in selected:
-        update_plan(repo, name, plans[name]["landed"])
-        if spec.get("mutation"):
-            mutate_transition_target(repo / "docs/plans" / name, spec["mutation"])
+        update_plan(repo, name, plans[name]["landed"], completed_by_for(name))
+        mutation = spec.get("mutation")
+        mutation_plan = spec.get("mutation_plan")
+        if mutation and (not mutation_plan or mutation_plan == name):
+            mutate_transition_target(repo / "docs/plans" / name, mutation)
     if tracker_rel:
         with (repo / tracker_rel).open("a", encoding="utf-8") as tracker:
             tracker.write("retro update\n")
-    run_git(repo, "add", *sorted(required_paths))
+    extra_tracker = spec.get("extra_tracker")
+    if extra_tracker:
+        extra_tracker_path = repo / str(extra_tracker)
+        extra_tracker_path.parent.mkdir(parents=True, exist_ok=True)
+        extra_tracker_path.write_text("unmodeled tracker\n", encoding="utf-8")
+    add_paths = [path for path in sorted(required_paths) if (repo / path).exists()]
+    if retro_count > 1:
+        add_paths.append("docs/retros/extra.md")
+    if extra_tracker:
+        add_paths.append(str(extra_tracker))
+    run_git(repo, "add", *add_paths)
     run_git(repo, "commit", "-qm", "retro and plan transitions")
     commit = run_git(repo, "rev-parse", "HEAD")
     if spec.get("dirty_worktree_restore"):
         parent = run_git(repo, "rev-parse", f"{commit}^")
         for name in selected:
             run_git(repo, "restore", "--source", parent, "--", f"docs/plans/{name}")
+    parent_commit = run_git(repo, "rev-parse", f"{commit}^")
     for name in selected:
         body_changed, changed_fields = inspect_plan_transition(repo, commit, name)
         unexpected_fields = changed_fields - {"status", "completed_by"}
+        parent_text = run_git_text(repo, "show", f"{parent_commit}:docs/plans/{name}")
+        parent_fields = parse_frontmatter_text(parent_text)
+        committed_text = run_git_text(repo, "show", f"{commit}:docs/plans/{name}")
+        committed_fields = parse_frontmatter_text(committed_text)
+        if parent_fields.get("status") != "approved" or committed_fields.get("status") != "done":
+            return "reject", "status"
+        if committed_fields.get("completed_by") != str(plans[name]["landed"]):
+            return "reject", "completed_by"
         if body_changed:
             return "reject", "body"
         if unexpected_fields:
             return "reject", f"frontmatter {','.join(sorted(unexpected_fields))}"
     changed_paths = commit_paths(repo, commit)
-    if not required_paths.issubset(changed_paths):
+    retro_paths = {
+        path
+        for path in changed_paths
+        if Path(path).parts[:2] == ("docs", "retros") and path.endswith(".md")
+    }
+    if retro_paths != {retro_rel}:
+        return "reject", "retro"
+    try:
+        if not run_git_text(repo, "show", f"{commit}:{retro_rel}").strip():
+            return "reject", "retro"
+    except subprocess.CalledProcessError:
+        return "reject", "retro"
+    if changed_paths - required_paths:
+        return "reject", "tracker"
+    if changed_paths != required_paths:
         return "reject", "all-plans"
     return "transition", "all-plans same-commit"
 
@@ -1453,13 +1658,13 @@ if mode == "fixtures":
     else:
         if consumer == "implementing":
             cases = implementing_cases(root / "implementing")
-            evaluate_cases(rows, cases, implementing_decision)
             diagnostic_mutations(rows, cases, implementing_decision)
         elif consumer == "release-loop":
             cases = release_cases(root / "release-loop")
             evaluate_cases(rows, cases, release_decision)
         elif consumer == "retrospective":
             cases = retro_cases(root / "retrospective")
+            retro_history_mutations(cases)
             evaluate_cases(rows, cases, lambda path: retro_decision(path))
         else:
             emit("FAIL", "consumer", "unknown consumer")

@@ -700,18 +700,26 @@ def unquote(value):
 
 def body_seal_scalar(fm_lines):
     value = None
+    current_key = None
     for line in fm_lines:
         stripped = line.lstrip()
         if not stripped or stripped.startswith("#"):
             continue
-        if line.startswith((" ", "\t")) or ":" not in line:
+        if line.startswith((" ", "\t")):
+            if stripped.startswith("- ") and current_key == "body_seal":
+                item = unquote(stripped[2:].strip())
+                if isinstance(value, list):
+                    value.append(item)
+                else:
+                    value = [item]
+            continue
+        if ":" not in line:
             continue
         key, _, raw = line.partition(":")
-        if key.strip() != "body_seal":
+        current_key = key.strip()
+        if current_key != "body_seal":
             continue
         raw = raw.strip()
-        # Match the shipped parser: an empty raw value is its list placeholder,
-        # while quotes are removed before scalar validation.
         value = unquote(raw) if raw else []
     return value
 
