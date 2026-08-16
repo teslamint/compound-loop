@@ -309,7 +309,13 @@ def implementing_decision(path: Path, fixture: str) -> tuple[str, str]:
     return "accept", ""
 def adoption_cases(directory: Path, consumer: str) -> list[tuple[str, Path]]:
     cases: list[tuple[str, Path]] = []
-    body = "## Goal\n\nimmutable baseline body\n"
+    body = (
+        "## Goal\n\n"
+        "immutable baseline body\n\n"
+        "status: body-status\n"
+        "completed_by: body-completed-by\n"
+        "superseded_by: body-superseded-by\n"
+    )
     old_seal = "0" * 64
     required = {
         "approval": "first-hand explicit approval",
@@ -486,7 +492,11 @@ def verify_later_transition(repo: Path, plan_path: str, commit: str) -> tuple[bo
     try:
         parent_seals = _frontmatter_field_values(parent_raw, "body_seal")
         current_seals = _frontmatter_field_values(current_raw, "body_seal")
+        parent_without = _frontmatter_region(_frontmatter_seal_placeholder(parent_raw))
+        current_without = _frontmatter_region(_frontmatter_seal_placeholder(current_raw))
     except ValueError:
+        return False, ""
+    if parent_without != current_without:
         return False, ""
     if len(parent_seals) != 1 or len(current_seals) != 1:
         return False, ""
@@ -1205,7 +1215,12 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
         )
         evaluate_later_history("superseded-extra-body", extra_successor_body_repo, "reject")
 
-        def make_deepening_repo(name: str, authorization: str | None, seal_override: str | None = None) -> Path:
+        def make_deepening_repo(
+            name: str,
+            authorization: str | None,
+            seal_override: str | None = None,
+            frontmatter_mutation: bool = False,
+        ) -> Path:
             repo = fresh(name)
             plan = repo / source_plan
             text = plan.read_text(encoding="utf-8")
@@ -1218,6 +1233,8 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
                 f"body_seal: {deepened_seal}\n",
                 1,
             )
+            if frontmatter_mutation:
+                deepened = deepened.replace("title: Adoption\n", "title: Adoption \t\n", 1)
             plan.write_text(deepened, encoding="utf-8")
             message = "interactive plan deepening\n\n"
             if authorization is not None:
@@ -1235,6 +1252,14 @@ def transition_mutations(complete: Path, evidence: dict) -> None:
             "deepening-wrong-digest", INTERACTIVE_DEEPENING_MARKER, "e" * 64
         )
         evaluate_later_history("deepening-wrong-digest", wrong_digest_repo, "reject")
+        # A byte-only frontmatter mutation must not qualify as deepening even
+        # when parsed values, body, and body seal remain valid.
+        frontmatter_bytes_repo = make_deepening_repo(
+            "deepening-frontmatter-bytes",
+            INTERACTIVE_DEEPENING_MARKER,
+            frontmatter_mutation=True,
+        )
+        evaluate_later_history("deepening-frontmatter-bytes", frontmatter_bytes_repo, "reject")
 
         # Missing and incorrect authorization are real commit mutations, not
         # policy-object substitutions, and must fail through the same history
@@ -1595,11 +1620,13 @@ def terminal_plan_blob(repo: Path, plan_path: str, commit: str) -> tuple[bool, s
     return False, "not-terminal"
 
 
+_TRACKER_UNSPECIFIED = object()
 def verify_plan_terminal_transition(
     repo: Path,
     plan_path: str,
     commit: str,
     retro_path: str | None = None,
+    tracker_path: str | None | object = _TRACKER_UNSPECIFIED,
 ) -> tuple[bool, str]:
     paths = commit_paths(repo, commit)
     if plan_path not in paths:
@@ -1662,11 +1689,23 @@ def verify_plan_terminal_transition(
             return False, "terminal-status"
         if candidate_fields.get("status") != "done":
             return False, "terminal-status"
-    if tracker_paths and tracker_paths != {"ROADMAP.md"}:
-        return False, "terminal-tracker"
+    if tracker_path is _TRACKER_UNSPECIFIED:
+        if tracker_paths and tracker_paths != {"ROADMAP.md"}:
+            return False, "terminal-tracker"
+    else:
+        if tracker_path is not None and (
+            not tracker_path
+            or Path(tracker_path).is_absolute()
+            or ".." in Path(tracker_path).parts
+        ):
+            return False, "terminal-tracker"
+        expected_tracker_paths = {tracker_path} if tracker_path is not None else set()
+        if tracker_paths != expected_tracker_paths:
+            return False, "terminal-tracker"
     if tracker_paths:
+        tracker = next(iter(tracker_paths))
         try:
-            if run_git(repo, "cat-file", "-t", f"{commit}:ROADMAP.md") != "blob":
+            if run_git(repo, "cat-file", "-t", f"{commit}:{tracker}") != "blob":
                 return False, "terminal-tracker"
         except subprocess.CalledProcessError:
             return False, "terminal-tracker"
@@ -1707,6 +1746,13 @@ def retro_cases(directory: Path) -> list[tuple[str, Path]]:
         run_git(repo, "config", "user.name", "Fixture")
         for plan in spec.get("plans", []):
             body = "## Goal\n\nfixture"
+            if name == "multi-plan":
+                body += (
+                    "\n\n"
+                    "status: body-status\n"
+                    "completed_by: body-completed-by\n"
+                    "superseded_by: body-superseded-by\n"
+                )
             fields = {
                 "schema": "plan/v1",
                 "title": plan["name"],
@@ -1846,8 +1892,17 @@ def retro_history_mutations(cases: list[tuple[str, Path]]) -> None:
         def evaluate(name: str, expected: str, diagnostic: str, **overrides: object) -> None:
             case_dir = fresh(name)
             spec = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+            repo = case_dir / "repo"
+            if "tracker" in overrides and overrides["tracker"] != spec.get("tracker"):
+                existing_tracker = spec.get("tracker")
+                if existing_tracker:
+                    (repo / str(existing_tracker)).unlink()
+                modeled_tracker = overrides["tracker"]
+                if modeled_tracker:
+                    modeled_path = repo / str(modeled_tracker)
+                    modeled_path.parent.mkdir(parents=True, exist_ok=True)
+                    modeled_path.write_text("base tracker\n", encoding="utf-8")
             if overrides.pop("unrelated_completed_by", False):
-                repo = case_dir / "repo"
                 (repo / "unrelated-existing.txt").write_text("unrelated\n", encoding="utf-8")
                 run_git(repo, "add", "unrelated-existing.txt")
                 run_git(repo, "commit", "-qm", "unrelated existing commit")
@@ -1872,6 +1927,12 @@ def retro_history_mutations(cases: list[tuple[str, Path]]) -> None:
         # A legal multi-plan terminal commit carries exactly one retro, both
         # sibling plan transitions, and only the modeled tracker update.
         evaluate("multi-plan-legal", "transition", "all-plans")
+        evaluate(
+            "custom-tracker-legal",
+            "transition",
+            "all-plans",
+            tracker="docs/tracking/retrospective.md",
+        )
         evaluate("missing-retro", "reject", "retro", retro_count=0)
         evaluate("extra-retro", "reject", "retro", retro_count=2)
         evaluate(
@@ -2004,7 +2065,10 @@ def retro_decision(case_dir: Path) -> tuple[str, str]:
             run_git(repo, "restore", "--source", parent, "--", f"docs/plans/{name}")
     for name in selected:
         valid, terminal_detail = verify_plan_terminal_transition(
-            repo, f"docs/plans/{name}", commit
+            repo,
+            f"docs/plans/{name}",
+            commit,
+            tracker_path=tracker_rel,
         )
         if not valid:
             diagnostic = {
@@ -2266,6 +2330,7 @@ elif mode == "adoption":
         emit("FAIL", "adoption-policy/missing", error)
     else:
         cases = adoption_cases(root / "adoption", consumer)
+        evaluate_adoption_cases(rows, cases, consumer)
         adoption_policy_mutations(cases, consumer)
         adoption_history_boundaries(cases, consumer)
         adoption_evidence_deletions(rows, cases, consumer)
