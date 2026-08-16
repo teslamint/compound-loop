@@ -2,7 +2,8 @@
 schema: plan/v1
 title: Make the planning schema portable and verify body_seal values
 type: fix
-status: approved
+status: done
+completed_by: add8bc3bb2c7a0c6591014300eb05a33af42631e
 date: 2026-08-14
 execution: code
 origin: docs/specs/2026-08-14-schema-reference-and-seal-verification-design.md
