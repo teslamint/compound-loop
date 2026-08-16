@@ -31,7 +31,7 @@ Gather what's available; degrade gracefully rather than blocking on a missing so
 
 - **Git/PR metrics** (PR-merge mode): **Changed non-test lines**, commit count, review rounds, comments fixed/deferred, CI failures, duration from first spec commit to merge, units planned vs. completed. Shape per `schemas/retro-template.md`'s Release data table.
 - **Session-history search** (session-end mode, no PR): a pluggable capability, not a hard dependency — if a session-search tool is available, use it with a tight payload (topic, time window, one filter rule); if unavailable, skip and note the gap in the doc rather than blocking.
-- **Origin artifact**: `origin` is resolved as a repo-relative spec path, while the existing no-plan fallback applies when no plan exists. Read that spec's `## Success Criteria` section verbatim (`skills/designing/references/spec-template.md` shape: statement + `Measured by`).
+- **Origin artifact**: Follow `Origin and coverage selection` below; with no plan, preserve the existing no-plan fallback. Otherwise, read the selected spec's `## Success Criteria` section verbatim (`skills/designing/references/spec-template.md` shape: statement + `Measured by`).
 
 ## Standalone plan contract
 

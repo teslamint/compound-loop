@@ -996,10 +996,18 @@ case_34_malformed_seal() {
   [[ $RV_CODE -eq 1 ]] || { echo "  expected malformed seal exit 1, got $RV_CODE"; result=1; }
   assert_contains "$RV_STDERR" "body_seal" "malformed seal format diagnostic" || result=1
   run_pristine_for_plan "$plan"
-  [[ $PV_CODE -eq "$RV_CODE" ]] \
-    && cmp -s "$RV_STDOUT_FILE" "$PV_STDOUT_FILE" \
-    && cmp -s "$RV_STDERR_FILE" "$PV_STDERR_FILE" \
-    || { echo "  malformed seal diagnostic changed from pristine"; result=1; }
+  if [[ $PV_CODE -ne "$RV_CODE" ]]; then
+    echo "  malformed seal return code changed from pristine: candidate=$RV_CODE pristine=$PV_CODE"
+    result=1
+  fi
+  if ! cmp -s "$RV_STDOUT_FILE" "$PV_STDOUT_FILE"; then
+    echo "  malformed seal stdout changed from pristine"
+    result=1
+  fi
+  if ! cmp -s "$RV_STDERR_FILE" "$PV_STDERR_FILE"; then
+    echo "  malformed seal stderr changed from pristine"
+    result=1
+  fi
   rm -rf "$dir"
   return $result
 }

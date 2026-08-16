@@ -2397,7 +2397,7 @@ def shared_literals(path: Path, fixture: Path) -> None:
     extraction = re.search(r"text\.split\('---', 2\)\[2\]", schema_text).group(0)
     expected = {
         "implementing": {"schema": schema_version, "statuses": statuses, "seal-format": seal_format, "seal-extraction": extraction},
-        "release-loop": {"required-fields": ",".join(required), "schema": schema_version, "approved-status": "approved"},
+        "release-loop": {"required-fields": ",".join(required), "schema": schema_version, "approved-status": "approved", "plan-argument": "--plan <path>"},
         "retrospective": {},
     }[consumer]
     rows, error = parse_contract(path)

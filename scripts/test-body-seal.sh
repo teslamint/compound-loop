@@ -606,15 +606,11 @@ baseline body
   else
     fail "migration baseline class len=$baseline_length value-class=$baseline_value_class object-format=$object_format expected-length=$expected_baseline_length"
   fi
-  set +e
   unchanged_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" docs/plans/migration.md 2>&1)"; unchanged_rc=$?
   assert_not_contains "migration oracle unchanged baseline avoids invalid-baseline" "$unchanged_out" "invalid-baseline"
-  set -e
   if [ "$unchanged_rc" -eq 0 ]; then pass "migration oracle unchanged baseline"; else fail "migration oracle unchanged baseline — $unchanged_out"; fi
   printf '%s\n' 'malformed current canonical text' >"$migration_root/docs/plans/migration.md"
-  set +e
   malformed_current_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" docs/plans/migration.md 2>&1)"; malformed_current_rc=$?
-  set -e
   assert_rc "migration oracle malformed current canonical text exit" 1 "$malformed_current_rc"
   assert_contains "migration oracle malformed current extraction diagnostic" "$malformed_current_out" "body_seal extraction failed: canonical body requires two '---' delimiters"
   assert_not_contains "migration oracle malformed current no traceback" "$malformed_current_out" "Traceback"
@@ -624,84 +620,56 @@ baseline body
   git -C "$migration_root" commit -qm "fixture malformed baseline"
   malformed_baseline="$(git -C "$migration_root" rev-parse HEAD)"
   git -C "$migration_root" restore --source "$baseline" -- docs/plans/migration.md
-  set +e
   malformed_baseline_out="$(cd "$migration_root" && python3 migration-check.py "$malformed_baseline" docs/plans/migration.md 2>&1)"; malformed_baseline_rc=$?
-  set -e
   assert_rc "migration oracle malformed baseline canonical text exit" 1 "$malformed_baseline_rc"
   assert_contains "migration oracle malformed baseline extraction diagnostic" "$malformed_baseline_out" "body_seal extraction failed: canonical body requires two '---' delimiters"
   assert_not_contains "migration oracle malformed baseline no traceback" "$malformed_baseline_out" "Traceback"
   git -C "$migration_root" restore --source "$baseline" -- docs/plans/migration.md
   printf '\nchanged byte\n' >>"$migration_root/docs/plans/migration.md"
-  set +e
   changed_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" docs/plans/migration.md 2>&1)"; changed_rc=$?
-  set -e
   assert_rc "migration oracle changed body exit" 1 "$changed_rc"
   assert_contains "migration oracle changed-body diagnostic" "$changed_out" "changed-body"
-  set +e
   missing_out="$(cd "$migration_root" && python3 migration-check.py "$missing_baseline" docs/plans/migration.md 2>&1)"; missing_rc=$?
-  set -e
   assert_rc "migration oracle missing baseline exit" 1 "$missing_rc"
   assert_contains "migration oracle missing-baseline diagnostic" "$missing_out" "missing-baseline"
   git -C "$migration_root" restore --source "$baseline" -- docs/plans/migration.md
-  set +e
   option_out="$(cd "$migration_root" && python3 migration-check.py --not-a-commit docs/plans/migration.md 2>&1)"; option_rc=$?
-  set -e
   assert_rc "migration oracle option-like baseline exit" 1 "$option_rc"
   assert_contains "migration oracle option-like baseline diagnostic" "$option_out" "invalid-baseline"
   absolute_plan="$migration_root/docs/plans/migration.md"
-  set +e
   absolute_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" "$absolute_plan" 2>&1)"; absolute_rc=$?
-  set -e
   assert_rc "migration oracle absolute plan path exit" 1 "$absolute_rc"
   assert_contains "migration oracle absolute plan path diagnostic" "$absolute_out" "invalid-plan-path"
-  set +e
   traversal_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" ../docs/plans/migration.md 2>&1)"; traversal_rc=$?
-  set -e
   assert_rc "migration oracle traversal plan path exit" 1 "$traversal_rc"
   assert_contains "migration oracle traversal plan path diagnostic" "$traversal_out" "invalid-plan-path"
   ln -s docs/plans/migration.md "$migration_root/migration-link.md"
-  set +e
   symlink_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" migration-link.md 2>&1)"; symlink_rc=$?
-  set -e
   assert_rc "migration oracle symlink plan path exit" 1 "$symlink_rc"
   assert_contains "migration oracle symlink plan path diagnostic" "$symlink_out" "symlink-plan-path"
-  set +e
   short_out="$(cd "$migration_root" && python3 migration-check.py "$short_baseline" docs/plans/migration.md 2>&1)"; short_rc=$?
-  set -e
   assert_rc "migration oracle short baseline exit" 1 "$short_rc"
   assert_contains "migration oracle short baseline diagnostic" "$short_out" "invalid-baseline"
   uppercase_baseline="A${baseline:1}"
-  set +e
   uppercase_out="$(cd "$migration_root" && python3 migration-check.py "$uppercase_baseline" docs/plans/migration.md 2>&1)"; uppercase_rc=$?
-  set -e
   assert_rc "migration oracle uppercase baseline exit" 1 "$uppercase_rc"
   assert_contains "migration oracle uppercase baseline diagnostic" "$uppercase_out" "invalid-baseline"
   blob_baseline="$(git -C "$migration_root" hash-object -w "$migration_root/docs/plans/migration.md")"
-  set +e
   blob_out="$(cd "$migration_root" && python3 migration-check.py "$blob_baseline" docs/plans/migration.md 2>&1)"; blob_rc=$?
-  set -e
   assert_rc "migration oracle exact-length blob baseline exit" 1 "$blob_rc"
   assert_contains "migration oracle exact-length blob baseline diagnostic" "$blob_out" "missing-baseline"
   tree_baseline="$(git -C "$migration_root" rev-parse "$baseline^{tree}")"
-  set +e
   tree_out="$(cd "$migration_root" && python3 migration-check.py "$tree_baseline" docs/plans/migration.md 2>&1)"; tree_rc=$?
-  set -e
   assert_rc "migration oracle exact-length non-commit baseline exit" 1 "$tree_rc"
   assert_contains "migration oracle exact-length non-commit baseline diagnostic" "$tree_out" "missing-baseline"
-  set +e
   missing_path_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" docs/plans/missing.md 2>&1)"; missing_path_rc=$?
-  set -e
   assert_rc "migration oracle missing target path exit" 1 "$missing_path_rc"
   assert_contains "migration oracle missing target path diagnostic" "$missing_path_out" "invalid-plan-path"
-  set +e
   directory_path_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" docs/plans 2>&1)"; directory_path_rc=$?
-  set -e
   assert_rc "migration oracle directory target path exit" 1 "$directory_path_rc"
   assert_contains "migration oracle directory target path diagnostic" "$directory_path_out" "invalid-plan-path"
   ln -s docs "$migration_root/linked-root"
-  set +e
   intermediate_symlink_out="$(cd "$migration_root" && python3 migration-check.py "$baseline" linked-root/plans/migration.md 2>&1)"; intermediate_symlink_rc=$?
-  set -e
   assert_rc "migration oracle intermediate symlink path exit" 1 "$intermediate_symlink_rc"
   assert_contains "migration oracle intermediate symlink path diagnostic" "$intermediate_symlink_out" "symlink-plan-path"
   cr_path=$'docs/plans/control\r.md'
@@ -726,9 +694,7 @@ SH
       control_path="$lf_path"
     fi
     rm -f "$git_probe"
-    set +e
     control_out="$(cd "$migration_root" && env MIGRATION_GIT_PROBE="$git_probe" PATH="$migration_root/no-git-bin:$PATH" python3 migration-check.py "$control_baseline" "$control_path" 2>&1)"; control_rc=$?
-    set -e
     assert_rc "migration oracle $control_kind-bearing plan path exit" 1 "$control_rc"
     assert_contains "migration oracle $control_kind-bearing plan path diagnostic" "$control_out" "invalid-plan-path"
     assert_not_contains "migration oracle $control_kind-bearing plan path no traceback" "$control_out" "Traceback"
@@ -755,9 +721,7 @@ SH
       u2029) unicode_path="$u2029_path" ;;
     esac
     rm -f "$git_probe"
-    set +e
     unicode_out="$(cd "$migration_root" && env MIGRATION_GIT_PROBE="$git_probe" PATH="$migration_root/no-git-bin:$PATH" python3 migration-check.py "$unicode_baseline" "$unicode_path" 2>&1)"; unicode_rc=$?
-    set -e
     assert_rc "migration oracle $unicode_kind plan path exit" 1 "$unicode_rc"
     assert_contains "migration oracle $unicode_kind plan path diagnostic" "$unicode_out" "invalid-plan-path"
     assert_not_contains "migration oracle $unicode_kind plan path no traceback" "$unicode_out" "Traceback"
@@ -771,16 +735,13 @@ SH
   git -C "$migration_root" add -- -migration.md
   git -C "$migration_root" commit -qm "dash-leading path fixture"
   dash_baseline="$(git -C "$migration_root" rev-parse HEAD)"
-  set +e
   dash_out="$(cd "$migration_root" && python3 migration-check.py "$dash_baseline" -migration.md 2>&1)"; dash_rc=$?
-  set -e
   assert_rc "migration oracle dash-leading regular path exit" 0 "$dash_rc"
   assert_contains "migration oracle dash-leading regular path diagnostic" "$dash_out" "unchanged-body"
 else
   fail "migration oracle extraction and execution — marker/fence contract absent"
 fi
 rm -rf "$migration_root"
-set +e
 
 # --- Disposable Git adoption transition fixture -----------------------------
 run_adoption_migration_fixture() {
@@ -1158,6 +1119,7 @@ for outcome in OUTCOMES:
     repo, baseline, old, new, pre_bytes, command, sentinel_expected = new_repo(outcome)
     sentinel = repo / "sentinel.txt"
     pre = state(repo, pre_bytes)
+    post = pre
     rc = 1
     output = ""
     next_result = "not applicable"
@@ -1170,15 +1132,16 @@ for outcome in OUTCOMES:
         failures += 1
     elif outcome == "success":
         rc, output = transition(repo, baseline, old, new, command, "first-hand-explicit", None)
+        post = state(repo, pre_bytes)
         ok, mechanism = assert_success(repo, baseline, pre_bytes, old, new, command) if rc == 0 else (False, output)
         if not ok:
             print(f"RED adoption-reseal-{outcome}/{mechanism}", file=sys.stderr)
             failures += 1
     elif outcome == "forced-failure":
         rc, output = transition(repo, baseline, old, new, command, "first-hand-explicit", "forced-failure")
-        post = state(repo, pre_bytes)
+        forced = state(repo, pre_bytes)
         post_bytes = (repo / TARGET).read_bytes()
-        genuine_forced = rc != 0 and forced_failure_state(post, baseline, pre_bytes, post_bytes, old, new)
+        genuine_forced = rc != 0 and forced_failure_state(forced, baseline, pre_bytes, post_bytes, old, new)
         no_op_rejected = (
             not forced_failure_state(pre, baseline, pre_bytes, pre_bytes, old, new)
             and not exact_seal_only_transition(pre_bytes, pre_bytes, old, new)
@@ -1329,12 +1292,6 @@ for outcome in OUTCOMES:
         if not ok:
             print(f"RED adoption-reseal-{outcome}/{mechanism}", file=sys.stderr)
             failures += 1
-    else:
-        post = state(repo, pre_bytes)
-    if outcome == "success":
-        post = state(repo, pre_bytes)
-    elif outcome not in {"rerun", "compensation", "headless", "cancellation"}:
-        post = state(repo, pre_bytes)
     if outcome in {"rerun", "compensation", "cancellation"}:
         expected_stages = {
             "rerun": ("forced-failure", "rerun", "compensation", "retry"),
