@@ -1,6 +1,6 @@
 ---
 title: Instruction Payload Slimming
-status: draft
+status: approved
 date: 2026-08-21
 schema: spec/v1
 ---
