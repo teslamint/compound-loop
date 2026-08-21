@@ -75,7 +75,7 @@ git fetch origin <base_branch> --quiet
 git rev-list --left-right --count origin/<base_branch>...<base_branch>
 ```
 
-If `git fetch` fails, stop -- push would also fail. Parse the output as `<remote_ahead>\t<local_ahead>`.
+If `git fetch` fails, stop -- topology verification is unavailable. Record `fetch-failed` and the error in the durable record. Note: fetch failure does not guarantee push failure (`remote.pushurl` may differ from `remote.url`). Parse the output as `<remote_ahead>\t<local_ahead>`.
 
 | remote_ahead | local_ahead | Meaning | Action |
 |---|---|---|---|
@@ -94,9 +94,9 @@ If `git rebase --onto` encounters conflicts, run `git rebase --abort`, stop, and
 
 **`--auto` mode**: escalate to blocked -- never auto-resolve base divergence. Local-ahead commits may be intentional unpushed work; shipping cannot judge intent. This matches the PR #29 precedent, which required typed authorization plus a backup branch for base-ref reconciliation. Log `blocked_reason` in the durable record and surface to the user.
 
-**Preparation-only path** (Step 0 determined no network): skip this gate -- the push will not happen. Include a note in the manual-steps file: "Before pushing, check base-branch sync: `git rev-list --left-right --count origin/<base>...<base>`"
+**Preparation-only path** (Step 0 determined no network): skip this gate -- the push will not happen. Include a note in the manual-steps file: "Before pushing, check base-branch sync: `git fetch origin <base> --quiet && git rev-list --left-right --count origin/<base>...<base>` -- stop if fetch fails."
 
-Log the result in the shipping state sink: `release-loop` path -> `.release-loop/progress.md` Log line `<timestamp> ship: base-topology — origin/<base> left=N right=M; action=<rebase-onto|accepted|clean|stopped|blocked>`; standalone path -> `shipping-final-action.md` in git-dir. `enforces: P3, P8`
+Log the result in the shipping state sink: `release-loop` path -> `.release-loop/progress.md` Log line `<timestamp> ship: base-topology — origin/<base> left=N right=M; action=<clean|rebase-onto|accepted|blocked|stopped|fetch-failed|rebase-conflict>; reason=<...>`; standalone path -> `shipping-final-action.md` in git-dir. `enforces: P3, P8`
 
 **Guardrail, verbatim:** the PR body **must** be written to a temp file and passed via `--body-file <path>`. Never use `--body-file -`, stdin pipes, heredoc-to-stdin, or `--body "$(cat ...)"` -- these can silently produce an empty PR body while `gh` still exits 0 and returns a URL.
 
