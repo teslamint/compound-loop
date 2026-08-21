@@ -142,6 +142,69 @@ If invoked from `release-loop`, update `.release-loop/progress.md` with review r
 
 **Message freshness**: if review rounds (Step 6) produced additional fix commits, regenerate the merge commit message from the current diff against base — the Step 3 draft describes the pre-review artifact and is stale after review changes it.
 
+### External review verification gate
+
+Before presenting the merge-approval question or evaluating `--auto` conditions, verify that any detected external review integration actually produced review artifacts. A green reviewer status context proves only that the integration finished handling an event, not that a review ran to completion.
+
+**Evidence fetch.** Re-fetch four evidence classes independently -- never from cached Step 5/6 results, since remote state can change between steps. Each class answers a different question; collapsing them loses the distinction that caused the PR #29 failure.
+
+```bash
+PR_NUMBER=<number>
+
+# 1. Check runs and status contexts
+gh pr checks "$PR_NUMBER"
+
+# 2. Submitted reviews (authored review objects)
+gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/reviews" --jq 'length'
+
+# 3. Issue-level review comments
+gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/comments" --jq 'length'
+
+# 4. Review threads with resolution state (GraphQL -- gh pr view has no reviewThreads field)
+gh api graphql -F number="$PR_NUMBER" -f query='
+  query($number:Int!){
+    repository(owner:"<owner>",name:"<repo>"){
+      pullRequest(number:$number){
+        reviewThreads(first:100){ totalCount nodes { isResolved } }
+      }}}'
+```
+
+**Review-bot detection.** Identify external review integrations from evidence class 1. A check run qualifies as a review-bot context when its name matches a known pattern (case-insensitive):
+
+| Pattern | Integration | Observed name |
+|---|---|---|
+| `coderabbit` | CodeRabbit | `CodeRabbit` (check run) |
+| `codeclimate` | Code Climate | -- |
+| `sonarcloud`, `sonarqube` | SonarQube/SonarCloud | -- |
+| `codacy` | Codacy | -- |
+
+This list is not exhaustive. An unrecognized integration produces no false positive (the gate does not fire), but may produce a false negative (a review bot runs without the gate catching it). The pattern list is extensible without changing the gate logic. When no review-bot context is detected, record `not-applicable` and continue to the merge-approval question.
+
+**Decision tree.** When a review-bot context is detected, evaluate artifacts produced by any reviewer (human or bot) -- the gate verifies that review work happened, not who performed it:
+
+| Submitted reviews | Review threads | Review-bot status | Decision |
+|---|---|---|---|
+| > 0 | any | any | **Satisfied** -- review artifacts exist; continue |
+| 0 | > 0 | any | **Satisfied** -- review threads prove a reviewer ran; continue |
+| 0 | 0 | success/passing | **Artifact-free success** -- gate fires |
+| 0 | 0 | pending/in_progress | **In progress** -- block, wait for completion |
+| 0 | 0 | skipped/manual_required | **Skipped** -- gate fires |
+| 0 | 0 | failure/error/rate-limited/unavailable | **Failed** -- gate fires (review failed or unavailable, not absent) |
+
+**Gate behavior.** When the gate fires (artifact-free success, skipped, or failed reviewer status), present a blocking question with three options:
+
+- **Required -- request review** (recommended): the reviewer must produce review artifacts before merge proceeds. If the reviewer supports manual invocation (e.g. `@coderabbitai review`), present the invocation command. After invocation, wait 60 seconds, then re-fetch all four evidence classes and re-evaluate the decision tree. Cap 2 re-fetch attempts with 60-second waits. On cap exhaustion, re-present the gate question with two remaining options: waive or stop.
+- **Waived**: proceed without external review. Record who waived (always `user`), the rationale, and the accepted risk. Silence, timeout, or a green status without artifacts is not a waiver -- the user must explicitly choose this option.
+- **Stop**: abort shipping; user resolves manually.
+
+**`--auto` mode**: escalate to blocked when the gate fires -- never auto-waive a required external review. Log `blocked_reason: external-review-artifact-free` in the durable record and surface to the user. When the gate evaluates to satisfied or not-applicable, `--auto` continues without user interaction.
+
+**Durable record.** Log the gate result in the shipping state sink: `release-loop` path -> `.release-loop/progress.md` Log line `<timestamp> ship: external-review — reviewer=<name|none>; reviews=<N>; threads=<N>; status=<value>; decision=<satisfied|waived|required|not-applicable|blocked|stopped>; reason=<...>`; standalone path -> `shipping-final-action.md` in git-dir. Waiver evidence must include: the user's stated rationale, the review-bot name, and the timestamp. A waiver without rationale is a schema violation. `enforces: P3, P8`
+
+**Interaction with Step 6.** Step 6 processes review comments and threads that already exist. This gate checks whether those artifacts exist at all. If the reviewer ran and produced comments, Step 6 processes them and the gate finds artifacts (satisfied). If the reviewer skipped, Step 6 has nothing to process and the gate catches the gap.
+
+**Timing.** A merge accepted by GitHub is a remote side effect. If the session is interrupted after sending the merge command but before the gate re-fetch, the merge may already have completed. On resume, re-query the PR state; if merged, do not wait for review artifacts that can no longer be produced on the closed PR. Assess a revert or follow-up review PR instead.
+
 Default: present the PR (CI status, comments fixed/deferred, any deferred items) and ask for merge approval via the blocking question tool. `--auto`: merge only when CI is green and no P0 findings are open (P1s addressed or explicitly deferred with rationale) -- this is the sole auto-merge condition, never relaxed. Squash is the default merge strategy; honor a repo-documented alternative (e.g. CONTRIBUTING.md) when one exists. `enforces: P7`
 
 ```bash
