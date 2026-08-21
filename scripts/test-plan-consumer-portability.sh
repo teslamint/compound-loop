@@ -402,6 +402,9 @@ def adoption_cases(directory: Path, consumer: str) -> list[tuple[str, Path]]:
         run_git(repo, "init", "-q")
         run_git(repo, "config", "user.email", "fixture@example.invalid")
         run_git(repo, "config", "user.name", "Adoption Fixture")
+        run_git(repo, "config", "core.autocrlf", "false")
+        run_git(repo, "config", "core.safecrlf", "false")
+        run_git(repo, "config", "commit.gpgsign", "false")
         path = write_plan(
             repo / "docs/plans",
             "adoption.md",
@@ -1890,6 +1893,9 @@ def retro_cases(directory: Path) -> list[tuple[str, Path]]:
         run_git(repo, "init", "-q")
         run_git(repo, "config", "user.email", "fixture@example.invalid")
         run_git(repo, "config", "user.name", "Fixture")
+        run_git(repo, "config", "core.autocrlf", "false")
+        run_git(repo, "config", "core.safecrlf", "false")
+        run_git(repo, "config", "commit.gpgsign", "false")
         for plan in spec.get("plans", []):
             body = "## Goal\n\nfixture"
             if name == "multi-plan":
