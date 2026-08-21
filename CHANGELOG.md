@@ -12,7 +12,6 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 - Prevented feature-derived path escape, collision-suffix drift on rerun, incomplete archive matches, stranded corruption backups, and stale archive verification.
-- Issue #14: Shipped a self-contained planning schema and verifiable canonical seals.
 
 ## [0.9.0] - 2026-08-01
 
