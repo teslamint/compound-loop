@@ -71,8 +71,10 @@ Three modes: **description-only** (compose and print, do not push/create), **des
 Before pushing the feature branch, check whether the local base branch has diverged from its remote-tracking branch. A local base ahead of remote means the PR scope will include unintended commits, and post-merge fast-forward will fail -- the PR #29 failure mode.
 
 ```bash
-git fetch origin <base_branch> --quiet
-git rev-list --left-right --count origin/<base_branch>...<base_branch>
+base_branch="<base_branch>"
+feature_branch="<feature_branch>"
+git fetch origin --quiet "$base_branch"
+git rev-list --left-right --count "origin/$base_branch...$base_branch"
 ```
 
 If `git fetch` fails, stop -- topology verification is unavailable. Record `fetch-failed` and the error in the durable record. Note: fetch failure does not guarantee push failure (`remote.pushurl` may differ from `remote.url`). Parse the output as `<remote_ahead>\t<local_ahead>`.
@@ -84,9 +86,9 @@ If `git fetch` fails, stop -- topology verification is unavailable. Record `fetc
 | 0 | N | Local base ahead of remote | Gate |
 | N | M | Both diverged | Gate |
 
-When `local_ahead > 0`, first verify the feature branch actually inherited those commits: `git merge-base --is-ancestor <base_branch> <feature_branch>`. If the local base tip is **not** an ancestor of the feature branch (e.g., the feature was branched from `origin/<base_branch>` directly), the local-ahead commits are not in the PR scope -- skip the gate and continue. Otherwise, list the local-only commits (`git log --oneline origin/<base_branch>..<base_branch>`) and present a blocking question with three options:
+When `local_ahead > 0`, check whether the feature branch actually inherited any local-only commits by comparing commit counts: `inherited=$(( $(git rev-list --count "origin/$base_branch".."$feature_branch") - $(git rev-list --count "$base_branch".."$feature_branch") ))`. If `inherited == 0`, no local-only commits are in the PR scope -- skip the gate. This catches the intermediate case where the feature branched from L1 while main advanced to L2 (tip-only `--is-ancestor` would miss L1). If `inherited > 0`, list the local-only commits (`git log --oneline "origin/$base_branch".."$base_branch"`) and present a blocking question with three options:
 
-- **Rebase feature onto remote base** (recommended): `git rebase --onto origin/<base_branch> <base_branch> <feature_branch>`. This transplants only feature-unique commits onto the remote base tip, stripping the inherited local-ahead commits without touching the local base ref. After success, verify with `git log --oneline origin/<base_branch>..<feature_branch>` -- it must contain only feature-unique commits; if any local-ahead commits remain, stop and report. If the feature branch already exists on the remote (update-PR path), the subsequent push will be non-fast-forward; use `git push --force-with-lease` for that push only.
+- **Rebase feature onto remote base** (recommended): `git rebase --onto "origin/$base_branch" "$base_branch" "$feature_branch"`. This transplants only feature-unique commits onto the remote base tip, stripping the inherited local-ahead commits without touching the local base ref. After success, verify with `git log --oneline "origin/$base_branch".."$feature_branch"` -- it must contain only feature-unique commits; if any local-ahead commits remain, stop and report. If the feature branch already exists on the remote (update-PR path), the subsequent push will be non-fast-forward; use `git push --force-with-lease origin "$feature_branch"` for that push only.
 - **Accept divergence**: proceed with the push. The durable record must log: the local-ahead commit list, acknowledgment that the PR scope includes those commits, and that Step 8's merged-result fast-forward check will fail (manual base reconciliation required after merge).
 - **Stop**: abort shipping; user resolves manually.
 
