@@ -66,6 +66,40 @@ Scan changed files for naturally distinct concerns; split **at the file level on
 
 Three modes: **description-only** (compose and print, do not push/create), **description-update** (rewrite an existing open PR's body only), **full** (commit already done -> push -> create/update PR). Evidence for the PR body short-circuits: skip the observable-behavior question when the user explicitly asked either way, or when the change is agent-judged non-observable (internal plumbing, docs-only, pure refactor). PR body stays minimal -- link the spec/plan by path, do not reproduce them.
 
+### Base-branch topology gate (full mode only)
+
+Before pushing the feature branch, check whether the local base branch has diverged from its remote-tracking branch. A local base ahead of remote means the PR scope will include unintended commits, and post-merge fast-forward will fail -- the PR #29 failure mode.
+
+```bash
+base_branch="<base_branch>"
+feature_branch="<feature_branch>"
+git fetch origin --quiet "$base_branch"
+git rev-list --left-right --count "origin/$base_branch...$base_branch"
+```
+
+If `git fetch` fails, stop -- topology verification is unavailable. Record `fetch-failed` and the error in the durable record. Note: fetch failure does not guarantee push failure (`remote.pushurl` may differ from `remote.url`). Parse the output as `<remote_ahead>\t<local_ahead>`.
+
+| remote_ahead | local_ahead | Meaning | Action |
+|---|---|---|---|
+| 0 | 0 | In sync | Continue to push |
+| N | 0 | Remote has new commits | Continue -- normal; PR merge will include them |
+| 0 | N | Local base ahead of remote | Gate |
+| N | M | Both diverged | Gate |
+
+When `local_ahead > 0`, check whether the feature branch actually inherited any local-only commits by comparing commit counts: `inherited=$(( $(git rev-list --count "origin/$base_branch".."$feature_branch") - $(git rev-list --count "$base_branch".."$feature_branch") ))`. If `inherited == 0`, no local-only commits are in the PR scope -- skip the gate. This catches the intermediate case where the feature branched from L1 while main advanced to L2 (tip-only `--is-ancestor` would miss L1). If `inherited > 0`, list the local-only commits (`git log --oneline "origin/$base_branch".."$base_branch"`) and present a blocking question with three options:
+
+- **Rebase feature onto remote base** (recommended): `git rebase --onto "origin/$base_branch" "$base_branch" "$feature_branch"`. This transplants only feature-unique commits onto the remote base tip, stripping the inherited local-ahead commits without touching the local base ref. After success, verify with `git log --oneline "origin/$base_branch".."$feature_branch"` -- it must contain only feature-unique commits; if any local-ahead commits remain, stop and report. If the feature branch already exists on the remote (update-PR path), the subsequent push will be non-fast-forward; use `git push --force-with-lease origin "$feature_branch"` for that push only.
+- **Accept divergence**: proceed with the push. The durable record must log: the local-ahead commit list, acknowledgment that the PR scope includes those commits, and that Step 8's merged-result fast-forward check will fail (manual base reconciliation required after merge).
+- **Stop**: abort shipping; user resolves manually.
+
+If `git rebase --onto` encounters conflicts, run `git rebase --abort`, stop, and report. Never auto-resolve rebase conflicts.
+
+**`--auto` mode**: escalate to blocked -- never auto-resolve base divergence. Local-ahead commits may be intentional unpushed work; shipping cannot judge intent. This matches the PR #29 precedent, which required typed authorization plus a backup branch for base-ref reconciliation. Log `blocked_reason` in the durable record and surface to the user.
+
+**Preparation-only path** (Step 0 determined no network): skip this gate -- the push will not happen. Include a note in the manual-steps file: "Before pushing, check base-branch sync: `git fetch origin <base> --quiet && git rev-list --left-right --count origin/<base>...<base>` -- stop if fetch fails."
+
+Log the result in the shipping state sink: `release-loop` path -> `.release-loop/progress.md` Log line `<timestamp> ship: base-topology — origin/<base> left=N right=M; action=<clean|rebase-onto|accepted|blocked|stopped|fetch-failed|rebase-conflict>; reason=<...>`; standalone path -> `shipping-final-action.md` in git-dir. `enforces: P3, P8`
+
 **Guardrail, verbatim:** the PR body **must** be written to a temp file and passed via `--body-file <path>`. Never use `--body-file -`, stdin pipes, heredoc-to-stdin, or `--body "$(cat ...)"` -- these can silently produce an empty PR body while `gh` still exits 0 and returns a URL.
 
 ```bash
