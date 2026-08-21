@@ -650,7 +650,7 @@ title: Case 20 Plan
 type: feat
 status: draft
 date: 2026-07-27
-execution: ops
+execution: batch
 ---
 EOF
   run_validator "$plan"
