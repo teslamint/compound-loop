@@ -15,6 +15,12 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 ## Release ceremony
 
 - **Release ceremony** — the post-merge process that turns merged work into a versioned release: CHANGELOG authoring, version bump, and tag. Owned by `release`, deliberately separate from feature shipping so features stay independently revertable.
+
+## Changelog convention
+
+- **Released-section immutability** — a tagged `## [x.y.z]` CHANGELOG heading is a historical record of what shipped in that version and must not be edited after the tag. *Avoid: changelog entry reuse* — new entries belong in the next release's freshly drafted section, never under an old heading.
+- **No-unreleased convention** — this repo creates CHANGELOG sections only at release time; an `[Unreleased]` heading is absent by policy and would break the release gate that matches the newest section to the requested version.
+
 - **Four-way version agreement** — the release-time invariant that both plugin manifests, the newest CHANGELOG section, and the newest tag name the same version.
 - **Backfill** — creating CHANGELOG sections for releases that predate the file itself, derived from their committed specs and retros; keyed on the file's absence, one-time per repo.
 - **Prepare-only** — the headless posture of a ceremony that requires first-hand consent: run every step up to the gate, persist the draft and exact commands, and stop with a skip signal instead of executing.
@@ -79,3 +85,9 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 ## Metrics
 
 - **Changed non-test lines** — the count of modified lines (added + removed) excluding tests, generated files, and lockfiles, used as the canonical diff-size metric across all phases (e.g. lane triggers).
+
+## Agent context files
+
+- **Global-rule contamination** — editing a repo's `CLAUDE.md` that is a symlink to a dot-agents global rules file, which loads into every project and leaks repo-specific content across all of them. *Avoid: writing project guidance through the CLAUDE.md symlink* — it silently degrades unrelated sessions.
+- **Plugin-cache drift** — divergence between a plugin cache's skill text and the repository HEAD `skills/**` while both declare the same plugin version string; the version number is not a parity signal. *Avoid: trusting cached skill text* when HEAD has moved.
+- **Machine-local config** — agent context files (`/CLAUDE.md`, `/AGENTS.md`) that are gitignored per-project and never committed; `git ls-files` exiting 0 does not prove tracking. Team-shared guidance belongs in `docs/solutions/`.
