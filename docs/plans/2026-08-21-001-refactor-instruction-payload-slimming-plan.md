@@ -2,10 +2,11 @@
 schema: plan/v1
 title: Instruction Payload Slimming
 type: refactor
-status: draft
+status: approved
 date: 2026-08-21
 execution: code
 origin: docs/specs/2026-08-21-instruction-payload-slimming-design.md
+body_seal: 53c78efbe9c0bab101d5c254c3922beabcc45f6f6e867173ddf33ee6e84ea110
 ---
 
 # Instruction Payload Slimming — Implementation Plan
