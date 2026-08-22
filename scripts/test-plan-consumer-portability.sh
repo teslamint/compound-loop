@@ -22,11 +22,15 @@ fail() {
 copy_consumers() {
   local d
   d="$(mktemp -d)" || return 1
-  mkdir -p "$d/skills/implementing" "$d/skills/reviewing" "$d/skills/release-loop" "$d/skills/retrospective"
+  mkdir -p "$d/skills/implementing" "$d/skills/implementing/references" "$d/skills/reviewing" "$d/skills/reviewing/references" "$d/skills/release-loop" "$d/skills/release-loop/references" "$d/skills/retrospective" "$d/skills/retrospective/references"
   cp "$ROOT/skills/implementing/SKILL.md" "$d/skills/implementing/SKILL.md"
   cp "$ROOT/skills/reviewing/SKILL.md" "$d/skills/reviewing/SKILL.md"
   cp "$ROOT/skills/release-loop/SKILL.md" "$d/skills/release-loop/SKILL.md"
   cp "$ROOT/skills/retrospective/SKILL.md" "$d/skills/retrospective/SKILL.md"
+  cp "$ROOT/skills/implementing/references/plan-consumer-contract.md" "$d/skills/implementing/references/plan-consumer-contract.md"
+  cp "$ROOT/skills/reviewing/references/plan-consumer-contract.md" "$d/skills/reviewing/references/plan-consumer-contract.md"
+  cp "$ROOT/skills/release-loop/references/plan-consumer-contract.md" "$d/skills/release-loop/references/plan-consumer-contract.md"
+  cp "$ROOT/skills/retrospective/references/plan-consumer-contract.md" "$d/skills/retrospective/references/plan-consumer-contract.md"
   printf '%s\n' "$d"
 }
 
@@ -79,6 +83,12 @@ def parse_contract(path: Path) -> tuple[list[dict], str | None]:
     text = path.read_text(encoding="utf-8")
     marker = f"<!-- plan-consumer-contract: {consumer}/v1 -->"
     end_marker = "<!-- end-plan-consumer-contract -->"
+    if marker not in text or end_marker not in text:
+        # U2 (a010fb6) relocated the operative contract block into the
+        # sibling references/plan-consumer-contract.md; fall back to it.
+        ref = path.parent / "references" / "plan-consumer-contract.md"
+        if ref.is_file():
+            text = ref.read_text(encoding="utf-8")
     if marker not in text or end_marker not in text:
         return [], "missing operative contract block"
     block = text.split(marker, 1)[1].split(end_marker, 1)[0]
@@ -2342,7 +2352,12 @@ def diagnostic_mutations(rows: list[dict], cases: list[tuple[str, Path]], decisi
 
 
 def deletion_mutations(rows: list[dict], cases: list[tuple[str, Path]]) -> None:
-    source = skill_path.read_text(encoding="utf-8")
+    # The contract block now lives in references/plan-consumer-contract.md;
+    # delete rows there so the mutation exercises the real source of truth.
+    source_path = skill_path.parent / "references" / "plan-consumer-contract.md"
+    if not source_path.is_file():
+        source_path = skill_path
+    source = source_path.read_text(encoding="utf-8")
     for row in rows:
         if row["decision"] == "literal":
             continue
