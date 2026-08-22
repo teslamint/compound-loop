@@ -151,6 +151,4 @@ After the approval gate: scan the dialogue and the spec for **resolved** domain 
 
 The only skill invoked after `designing` is `planning`. Do not invoke any implementation, frontend, or scaffolding skill from here.
 
-## Out of Scope
-
-Dropped by design (not oversight): the upstream idea-generation engine that precedes brainstorming (reference only, don't merge); HTML output rendering; a two-path synthesis-gate nuance (simplified here to one-line synthesis always, full confirmation gate at Standard tier and above); a browser-based visual companion (Claude-Code-specific; add as a project-local appendix if needed).
+Out of Scope moved to `references/out-of-scope.md`.

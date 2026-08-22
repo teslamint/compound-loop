@@ -154,6 +154,4 @@ End every invocation with the exact terminal signal line from `schemas/headless-
 
 `compound` is the only skill invoked from inside `retrospective`, and only per Phase 7's gate. Nothing invokes `retrospective` automatically — `release-loop`'s Retro phase and direct user invocation are the only callers.
 
-## Out of Scope (v0.2 hook points — documented, not implemented)
-
-- **Session-history search integration**: Phase 2 names it as pluggable; the concrete search tool and dispatch payload discipline are deferred to v0.2.
+Out of Scope moved to `references/out-of-scope.md`.
