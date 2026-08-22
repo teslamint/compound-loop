@@ -1,6 +1,6 @@
 ---
 name: shipping
-description: Take reviewed, verified work from a clean local state to merged and cleaned up -- commit, push, open a PR, watch CI, resolve review feedback, gate the merge, and clean up the branch or worktree. Use via /shipping (Claude Code) or $shipping (Codex) when review is clean and work is ready to ship, when release-loop's Ship phase fires, or on direct requests like "commit and open a PR", "ship this", "finish this branch".
+description: Take reviewed, verified work from a clean local state to merged and cleaned up -- commit, push, open a PR, watch CI, resolve review feedback, gate the merge, and clean up the branch or worktree. /shipping or $shipping when review is clean and work is ready to ship, when release-loop's Ship phase fires, or on direct requests like "commit and open a PR", "ship this", "finish this branch".
 ---
 
 # Shipping

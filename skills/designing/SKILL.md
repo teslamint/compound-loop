@@ -1,6 +1,6 @@
 ---
 name: designing
-description: Turn a feature idea into an approved, committed spec with measurable success criteria through collaborative dialogue. Use via /designing (Claude Code) or $designing (Codex) when starting new feature work, when release-loop's Design phase fires, or whenever implementation is about to begin without an approved design -- including work that looks "too simple to need one".
+description: Turn a feature idea into an approved, committed spec with measurable success criteria via collaborative dialogue. /designing or $designing when starting new feature work, when release-loop's Design phase fires, or whenever implementation is about to begin without an approved design -- including work that looks "too simple to need one".
 ---
 
 # Designing

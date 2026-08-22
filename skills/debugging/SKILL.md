@@ -1,6 +1,6 @@
 ---
 name: debugging
-description: Find root causes and fix bugs systematically. Use when debugging errors, investigating test failures, reproducing bugs from issue trackers, or when stuck after failed fix attempts. Also use when the user says "debug this", "why is this failing", "trace this error", or pastes a stack trace or error message.
+description: Find root causes and fix bugs systematically. Use when debugging errors, investigating test failures, reproducing bugs from issue trackers, or stuck after failed fix attempts. Also when the user says "debug this", "why is this failing", "trace this error", or pastes a stack trace or error message.
 ---
 
 # Debugging

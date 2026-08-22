@@ -1,6 +1,6 @@
 ---
 name: planning
-description: Turn an approved spec into an implementation plan an engineer or agent can execute with zero codebase context. Invoke as /planning (Claude Code) or $planning (Codex), or when the user says "plan this", "write an implementation plan", "break this into tasks", or a designing-phase spec is ready to plan.
+description: Turn an approved spec into an implementation plan executable with zero codebase context. /planning or $planning, or when the user says "plan this", "write an implementation plan", "break this into tasks", or a designing-phase spec is ready to plan.
 ---
 
 # Planning

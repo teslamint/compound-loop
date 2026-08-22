@@ -1,6 +1,6 @@
 ---
 name: release-loop
-description: "Drive a feature from idea to merged PR to retrospective through six phases: Design, Plan, Implement, Review, Ship, Retro. Each phase invokes a standalone compound-loop skill; this skill only sequences, gates, and persists state. Use via /release-loop <feature> (Claude Code) or $release-loop <feature> (Codex). Bare resume continues a live record; use <feature> resume when no live record exists."
+description: "Drive a feature from idea to merged PR to retrospective through six phases: Design, Plan, Implement, Review, Ship, Retro. Each phase invokes a standalone compound-loop skill; this skill only sequences, gates, and persists state. /release-loop <feature> or $release-loop <feature>. Bare resume continues a live record; use <feature> resume when no live record exists."
 ---
 
 # Release Loop
