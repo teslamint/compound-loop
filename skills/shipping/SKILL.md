@@ -13,7 +13,9 @@ From "review clean" to "merged and cleaned up," with evidence at every claim -- 
 - **Exit**: PR merged and cleaned up, or an explicit terminal state -- kept-as-is, discarded, escalated to human, or **preparation-only** (see Step 0).
 - **Gate**: merge is USER by default; `--auto` requires CI green and no open P0 (P1s addressed or explicitly deferred). `enforces: P7`
 
-Step 0: Capability Preflight moved to `references/capability-preflight.md`.
+## Step 0: Capability Preflight
+
+Read and follow `references/capability-preflight.md` before proceeding to Step 1. If any required capability is unavailable, execution stops in preparation-only status -- no push, PR creation, CI watch, or merge actions are performed.
 
 ## Step 1: Verification Gate
 
