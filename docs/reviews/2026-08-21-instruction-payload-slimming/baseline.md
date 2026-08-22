@@ -62,12 +62,12 @@ Result: **4561** (must be 4,561 — confirmed).
 
 | Block | Command (verbatim from spec Assumptions table, lines 99–108) | Bytes |
 |---|---|---|
-| M1–M4 (markers inclusive, sum) | `for f in release-loop implementing reviewing retrospective; do awk '/plan-consumer-contract/,/end-plan-consumer-contract/' $f/SKILL.md | wc -c; done | paste -sd+ - | bc` | 9040 (2245+3755+1609+1431) |
-| M5 (heading inclusive) | `awk '/^## Approved-plan transition hooks/,/^## Starting a new loop/' skills/release-loop/SKILL.md | sed \$d | wc -c` | 3566 |
-| M6 (two sections, headings inclusive) | `awk '/^## Resuming/,/^## Gate handling/' skills/release-loop/SKILL.md | sed \$d | wc -c` | 4575 |
-| M7 (heading inclusive) | `awk '/^## Step 0: Capability Preflight/,/^## Step 1:/' skills/shipping/SKILL.md | sed \$d | wc -c` | 942 |
-| M8 (heading inclusive) | `awk '/^## Out of Scope/,0' skills/designing/SKILL.md | wc -c` | 402 |
-| M9 (heading inclusive) | `awk '/^## Out of Scope/,0' skills/retrospective/SKILL.md | wc -c` | 220 |
+| M1–M4 (markers inclusive, sum) | `for f in release-loop implementing reviewing retrospective; do awk '/plan-consumer-contract/,/end-plan-consumer-contract/' skills/$f/SKILL.md \| wc -c; done \| paste -sd+ - \| bc` | 9040 (2245+3755+1609+1431) |
+| M5 (heading inclusive) | `awk '/^## Approved-plan transition hooks/,/^## Starting a new loop/' skills/release-loop/SKILL.md \| sed \$d \| wc -c` | 3566 |
+| M6 (two sections, headings inclusive) | `awk '/^## Resuming/,/^## Gate handling/' skills/release-loop/SKILL.md \| sed \$d \| wc -c` | 4575 |
+| M7 (heading inclusive) | `awk '/^## Step 0: Capability Preflight/,/^## Step 1:/' skills/shipping/SKILL.md \| sed \$d \| wc -c` | 942 |
+| M8 (heading inclusive) | `awk '/^## Out of Scope/,0' skills/designing/SKILL.md \| wc -c` | 402 |
+| M9 (heading inclusive) | `awk '/^## Out of Scope/,0' skills/retrospective/SKILL.md \| wc -c` | 220 |
 
 All M-block figures match the spec's required values (2245, 3755, 1609, 1431, 3566, 4575, 942, 402, 220).
 

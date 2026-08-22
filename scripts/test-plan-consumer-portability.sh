@@ -2352,12 +2352,18 @@ def diagnostic_mutations(rows: list[dict], cases: list[tuple[str, Path]], decisi
 
 
 def deletion_mutations(rows: list[dict], cases: list[tuple[str, Path]]) -> None:
-    # The contract block now lives in references/plan-consumer-contract.md;
-    # delete rows there so the mutation exercises the real source of truth.
-    source_path = skill_path.parent / "references" / "plan-consumer-contract.md"
-    if not source_path.is_file():
+    # Prefer the complete contract block in SKILL.md, falling back to
+    # references/plan-consumer-contract.md only when needed (same priority as
+    # parse_contract).
+    marker = f"<!-- plan-consumer-contract: {consumer}/v1 -->"
+    end_marker = "<!-- end-plan-consumer-contract -->"
+    skill_text = skill_path.read_text(encoding="utf-8")
+    if marker in skill_text and end_marker in skill_text:
         source_path = skill_path
-    source = source_path.read_text(encoding="utf-8")
+        source = skill_text
+    else:
+        source_path = skill_path.parent / "references" / "plan-consumer-contract.md"
+        source = source_path.read_text(encoding="utf-8")
     for row in rows:
         if row["decision"] == "literal":
             continue

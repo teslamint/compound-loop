@@ -19,7 +19,7 @@ Strip a leading `mode:headless` token; the remainder is a scope hint.
 
 | Mode | Behavior |
 |---|---|
-| **Interactive** (default) | Classify, then apply Update/Consolidate/Delete-with-clear-evidence directly; ask via the blocking-question pattern (`references/question-tools.md`) only when the action is genuinely ambiguous, or before a Replace/Delete whose evidence isn't unambiguous |
+| **Interactive** (default) | Classify, then apply Update/Consolidate directly; for Delete, ask via the blocking-question pattern (`references/question-tools.md`) before removing any docs/solutions/ content, or before a Replace whose evidence isn't unambiguous |
 | **Headless** | No questions. Classify every candidate per Phase 2, but **apply zero writes this version** — every action, including unambiguous ones, is reported under Recommended with full rationale. This is a deliberate narrowing from a fully-autonomous headless sweep; see Out of Scope |
 
 ## Scope Selection

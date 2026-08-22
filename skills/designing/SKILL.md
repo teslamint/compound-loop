@@ -117,7 +117,7 @@ Requirements get stable R-IDs, grouped by concern, only when the spec's scope wa
 
 Before the user sees the spec, get a review from a fresh perspective — distinct from the user's own review in Step 12. Dispatch per `references/dispatch-degradation.md`: native reviewer subagent (most capable model) first; the `advisor` tool if the harness provides one and no subagent primitive exists; if neither is available, state that explicitly and perform a distanced self-review pass instead of skipping silently.
 
-Treat independent review as mandatory for schema or pipeline changes, not optional ceremony.
+Treat independent review as mandatory for schema or pipeline changes, not optional ceremony. Schema or pipeline changes cannot proceed without an independent reviewer; distanced self-review does not satisfy this requirement for such changes.
 
 **Empirical grounding sub-step** (pilot-proven, `enforces: P3`): any spec example that names a specific existing file, line, or behavior — especially Testing-section fixture targets — must be checked against the live repo (grep/dry-run), not just reviewed for internal logic. Two independent reviews of the same spec both missed a fixture target that a one-line grep would have falsified; internal-logic review and live-repo grounding are different checks (see docs/solutions/workflow-issues/spec-review-empirical-grounding-gap.md where present).
 
