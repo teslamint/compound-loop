@@ -137,13 +137,3 @@ After all units complete: generate the full branch diff (`merge-base(base, HEAD)
 
 Merge mechanics for worktree-isolated or shared-directory parallel dispatch: `references/merge-protocols.md`.
 
-## This skill's references
-
-Reference files:
-- `references/dispatch-degradation.md`
-- `references/merge-protocols.md`
-- `references/plan-consumer-contract.md`
-- `references/question-tools.md`
-- `references/test-checks.md`
-
-Preserved gates: P3, P4, P5, P7, P8, P9 — unit-dispatch/eligibility literals, the `body_seal` approval-history and adoption-only migration branch, the ledger resume check (P8), and the both-verdicts-clean completion rule (P3).

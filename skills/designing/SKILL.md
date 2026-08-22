@@ -153,13 +153,3 @@ The only skill invoked after `designing` is `planning`. Do not invoke any implem
 
 Out of Scope moved to `references/out-of-scope.md`.
 
-## This skill's references
-
-Reference files:
-- `references/dispatch-degradation.md`
-- `references/out-of-scope.md`
-- `references/question-tools.md`
-- `references/rigor-probes.md`
-- `references/spec-template.md`
-
-Preserved gates: P3, P4, P5, P6, P7, P8 — HARD-GATE; human approval gate (spec approval is always human).

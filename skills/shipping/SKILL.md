@@ -225,13 +225,3 @@ Report the merged PR (or the terminal state reached) and stop. Do not invoke `re
 
 Dropped by design: post-merge release ceremony (version bump / tag / changelog -- a future standalone `release` skill, not core); a hardcoded retro handoff (documented as a hook point above instead); a second residual-to-tracker mechanism (the PR-body append in Steps 5 and 6 is the single sink -- no duplicate filing path).
 
-## This skill's references
-
-Reference files:
-- `references/capability-preflight.md`
-- `references/dispatch-degradation.md`
-- `references/pr-feedback.md`
-- `references/question-tools.md`
-- `references/verification.md`
-
-Preserved gates: P3, P5, P7, P8 — the Merge Gate persist-before-resolve paragraph (P3, P8), Step 8 merged-result verification numbered clauses (P7), the `--body-file` guardrail, and the environment-detection boundary (P5).

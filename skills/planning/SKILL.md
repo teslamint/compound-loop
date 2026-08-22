@@ -190,13 +190,3 @@ Offer a 2-option menu: **Subagent-driven** (fresh subagent per unit, review betw
 
 When invoked headless from `release-loop` or any pipeline caller, skip the menu: write the plan's path to `.release-loop/progress.md`'s `plan:` field and return control to the caller.
 
-## This skill's references
-
-Reference files:
-- `references/deepening.md`
-- `references/dispatch-degradation.md`
-- `references/question-tools.md`
-- `references/stateful-ceremony-matrix-example.md`
-- `schemas/plan-schema.md`
-
-Preserved gates: P4, P5, P6, P8 — the exactly-one `- **Discrimination check**` bullet with its four sub-clauses, the `body_seal` clause, the verdict-coverage section, and the contiguous Steps 1–18 ordering.
