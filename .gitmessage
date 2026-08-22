@@ -1,0 +1,17 @@
+# <type>(<scope>): <intent — why, not what>
+#
+# Body: constraints, approach rationale (wrap at 100 chars)
+#
+# --- Trailers (all optional except Assisted-by for AI commits) ---
+# Constraint: <external constraint that shaped the decision>
+# Rejected: <alternative> | <reason>
+# Confidence: low|medium|high
+# Scope-risk: narrow|moderate|broad
+# Directive: <warning for future modifiers>
+# Tested: <what was verified>
+# Not-tested: <known verification gaps>
+# Assisted-by: <Model> with <Tool>
+#
+# Types: feat fix docs chore refactor test perf ci style
+# Subject: imperative, ≤70 chars, no period. ! before : for breaking.
+# Lines: ≤100 chars. One concern per commit.
