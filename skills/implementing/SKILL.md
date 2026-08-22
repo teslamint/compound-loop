@@ -136,3 +136,14 @@ Heuristic: can you write a commit message that isn't "WIP" or "partial X"? If ye
 After all units complete: generate the full branch diff (`merge-base(base, HEAD)..HEAD`) to `.release-loop/reviews/branch-diff.txt`. Dispatch one final reviewer on the most capable available model with one approved artifact set: the branch diff, the approved spec, the approved plan including its Mutation/failure-state matrix, every accumulated unit evidence directory (or the plan's exact stateless fallback), every applicable committed file discovered under `docs/deviations/` whose Original contract and/or Traceability identifies that approved spec and/or plan as its source, any explicitly handed-off deviation references, the plan's Scenario coverage map, the accumulated Minor findings, and Global Constraints. The link direction remains addendum -> approved source: never edit an approved spec or plan to add a backlink for review discovery. It checks cross-unit integration (task reviewers only ever saw their own diff), spec coverage across all units, **scenario delivery** — for `code` execution plans, every S-ID row in the coverage map completes end to end on the actual branch and its `Covers S<n>` integration tests exist and pass; for `non-code` execution plans, every S-ID row's named observable verification in the Scenario coverage map is walked and satisfied on the actual branch (`enforces: P3`) — which Minor findings need fixing, and anything visible only from the full diff. Confirmed observable behavior absent from or contradictory to that approved artifact set blocks a clean branch review until a separate committed deviation addendum exists; a post-approval Mutation/failure-state matrix row or outcome change explicitly triggers that committed addendum rule. Use `docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md` for the observable-behavior definition, addendum contents, the incomplete-release recovery example, and the internal-refactor exemption. Findings get **ONE** fix subagent with the complete list — never one fixer per finding. Re-review under the same 3-round cap; escalate on cap exhaustion with any surviving Critical/Important findings named explicitly.
 
 Merge mechanics for worktree-isolated or shared-directory parallel dispatch: `references/merge-protocols.md`.
+
+## This skill's references
+
+Reference files:
+- `references/dispatch-degradation.md`
+- `references/merge-protocols.md`
+- `references/plan-consumer-contract.md`
+- `references/question-tools.md`
+- `references/test-checks.md`
+
+Preserved gates: P3, P4, P5, P7, P8, P9 — unit-dispatch/eligibility literals, the `body_seal` approval-history and adoption-only migration branch, the ledger resume check (P8), and the both-verdicts-clean completion rule (P3).

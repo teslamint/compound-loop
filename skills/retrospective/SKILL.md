@@ -155,3 +155,16 @@ End every invocation with the exact terminal signal line from `schemas/headless-
 `compound` is the only skill invoked from inside `retrospective`, and only per Phase 7's gate. Nothing invokes `retrospective` automatically — `release-loop`'s Retro phase and direct user invocation are the only callers.
 
 Out of Scope moved to `references/out-of-scope.md`.
+
+## This skill's references
+
+Reference files:
+- `references/dispatch-degradation.md`
+- `references/interview-probes.md`
+- `references/out-of-scope.md`
+- `references/plan-consumer-contract.md`
+- `references/spec-template.md`
+- `schemas/headless-contract.md`
+- `schemas/retro-template.md`
+
+Preserved gates: P3, P4, P8, P9 — the W1–W4 warrant vocabulary, the five closed independence-level values, the Phase 8 pre-commit anchors, and the three terminal signal lines.

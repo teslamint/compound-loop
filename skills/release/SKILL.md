@@ -183,8 +183,7 @@ stable and no release-note work occurs for an invalid repository.
    Release failed — incomplete release recovery failed at <command>; HEAD remains untagged
    ```
 
-   The terminal signal remains the last non-empty output. Do not resume normal
-   version proposal in the same invocation after any recovery outcome.
+Do not resume normal version proposal in the same invocation after any recovery outcome.
 8. **Previous tag and range** — discover the latest reachable annotated or
    lightweight tag with `git describe --tags --abbrev=0`. With a tag, the
    release range is `<last-tag>..HEAD`. Without one, the range is all commits
@@ -506,11 +505,6 @@ and traceability result. Terminal state is always the last non-empty output
 line, in interactive and headless invocations alike, using exactly one of the
 three canonical forms defined at the top of this skill. `enforces: P3, P9`
 
-On success, instantiate the completion form with the approved tag. On a no-op
-or cancellation, instantiate the skip form with one specific reason. On any
-invalid input, preflight failure, command failure, or postcondition failure,
-instantiate the failure form with one actionable reason. Do not print anything
-after the terminal line.
 
 ## Handoff
 
@@ -518,3 +512,11 @@ The release ceremony is local-only. Report the terminal state and stop. Do not
 invoke `shipping`, push the commit or tag, create a GitHub release, update
 `ROADMAP.md`, or invoke `retrospective`; those are separate user- or
 orchestrator-owned workflows.
+
+## This skill's references
+
+Reference files:
+- `references/publication.md`
+- `references/question-tools.md`
+
+Preserved gates: P3, P7, P9 — USER first-hand gate (relayed approval is never execution authorization, P7), the `publish <semver> [repair] [mode:headless]` dispatch contract, the three canonical terminal signals plus the Publication signal family, and four-way agreement verification (P3, P9).

@@ -102,3 +102,16 @@ Silence is the default failure mode of a long-running dispatched worker — a de
 | Stop after merge | Retro completes the release |
 | Report the loop done with a live progress.md | Run the Archive procedure; the completion report names the archive path |
 
+
+## This skill's references
+
+Reference files:
+- `references/dispatch-degradation.md`
+- `references/plan-consumer-contract.md`
+- `references/progress-schema.md`
+- `references/question-tools.md`
+- `references/resume-and-archive.md`
+- `references/transition-hooks.md`
+- `schemas/headless-contract.md`
+
+Preserved gates: P3, P7, P8 — spec/Design approval is always human (P7), "Gate approval is not execution authorization", the approved-plan transition contract and its current-session approval lines, and worker liveness / state-in-files (P8).

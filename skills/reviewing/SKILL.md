@@ -118,3 +118,15 @@ When someone else's feedback is the input, not a diff you're dispatching lanes o
 ## Handoff
 
 Standalone: report and stop. Phase-gate: return the verdict to `release-loop`, which advances on `clean` or escalates on `blocked`.
+
+## This skill's references
+
+Reference files:
+- `references/dispatch-degradation.md`
+- `references/lanes.md`
+- `references/merge-pipeline.md`
+- `references/plan-consumer-contract.md`
+- `references/receiving.md`
+- `references/suppression.md`
+
+Preserved gates: P7, P9 — outward-step USER gate (never push/open PR/file ticket, P7), the pipeline re-review cap of 3 rounds (P9), the receiving/suppression flows, and the adoption-only review branch.
