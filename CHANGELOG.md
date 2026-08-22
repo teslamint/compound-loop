@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.11.0] - 2026-08-22
+
+### Added
+- Default worktree isolation: release-loop creates an isolated worktree for new feature work by default, with explicit opt-out to the current checkout.
+- Plan schema co-located at `skills/planning/schemas/plan-schema.md` so standalone consumers can resolve the schema reference and verify `body_seal` independently.
+- Planning self-review gains discrimination check (guards that cannot return both answers) and verdict coverage check (consumed verdicts with missing next-steps).
+- Pre-push base-topology gate (F17) in shipping prevents pushes when the local branch topology diverges from the expected remote state.
+- External review verification gate (F18) added to shipping Step 7.
+- MIT LICENSE file at repository root.
+- Pre-release version tagging convention (`v<target>-dev.<N>`) for local plugin-cache autoUpdate between formal releases.
+- GitHub issue templates (bug report, feature request), PR template, and commit message template.
+- Squash-merge commit message rewriting convention documented.
+
+### Changed
+- Instruction payload slimmed: 9 rare-path blocks moved to skill-local reference files, 13 description fields compressed, 7 phase-skill bodies trimmed; net reduction 165,383 → 149,832 bytes (−9.4%).
+- Retrospective interview protocol: five defects repaired — dispatch ladder wording, degraded-mode claim falsifiability, carry-forward count reconciliation with parseable fields, and separation of "no facilitator reachable" from "nothing warranted probing."
+
+### Fixed
+- Test fixture portability: isolated from host git config (user.name, user.email, commit.gpgsign).
+- Release local-section hash re-pinned, schema-byte-parity acceptance updated, and plan frontmatter enum validation corrected.
+
 ## [0.10.0] - 2026-08-03
 
 ### Added
