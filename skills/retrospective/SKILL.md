@@ -1,6 +1,6 @@
 ---
 name: retrospective
-description: Measure outcomes against declared success criteria, reconcile carry-forward items, extract lessons, and feed the knowledge-compounding loop. Use via /retrospective (Claude Code) or $retrospective (Codex) after a PR merges, at the end of a session or debugging arc, on direct request ("run a retro", "retrospective on this"), or when release-loop's Retro phase fires.
+description: Measure outcomes against declared success criteria, reconcile carry-forward items, extract lessons, and feed the knowledge-compounding loop. /retrospective or $retrospective after a PR merges, at the end of a session or debugging arc, on direct request ("run a retro", "retrospective on this"), or when release-loop's Retro phase fires.
 ---
 
 # Retrospective
@@ -37,23 +37,7 @@ Gather what's available; degrade gracefully rather than blocking on a missing so
 
 Retrospective consumes only repo-relative origin, applicability, terminal-transition, coverage-selection, and frontmatter-immutability rules; it does not require the full planning skill or its schema file.
 
-<!-- plan-consumer-contract: retrospective/v1 -->
-~~~json
-{"decision":"origin","fixture":"origin-repo-relative","expected":"accept","diagnostic":"repo-relative origin"}
-{"decision":"coverage","fixture":"no-plan-no-flip","expected":"no-flip","diagnostic":"no-plan"}
-{"decision":"coverage","fixture":"ledger-plan","expected":"transition","diagnostic":"same-commit"}
-{"decision":"coverage","fixture":"body-cited-plan","expected":"transition","diagnostic":"same-commit"}
-{"decision":"coverage","fixture":"multi-plan","expected":"transition","diagnostic":"all-plans"}
-{"decision":"applicability","fixture":"pre-contract","expected":"no-flip","diagnostic":"pre-contract"}
-{"decision":"applicability","fixture":"non-approved","expected":"no-flip","diagnostic":"non-approved"}
-{"decision":"transition","fixture":"missing-landed-commit","expected":"reject","diagnostic":"completed_by"}
-{"decision":"transition","fixture":"split-commit","expected":"reject","diagnostic":"same-commit"}
-{"decision":"transition","fixture":"omission-commit","expected":"reject","diagnostic":"all-plans"}
-{"decision":"immutability","fixture":"body-mutation","expected":"reject","diagnostic":"body"}
-{"decision":"immutability","fixture":"dirty-worktree-body-mutation","expected":"reject","diagnostic":"body"}
-{"decision":"immutability","fixture":"other-frontmatter-mutation","expected":"reject","diagnostic":"frontmatter"}
-~~~
-<!-- end-plan-consumer-contract -->
+Plan-consumer contract lives in [references/plan-consumer-contract.md](references/plan-consumer-contract.md).
 
 ### Origin and coverage selection
 
@@ -170,6 +154,5 @@ End every invocation with the exact terminal signal line from `schemas/headless-
 
 `compound` is the only skill invoked from inside `retrospective`, and only per Phase 7's gate. Nothing invokes `retrospective` automatically — `release-loop`'s Retro phase and direct user invocation are the only callers.
 
-## Out of Scope (v0.2 hook points — documented, not implemented)
+Out of Scope moved to `references/out-of-scope.md`.
 
-- **Session-history search integration**: Phase 2 names it as pluggable; the concrete search tool and dispatch payload discipline are deferred to v0.2.

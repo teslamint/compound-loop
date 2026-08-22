@@ -13,42 +13,7 @@ description: Execute an approved plan to completion with review checkpoints, sur
 
 This consumer executes only the plan rules listed here; it does not require the full planning skill or its schema file.
 
-<!-- plan-consumer-contract: implementing/v1 -->
-```json
-{"decision":"literal","fixture":"schema","expected":"plan/v1","diagnostic":""}
-{"decision":"literal","fixture":"statuses","expected":"draft | approved | done | superseded","diagnostic":""}
-{"decision":"literal","fixture":"seal-format","expected":"64-char lowercase hex SHA-256","diagnostic":""}
-{"decision":"literal","fixture":"seal-extraction","expected":"text.split('---', 2)[2]","diagnostic":""}
-{"decision":"schema","fixture":"schema-plan-v1","expected":"accept","diagnostic":""}
-{"decision":"schema","fixture":"schema-missing","expected":"reject","diagnostic":"schema"}
-{"decision":"schema","fixture":"schema-unknown","expected":"reject","diagnostic":"schema"}
-{"decision":"status","fixture":"status-approved","expected":"accept","diagnostic":""}
-{"decision":"status","fixture":"status-draft","expected":"reject","diagnostic":"pending approval"}
-{"decision":"status","fixture":"status-done","expected":"reject","diagnostic":"completed_by=0123456789abcdef0123456789abcdef01234567"}
-{"decision":"status","fixture":"status-done-missing-evidence","expected":"reject","diagnostic":"completed_by missing"}
-{"decision":"status","fixture":"status-superseded","expected":"reject","diagnostic":"superseded_by=docs/plans/successor.md"}
-{"decision":"status","fixture":"status-missing","expected":"reject","diagnostic":"status"}
-{"decision":"status","fixture":"status-unknown","expected":"reject","diagnostic":"status"}
-{"decision":"seal","fixture":"seal-correct","expected":"accept","diagnostic":""}
-{"decision":"seal","fixture":"seal-malformed","expected":"reject","diagnostic":"stored= computed="}
-{"decision":"seal","fixture":"seal-mismatch","expected":"reject","diagnostic":"stored= computed="}
-{"decision":"seal","fixture":"seal-never-sealed","expected":"accept","diagnostic":""}
-{"decision":"seal","fixture":"seal-removed","expected":"reject","diagnostic":"removed seal"}
-{"decision":"reseal","fixture":"reseal-post-approval","expected":"reject","diagnostic":"interactive deepening"}
-{"decision":"unit","fixture":"unit-code","expected":"accept","diagnostic":""}
-{"decision":"unit","fixture":"unit-non-code","expected":"accept","diagnostic":""}
-{"decision":"adoption","fixture":"adoption-complete","expected":"accept","diagnostic":"adoption-approved"}
-{"decision":"adoption","fixture":"adoption-changed-body","expected":"reject","diagnostic":"changed-body"}
-{"decision":"adoption","fixture":"adoption-missing-baseline","expected":"reject","diagnostic":"missing-baseline"}
-{"decision":"adoption","fixture":"adoption-missing-approval","expected":"reject","diagnostic":"approval"}
-{"decision":"adoption","fixture":"adoption-missing-plan-path","expected":"reject","diagnostic":"plan path"}
-{"decision":"adoption","fixture":"adoption-missing-old-seal","expected":"reject","diagnostic":"old seal"}
-{"decision":"adoption","fixture":"adoption-missing-new-seal","expected":"reject","diagnostic":"new seal"}
-{"decision":"adoption","fixture":"adoption-missing-reproduction-command","expected":"reject","diagnostic":"reproduction command"}
-{"decision":"adoption","fixture":"reseal-after-adoption","expected":"reject","diagnostic":"interactive deepening"}
-{"decision":"adoption-policy","policy":{"required_evidence":["approval","baseline","plan_path","old_seal","new_seal","reproduction_command"],"baseline_current_body":"equal","migration_commit":{"path":"repo-relative-evidence","diff":"seal-only","message_fields":["baseline","plan","old-seal","new-seal","reproduction-command","approval"],"command":"exact","approval":"first-hand-explicit"},"later_reseal":"reject-unless-interactive-deepening","interrupted_retry":{"compensation":"target-only","fresh_approval":true}}}
-```
-<!-- end-plan-consumer-contract -->
+Plan-consumer contract lives in [references/plan-consumer-contract.md](references/plan-consumer-contract.md).
 
 ### Shared literals used by implementing
 
@@ -171,3 +136,4 @@ Heuristic: can you write a commit message that isn't "WIP" or "partial X"? If ye
 After all units complete: generate the full branch diff (`merge-base(base, HEAD)..HEAD`) to `.release-loop/reviews/branch-diff.txt`. Dispatch one final reviewer on the most capable available model with one approved artifact set: the branch diff, the approved spec, the approved plan including its Mutation/failure-state matrix, every accumulated unit evidence directory (or the plan's exact stateless fallback), every applicable committed file discovered under `docs/deviations/` whose Original contract and/or Traceability identifies that approved spec and/or plan as its source, any explicitly handed-off deviation references, the plan's Scenario coverage map, the accumulated Minor findings, and Global Constraints. The link direction remains addendum -> approved source: never edit an approved spec or plan to add a backlink for review discovery. It checks cross-unit integration (task reviewers only ever saw their own diff), spec coverage across all units, **scenario delivery** — for `code` execution plans, every S-ID row in the coverage map completes end to end on the actual branch and its `Covers S<n>` integration tests exist and pass; for `non-code` execution plans, every S-ID row's named observable verification in the Scenario coverage map is walked and satisfied on the actual branch (`enforces: P3`) — which Minor findings need fixing, and anything visible only from the full diff. Confirmed observable behavior absent from or contradictory to that approved artifact set blocks a clean branch review until a separate committed deviation addendum exists; a post-approval Mutation/failure-state matrix row or outcome change explicitly triggers that committed addendum rule. Use `docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md` for the observable-behavior definition, addendum contents, the incomplete-release recovery example, and the internal-refactor exemption. Findings get **ONE** fix subagent with the complete list — never one fixer per finding. Re-review under the same 3-round cap; escalate on cap exhaustion with any surviving Critical/Important findings named explicitly.
 
 Merge mechanics for worktree-isolated or shared-directory parallel dispatch: `references/merge-protocols.md`.
+

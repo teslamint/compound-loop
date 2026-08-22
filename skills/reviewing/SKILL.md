@@ -1,6 +1,6 @@
 ---
 name: reviewing
-description: "Multi-lane code review producing verified, deduplicated findings (mode:agent JSON per review-envelope.schema.json, or markdown pipe tables), and disciplined consumption of reviews received from anyone else. Use via /reviewing (Claude Code) or $reviewing (Codex): mandatorily after each subagent task, after completing a major feature, or before merge; optionally when stuck, before refactoring, or after a complex bugfix; whenever release-loop's Review phase fires; or whenever external feedback (a human reviewer, a bot, another agent) needs disciplined evaluation before you implement it."
+description: "Multi-lane code review producing verified, deduplicated findings (mode:agent JSON per review-envelope.schema.json, or markdown pipe tables), and disciplined consumption of reviews received from anyone else. /reviewing or $reviewing: mandatorily after each subagent task, after completing a major feature, or before merge; optionally when stuck, before refactoring, or after a complex bugfix; whenever release-loop's Review phase fires; or whenever external feedback (a human reviewer, a bot, another agent) needs disciplined evaluation before you implement it."
 ---
 
 # Reviewing
@@ -11,20 +11,7 @@ Purpose: produce multi-perspective findings that are verified and deduplicated -
 
 The reviewing consumer accepts only the complete one-time adoption branch below; all other post-approval reseals remain unauthorized.
 
-<!-- plan-consumer-contract: reviewing/v1 -->
-```json
-{"decision":"adoption","fixture":"adoption-complete","expected":"accept","diagnostic":"adoption-approved"}
-{"decision":"adoption","fixture":"adoption-changed-body","expected":"reject","diagnostic":"changed-body"}
-{"decision":"adoption","fixture":"adoption-missing-baseline","expected":"reject","diagnostic":"missing-baseline"}
-{"decision":"adoption","fixture":"adoption-missing-approval","expected":"reject","diagnostic":"approval"}
-{"decision":"adoption","fixture":"adoption-missing-plan-path","expected":"reject","diagnostic":"plan path"}
-{"decision":"adoption","fixture":"adoption-missing-old-seal","expected":"reject","diagnostic":"old seal"}
-{"decision":"adoption","fixture":"adoption-missing-new-seal","expected":"reject","diagnostic":"new seal"}
-{"decision":"adoption","fixture":"adoption-missing-reproduction-command","expected":"reject","diagnostic":"reproduction command"}
-{"decision":"adoption","fixture":"reseal-after-adoption","expected":"reject","diagnostic":"interactive deepening"}
-{"decision":"adoption-policy","policy":{"required_evidence":["approval","baseline","plan_path","old_seal","new_seal","reproduction_command"],"baseline_current_body":"equal","migration_commit":{"path":"repo-relative-evidence","diff":"seal-only","message_fields":["baseline","plan","old-seal","new-seal","reproduction-command","approval"],"command":"exact","approval":"first-hand-explicit"},"later_reseal":"reject-unless-interactive-deepening","interrupted_retry":{"compensation":"target-only","fresh_approval":true}}}
-```
-<!-- end-plan-consumer-contract -->
+Plan-consumer contract lives in [references/plan-consumer-contract.md](references/plan-consumer-contract.md).
 
 ## Entry / Exit / Gate
 
@@ -131,3 +118,4 @@ When someone else's feedback is the input, not a diff you're dispatching lanes o
 ## Handoff
 
 Standalone: report and stop. Phase-gate: return the verdict to `release-loop`, which advances on `clean` or escalates on `blocked`.
+

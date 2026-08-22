@@ -1,6 +1,6 @@
 ---
 name: designing
-description: Turn a feature idea into an approved, committed spec with measurable success criteria through collaborative dialogue. Use via /designing (Claude Code) or $designing (Codex) when starting new feature work, when release-loop's Design phase fires, or whenever implementation is about to begin without an approved design -- including work that looks "too simple to need one".
+description: Turn a feature idea into an approved, committed spec with measurable success criteria via collaborative dialogue. /designing or $designing when starting new feature work, when release-loop's Design phase fires, or whenever implementation is about to begin without an approved design -- including work that looks "too simple to need one".
 ---
 
 # Designing
@@ -19,7 +19,7 @@ Answers **WHAT** to build, not **HOW**. The durable output is an approved spec s
 Do NOT invoke any implementation skill, write production code, or take any implementation action until a design has been presented and the user has approved it. This applies to EVERY project regardless of perceived simplicity.
 </HARD-GATE>
 
-**Anti-pattern: "This Is Too Simple To Need A Design."** A todo list, a single-function utility, a config change — all go through this process. Simple projects are where unexamined assumptions cause the most wasted work. The design can be a few sentences, but it must be presented and approved. `enforces: P6`
+**Anti-pattern: "This Is Too Simple To Need A Design."** A todo list, a single-function utility, a config change — all go through this process; the design can be a few sentences, but it must be presented and approved. `enforces: P6`
 
 ## Step 1: Explore Context
 
@@ -117,7 +117,7 @@ Requirements get stable R-IDs, grouped by concern, only when the spec's scope wa
 
 Before the user sees the spec, get a review from a fresh perspective — distinct from the user's own review in Step 12. Dispatch per `references/dispatch-degradation.md`: native reviewer subagent (most capable model) first; the `advisor` tool if the harness provides one and no subagent primitive exists; if neither is available, state that explicitly and perform a distanced self-review pass instead of skipping silently.
 
-Scope the review to internal consistency, missing edge cases, scope creep, and feasibility. Independent review has caught critical design flaws (pipeline forks, missing rebuild triggers) that self-review missed — treat it as mandatory for schema or pipeline changes, not optional ceremony.
+Treat independent review as mandatory for schema or pipeline changes, not optional ceremony.
 
 **Empirical grounding sub-step** (pilot-proven, `enforces: P3`): any spec example that names a specific existing file, line, or behavior — especially Testing-section fixture targets — must be checked against the live repo (grep/dry-run), not just reviewed for internal logic. Two independent reviews of the same spec both missed a fixture target that a one-line grep would have falsified; internal-logic review and live-repo grounding are different checks (see docs/solutions/workflow-issues/spec-review-empirical-grounding-gap.md where present).
 
@@ -133,7 +133,7 @@ Five fixed checks, fixed inline, no re-loop:
 4. **Ambiguity check** — any requirement interpretable two ways? Pick one, make it explicit.
 5. **Principle-exception composability** — does an Architecture principle conflict with a requirement's mandated mechanism? If so, name the carve-out in the spec and cite the requirement that justifies the exception — don't leave the reconciliation to planning.
 
-Then the **contradiction-in-one-pass test**: could a careful reader find a contradiction in any section in a single read-through? Hold every section to prose economy — one idea per sentence, a requirement is intent plus at most one qualifier, forks deferred to Open Decisions rather than specifying both arms.
+Then the **contradiction-in-one-pass test**: could a careful reader find a contradiction in any section in a single read-through?
 
 ## Step 12: Human Approval Gate
 
@@ -151,6 +151,5 @@ After the approval gate: scan the dialogue and the spec for **resolved** domain 
 
 The only skill invoked after `designing` is `planning`. Do not invoke any implementation, frontend, or scaffolding skill from here.
 
-## Out of Scope
+Out of Scope moved to `references/out-of-scope.md`.
 
-Dropped by design (not oversight): the upstream idea-generation engine that precedes brainstorming (reference only, don't merge); HTML output rendering; a two-path synthesis-gate nuance (simplified here to one-line synthesis always, full confirmation gate at Standard tier and above); a browser-based visual companion (Claude-Code-specific; add as a project-local appendix if needed).

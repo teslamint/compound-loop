@@ -1,6 +1,6 @@
 ---
 name: compound-refresh
-description: Audit docs/solutions/ against the current codebase and refresh, consolidate, or delete drifted learnings and pattern docs. Use via /compound-refresh (Claude Code) or $compound-refresh (Codex) on direct request ("refresh my learnings", "audit docs/solutions/", "clean up stale docs", "consolidate overlapping docs"), or when compound flags an older doc as a refresh candidate. Do not trigger for general refactor or code-review work unless the user explicitly points at docs/solutions/.
+description: Audit docs/solutions/ for drifted learnings and pattern docs; refresh, consolidate, or delete. /compound-refresh or $compound-refresh on direct request ("refresh my learnings", "audit docs/solutions/", "clean up stale docs", "consolidate overlapping docs"), or when compound flags an older doc as a refresh candidate. Do not trigger for general refactor or code-review work unless the user explicitly points at docs/solutions/.
 ---
 
 # Compound Refresh

@@ -1,6 +1,6 @@
 ---
 name: planning
-description: Turn an approved spec into an implementation plan an engineer or agent can execute with zero codebase context. Invoke as /planning (Claude Code) or $planning (Codex), or when the user says "plan this", "write an implementation plan", "break this into tasks", or a designing-phase spec is ready to plan.
+description: Turn an approved spec into an implementation plan executable with zero codebase context. /planning or $planning, or when the user says "plan this", "write an implementation plan", "break this into tasks", or a designing-phase spec is ready to plan.
 ---
 
 # Planning
@@ -27,7 +27,7 @@ When skipping, attest that all four conditions hold, citing the work's scope, th
 
 ## 2. Scope confirmation
 
-One compressed confirmation before spending research or authoring budget: state the scope read from the spec (stated intent plus any material forks) and ask the user to confirm or redirect, using the blocking-question pattern in `references/question-tools.md`. Skip the confirmation only for a trivial, single-unit plan with zero forks — proceed and say so in one line. When invoked as a dispatched phase worker under an AUTO gate (release-loop pipeline), this question is the orchestrator's to ask or waive — state the read scope in the ledger/log and proceed rather than blocking (worker protocol in `references/dispatch-degradation.md`).
+One compressed confirmation before spending research or authoring budget: state the scope read from the spec (stated intent plus any material forks) and ask the user to confirm or redirect, using the blocking-question pattern in `references/question-tools.md`. Skip the confirmation only for a trivial, single-unit plan with zero forks — proceed and say so in one line. When invoked as a dispatched phase worker under an AUTO gate (release-loop pipeline), this question is the orchestrator's to ask or waive — state the read scope in the ledger/log and proceed rather than blocking.
 
 ## 3. Context research
 
@@ -35,7 +35,7 @@ Plans are written for a zero-context implementer, which makes the planner the on
 
 **Local research — always runs.** Search for a similar feature and read its implementation end to end before structuring anything; when the work is genuinely greenfield, record the verified absence and read the nearest analogue instead (the search is unconditional, the find is not). Identify the existing patterns, utilities, and conventions units must follow (name them in the units — implementers see only their own unit). Check `docs/solutions/` for prior learnings touching the planned modules and surface hits as "Known Pattern"; read `CONCEPTS.md` if present and use its canonical vocabulary. Any claim that something does not exist in the codebase must be verified against source or labeled an unverified assumption.
 
-**External research — conditional.** Escalate to documentation or web sources only when one holds: the user explicitly asked; the plan makes claims about an unfamiliar library, framework, or API version; or the work touches a high-risk surface with sparse local precedent (fewer than 3 direct examples). Record findings in Architecture notes with sources — unbacked external claims are exactly what the deepening trigger "thin external grounding" catches later.
+**External research — conditional.** Escalate to documentation or web sources only when one holds: the user explicitly asked; the plan makes claims about an unfamiliar library, framework, or API version; or the work touches a high-risk surface with sparse local precedent (fewer than 3 direct examples). Record findings in Architecture notes with sources.
 
 ## 4. Assumption recheck
 
@@ -189,3 +189,4 @@ contradiction unless the separate addendum commit already exists.
 Offer a 2-option menu: **Subagent-driven** (fresh subagent per unit, review between units — recommended) or **Inline** (execute in this session with checkpoints between units). Fire the chosen path; don't just announce it.
 
 When invoked headless from `release-loop` or any pipeline caller, skip the menu: write the plan's path to `.release-loop/progress.md`'s `plan:` field and return control to the caller.
+

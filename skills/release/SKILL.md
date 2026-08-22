@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a local versioned release from committed lifecycle evidence with an artifact-derived CHANGELOG, synchronized plugin manifests, a first-hand USER gate, and an annotated tag. Use via /release (Claude Code) or $release (Codex); pass mode:headless for a prepare-only handoff or a SemVer argument to propose that exact version.
+description: Cut a local versioned release from committed lifecycle evidence with an artifact-derived CHANGELOG, synchronized plugin manifests, a first-hand USER gate, and an annotated tag. /release or $release; pass mode:headless for a prepare-only handoff or a SemVer argument to propose that exact version.
 ---
 
 # Release

@@ -1,6 +1,6 @@
 ---
 name: shipping
-description: Take reviewed, verified work from a clean local state to merged and cleaned up -- commit, push, open a PR, watch CI, resolve review feedback, gate the merge, and clean up the branch or worktree. Use via /shipping (Claude Code) or $shipping (Codex) when review is clean and work is ready to ship, when release-loop's Ship phase fires, or on direct requests like "commit and open a PR", "ship this", "finish this branch".
+description: Take reviewed, verified work from a clean local state to merged and cleaned up -- commit, push, open a PR, watch CI, resolve review feedback, gate the merge, and clean up the branch or worktree. /shipping or $shipping when review is clean and work is ready to ship, when release-loop's Ship phase fires, or on direct requests like "commit and open a PR", "ship this", "finish this branch".
 ---
 
 # Shipping
@@ -13,18 +13,7 @@ From "review clean" to "merged and cleaned up," with evidence at every claim -- 
 - **Exit**: PR merged and cleaned up, or an explicit terminal state -- kept-as-is, discarded, escalated to human, or **preparation-only** (see Step 0).
 - **Gate**: merge is USER by default; `--auto` requires CI green and no open P0 (P1s addressed or explicitly deferred). `enforces: P7`
 
-## Step 0: Capability Preflight
-
-Outward steps (push, PR creation, GraphQL thread ops, CI watch, merge) depend on capabilities that may not hold. Check before committing to a workflow, not mid-flow:
-
-| Capability | Check | Missing |
-|---|---|---|
-| `gh` present | `gh --version` | no PR/CI/thread ops possible |
-| `gh` authed | `gh auth status` | no PR/CI/thread ops possible |
-| network reachable | one cheap `git ls-remote` / `gh api` call | no push, no PR ops |
-| repo push permission | push dry-run or `gh repo view --json viewerPermission` | no push, no merge |
-
-If any outward capability is missing, do not fail the skill -- terminate in a **preparation-only state**: commits are made locally (Steps 1-3 still run), the PR title/body are composed and written to a file instead of posted, and the remaining manual steps (`git push`, `gh pr create --body-file <path>`, etc.) are listed for the user to run themselves. `enforces: P7, P9`
+Step 0: Capability Preflight moved to `references/capability-preflight.md`.
 
 ## Step 1: Verification Gate
 
@@ -235,3 +224,4 @@ Report the merged PR (or the terminal state reached) and stop. Do not invoke `re
 ## Out of Scope
 
 Dropped by design: post-merge release ceremony (version bump / tag / changelog -- a future standalone `release` skill, not core); a hardcoded retro handoff (documented as a hook point above instead); a second residual-to-tracker mechanism (the PR-body append in Steps 5 and 6 is the single sink -- no duplicate filing path).
+
