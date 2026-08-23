@@ -31,12 +31,15 @@ CASES = (
     "scope_preparation_crash",
     "archive_scoped_run",
     "archive_requires_persisted_destination",
+    "archive_incomplete_run",
+    "archive_evidence_mutants",
     "one_live_record",
     "multiple_live_records",
     "valid_legacy_record",
     "unknown_schema_with_valid_record",
     "symlink_progress_rejected",
     "legacy_scoped_ambiguity",
+    "scoped_feature_mismatch",
     "interrupted_archive",
     "interrupted_legacy_archive",
     "ignored_orphan",
@@ -52,6 +55,7 @@ CASES = (
     "handoff_success",
     "handoff_incomplete_rerun",
     "handoff_mismatch_preserves_both",
+    "handoff_same_checkout",
     "archive_direct_escape",
     "archive_parent_escape",
     "archive_wrong_family",
@@ -241,15 +245,10 @@ def archive_scope(
     destination: str | None,
     fail_after_first: bool = False,
     persist_authority: bool = True,
+    mode: str = "completed",
 ) -> list[str]:
     if destination is not None and persist_authority:
-        path = repo / progress_path
-        text = path.read_text(encoding="utf-8")
-        assert "archive-destination:" not in text
-        text = text.replace("phase: implement\n", "phase: done\n", 1)
-        text = text.replace("phase_status: in-progress\n", "phase_status: complete\n", 1)
-        text += f"- 2026-08-23T00:00:01Z retro: archive-destination: {destination}\n"
-        path.write_text(text, encoding="utf-8")
+        persist_archive_evidence(repo / progress_path, destination, mode)
     args = ["--repo", str(repo), "--progress-path", progress_path]
     if destination is not None:
         args.extend(("--destination", destination))
@@ -259,8 +258,23 @@ def archive_scope(
         failure="archive-after-first" if fail_after_first else None,
     )
     assert set(payload) == {"archive_path", "moved", "progress_path", "state"}, payload
-    assert payload["state"] == "archived", payload
+    expected_state = "archived" if mode == "completed" else "archived-incomplete"
+    assert payload["state"] == expected_state, payload
     return list(payload["moved"])
+
+
+def persist_archive_evidence(path: Path, destination: str, mode: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    assert "archive-destination:" not in text
+    if mode == "completed":
+        text = text.replace("phase: implement\n", "phase: done\n", 1)
+        text = text.replace("phase_status: in-progress\n", "phase_status: complete\n", 1)
+        marker = f"- 2026-08-23T00:00:01Z retro: archive-destination: {destination}\n"
+    elif mode == "incomplete":
+        marker = f"- 2026-08-23T00:00:01Z archived-incomplete: archive-destination: {destination}\n"
+    else:
+        raise AssertionError(f"unknown fixture archive mode: {mode}")
+    path.write_text(text + marker, encoding="utf-8")
 
 
 def handoff_scope(
@@ -354,6 +368,97 @@ def run_case(name: str) -> None:
             )
             assert path.read_bytes() == before_progress
             assert not (repo / destination).exists()
+        elif name == "archive_incomplete_run":
+            path = initialize(repo, "alpha")
+            destination = ".release-loop/archive/2026-08-23-alpha-incomplete"
+            archive_scope(
+                repo,
+                str(path.relative_to(repo)),
+                destination,
+                mode="incomplete",
+            )
+            archived = repo / destination / "progress.md"
+            text = archived.read_text(encoding="utf-8")
+            assert "phase: implement\n" in text
+            assert "phase_status: in-progress\n" in text
+            assert f"archived-incomplete: archive-destination: {destination}" in text
+        elif name == "archive_evidence_mutants":
+            destination = ".release-loop/archive/2026-08-23-alpha"
+            completed_nonterminal = new_repo(tmp, "completed-nonterminal")
+            completed_path = initialize(completed_nonterminal, "alpha")
+            completed_path.write_text(
+                completed_path.read_text(encoding="utf-8")
+                + f"- 2026-08-23T00:00:01Z retro: archive-destination: {destination}\n",
+                encoding="utf-8",
+            )
+            assert_blocked_preserves(
+                lambda: archive_scope(
+                    completed_nonterminal,
+                    str(completed_path.relative_to(completed_nonterminal)),
+                    destination,
+                    persist_authority=False,
+                ),
+                sent,
+                before,
+                "missing persisted phase evidence",
+            )
+
+            incomplete_terminal = new_repo(tmp, "incomplete-terminal")
+            incomplete_path = initialize(incomplete_terminal, "alpha")
+            text = incomplete_path.read_text(encoding="utf-8")
+            text = text.replace("phase: implement\n", "phase: done\n", 1)
+            text = text.replace("phase_status: in-progress\n", "phase_status: complete\n", 1)
+            incomplete_path.write_text(
+                text + f"- 2026-08-23T00:00:01Z archived-incomplete: archive-destination: {destination}\n",
+                encoding="utf-8",
+            )
+            assert_blocked_preserves(
+                lambda: archive_scope(
+                    incomplete_terminal,
+                    str(incomplete_path.relative_to(incomplete_terminal)),
+                    destination,
+                    persist_authority=False,
+                    mode="incomplete",
+                ),
+                sent,
+                before,
+                "incomplete marker requires nonterminal phase",
+            )
+
+            duplicate = new_repo(tmp, "duplicate-marker")
+            duplicate_path = initialize(duplicate, "alpha")
+            persist_archive_evidence(duplicate_path, destination, "completed")
+            duplicate_path.write_text(
+                duplicate_path.read_text(encoding="utf-8")
+                + f"- 2026-08-23T00:00:02Z archived-incomplete: archive-destination: {destination}\n",
+                encoding="utf-8",
+            )
+            assert_blocked_preserves(
+                lambda: archive_scope(
+                    duplicate,
+                    str(duplicate_path.relative_to(duplicate)),
+                    destination,
+                    persist_authority=False,
+                ),
+                sent,
+                before,
+                "multiple persisted archive markers",
+            )
+
+            mismatch = new_repo(tmp, "marker-mismatch")
+            mismatch_path = initialize(mismatch, "alpha")
+            persist_archive_evidence(mismatch_path, destination, "completed")
+            assert_blocked_preserves(
+                lambda: archive_scope(
+                    mismatch,
+                    str(mismatch_path.relative_to(mismatch)),
+                    ".release-loop/archive/different",
+                    persist_authority=False,
+                ),
+                sent,
+                before,
+                "stored=",
+            )
         elif name == "one_live_record":
             path = initialize(repo, "alpha")
             state, selected = discover(repo)
@@ -388,6 +493,30 @@ def run_case(name: str) -> None:
             legacy.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
             assert_blocked_preserves(lambda: discover(repo), sent, before, "multiple valid live records require exact progress path")
             assert discover(repo, str(scoped.relative_to(repo))) == ("resume", scoped)
+        elif name == "scoped_feature_mismatch":
+            path = repo / ".release-loop/runs/alpha/progress.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(progress("beta", ".release-loop/runs/alpha"), encoding="utf-8")
+            before_progress = path.read_bytes()
+            assert_blocked_preserves(lambda: discover(repo), sent, before, "feature does not match scope alpha")
+            assert_blocked_preserves(
+                lambda: discover(repo, str(path.relative_to(repo))),
+                sent,
+                before,
+                "feature does not match scope alpha",
+            )
+            assert_blocked_preserves(
+                lambda: archive_scope(
+                    repo,
+                    str(path.relative_to(repo)),
+                    ".release-loop/archive/2026-08-23-alpha",
+                    persist_authority=False,
+                ),
+                sent,
+                before,
+                "feature does not match scope alpha",
+            )
+            assert path.read_bytes() == before_progress
         elif name == "interrupted_archive":
             path = initialize(repo, "alpha")
             destination = ".release-loop/archive/2026-08-23-alpha"
@@ -538,6 +667,18 @@ def run_case(name: str) -> None:
             assert_blocked_preserves(lambda: handoff_scope(source, base, str(path.relative_to(source))), sent, before, "handoff target mismatch")
             assert path.read_bytes() == source_before
             assert (target / "foreign.txt").read_bytes() == target_before
+        elif name == "handoff_same_checkout":
+            path = initialize(repo, "alpha")
+            source_before = path.read_bytes()
+            marker = repo / ".release-loop/.handoff/alpha.json"
+            assert_blocked_preserves(
+                lambda: handoff_scope(repo, repo, str(path.relative_to(repo))),
+                sent,
+                before,
+                "source and base resolve to same checkout",
+            )
+            assert path.read_bytes() == source_before
+            assert not marker.exists()
         elif name in {
             "archive_direct_escape",
             "archive_parent_escape",

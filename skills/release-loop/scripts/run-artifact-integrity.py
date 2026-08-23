@@ -113,6 +113,10 @@ def validate_progress(
     values, text = frontmatter(path)
     if values.get("artifact_root") != expected_root:
         reject("path boundary", f"artifact_root {values.get('artifact_root', '')}")
+    if expected_root != ".release-loop":
+        scope_feature = rel.parts[2]
+        if values.get("feature") != scope_feature:
+            reject("invalid progress", f"feature does not match scope {scope_feature}")
     if expected_feature is not None and values.get("feature") != expected_feature:
         reject("invalid progress", f"feature does not match {expected_feature}")
     return path, values, text
@@ -196,15 +200,24 @@ def discover(repo: Path, exact: str | None = None) -> tuple[str, Path | None]:
     return "new", None
 
 
-def archive_marker(text: str) -> str | None:
-    matches = re.findall(
+def archive_evidence(text: str) -> tuple[str | None, str | None]:
+    completed = re.findall(
         r"^- \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z retro: archive-destination: (\S+)\s*$",
         text,
         re.MULTILINE,
     )
-    if len(matches) > 1:
-        reject("archive destination conflict", "multiple markers")
-    return matches[0] if matches else None
+    incomplete = re.findall(
+        r"^- \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z archived-incomplete: archive-destination: (\S+)\s*$",
+        text,
+        re.MULTILINE,
+    )
+    if len(completed) + len(incomplete) > 1:
+        reject("archive destination conflict", "multiple persisted archive markers")
+    if completed:
+        return "completed", completed[0]
+    if incomplete:
+        return "incomplete", incomplete[0]
+    return None, None
 
 
 def move_one(source: Path, destination: Path) -> None:
@@ -218,18 +231,21 @@ def archive(
     repo: Path,
     progress_path: str,
     destination: str | None = None,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], str]:
     repo = repo.resolve(strict=True)
     inject_after_first = test_failure("archive-after-first")
     progress_file, values, text = validate_progress(repo, progress_path)
-    stored = archive_marker(text)
+    mode, stored = archive_evidence(text)
     candidate = destination or stored
     if candidate is not None:
         destination_path = guard(repo, candidate, ".release-loop/archive")
     if stored is None:
         reject("archive destination conflict", "missing persisted destination")
-    if values.get("phase") != "done" or values.get("phase_status") != "complete":
-        reject("archive destination conflict", "missing persisted phase evidence")
+    if mode == "completed":
+        if values.get("phase") != "done" or values.get("phase_status") != "complete":
+            reject("archive destination conflict", "missing persisted phase evidence")
+    elif values.get("phase") == "done" or values.get("phase_status") == "complete":
+        reject("archive destination conflict", "incomplete marker requires nonterminal phase")
     if stored is not None and destination is not None and stored != destination:
         reject("archive destination conflict", f"stored={stored} requested={destination}")
     selected = stored
@@ -263,7 +279,8 @@ def archive(
     order.append("progress.md")
     if source_rel != ".release-loop":
         source.rmdir()
-    return selected, order
+    state = "archived" if mode == "completed" else "archived-incomplete"
+    return selected, order, state
 
 
 def tree_manifest(root: Path) -> dict[str, bytes | None]:
@@ -305,6 +322,8 @@ def handoff(
 ) -> tuple[Path, Path]:
     repo = repo.resolve(strict=True)
     base_repo = base_repo.resolve(strict=True)
+    if repo == base_repo:
+        reject("handoff owner conflict", "source and base resolve to same checkout")
     inject_after_marker = test_failure("handoff-after-marker")
     progress_file, values, _ = validate_progress(repo, progress_path)
     artifact_root = values["artifact_root"]
@@ -406,7 +425,7 @@ def execute(arguments: argparse.Namespace) -> dict[str, object]:
             "state": state,
         }
     if arguments.command == "archive":
-        archive_path, moved = archive(
+        archive_path, moved, state = archive(
             repo,
             arguments.progress_path,
             arguments.destination,
@@ -415,7 +434,7 @@ def execute(arguments: argparse.Namespace) -> dict[str, object]:
             "archive_path": archive_path,
             "moved": moved,
             "progress_path": f"{archive_path}/progress.md",
-            "state": "archived",
+            "state": state,
         }
     if arguments.command == "handoff":
         base_repo = Path(arguments.base_repo).resolve(strict=True)
