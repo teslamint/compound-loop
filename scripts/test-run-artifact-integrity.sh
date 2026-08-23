@@ -9,9 +9,8 @@ case_name="${1:-scope}"
 python3 - "$case_name" "$ROOT" <<'PY'
 from __future__ import annotations
 
-import os
-from pathlib import Path, PurePosixPath
-import shutil
+from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -30,10 +29,15 @@ CASES = (
     "one_live_record",
     "multiple_live_records",
     "valid_legacy_record",
+    "unknown_schema_with_valid_record",
+    "symlink_progress_rejected",
+    "legacy_scoped_ambiguity",
     "interrupted_archive",
+    "interrupted_legacy_archive",
     "ignored_orphan",
     "occupied_scope_blocked",
     "tracked_scope_target",
+    "index_only_tracked_collision",
     "absolute_outside_root",
     "relative_parent_escape",
     "scoped_symlink",
@@ -41,12 +45,19 @@ CASES = (
     "archive_symlink",
     "handoff_symlink",
     "handoff_success",
+    "handoff_incomplete_rerun",
+    "handoff_mismatch_preserves_both",
+    "archive_direct_escape",
+    "archive_parent_escape",
+    "archive_wrong_family",
+    "legacy_direct_escape",
+    "legacy_parent_escape",
+    "handoff_direct_escape",
+    "handoff_parent_escape",
+    "handoff_wrong_family",
+    "operative_contract_mutation",
     "stateful_scoped_lifecycle",
 )
-
-
-class Blocked(RuntimeError):
-    pass
 
 
 def require_contract() -> None:
@@ -62,8 +73,8 @@ def require_contract() -> None:
         (ARCHIVE, "Move scoped `progress.md` last as the archive commit point."),
         (ARCHIVE, "reuse the exact recorded archive destination"),
         (ARCHIVE, "Mid-move cancellation leaves the selected progress record in the source scope."),
-        (HOOKS, "`.release-loop/.handoff` is the only handoff root"),
-        (HOOKS, "Validate every existing source and destination component before transfer."),
+        (HOOKS, "`.release-loop/.handoff` is the fixed handoff root"),
+        (HOOKS, "Make the base owner discover and resume that exact progress path."),
         (HOOKS, "Cancellation preserves the source worktree."),
     )
     missing = [fragment for text, fragment in required if fragment not in text]
@@ -96,7 +107,7 @@ def new_repo(tmp: Path, name: str = "repo") -> Path:
     (repo / "README.md").write_text("fixture\n", encoding="utf-8")
     git(repo, "add", ".gitignore", "README.md")
     git(repo, "commit", "-qm", "fixture")
-    return repo
+    return repo.resolve(strict=True)
 
 
 def progress(feature: str, artifact_root: str) -> str:
@@ -111,111 +122,30 @@ def progress(feature: str, artifact_root: str) -> str:
     )
 
 
-def valid_progress(path: Path, feature: str | None = None) -> bool:
-    if not path.is_file() or path.is_symlink():
-        return False
-    text = path.read_text(encoding="utf-8")
-    if "schema: release-loop/v1" not in text:
-        return False
-    return feature is None or f"feature: {feature}\n" in text
+def load_operative_contract(text: str = SCHEMA) -> dict[str, object]:
+    start = "<!-- run-artifact-integrity-check:begin -->"
+    end = "<!-- run-artifact-integrity-check:end -->"
+    if text.count(start) != 1 or text.count(end) != 1 or text.index(start) >= text.index(end):
+        raise AssertionError("executable run-artifact contract absent")
+    section = text.split(start, 1)[1].split(end, 1)[0]
+    blocks = re.findall(r"```python\n(.*?)\n```", section, re.DOTALL)
+    if len(blocks) != 1 or section.count("```") != 2:
+        raise AssertionError("executable run-artifact contract must contain exactly one Python block")
+    namespace: dict[str, object] = {"__name__": "run_artifact_contract"}
+    exec(compile(blocks[0], "run-artifact-integrity-check.py", "exec"), namespace)
+    required = ("Blocked", "initialize", "discover", "archive", "handoff")
+    missing = [name for name in required if name not in namespace]
+    if missing:
+        raise AssertionError("executable run-artifact contract missing: " + ", ".join(missing))
+    return namespace
 
 
-def repo_relative(value: str) -> PurePosixPath:
-    path = PurePosixPath(value)
-    if path.is_absolute() or not path.parts or ".." in path.parts:
-        raise Blocked(f"path boundary: {value}")
-    return path
-
-
-def is_within(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
-
-
-def guard_components(repo: Path, relative: str, allowed_root: str) -> Path:
-    rel = repo_relative(relative)
-    allowed = repo / repo_relative(allowed_root)
-    cursor = repo
-    for part in rel.parts:
-        cursor = cursor / part
-        if cursor.is_symlink():
-            raise Blocked(f"path boundary: symlink component {cursor.relative_to(repo)}")
-        if cursor.exists() and not is_within(cursor.resolve(), repo.resolve()):
-            raise Blocked(f"path boundary: outside repository {cursor}")
-    if not is_within(cursor.absolute(), allowed.absolute()):
-        raise Blocked(f"path boundary: {relative} outside {allowed_root}")
-    parent = cursor if cursor.exists() and cursor.is_dir() else cursor.parent
-    if not is_within(parent.resolve(strict=False), repo.resolve()):
-        raise Blocked(f"path boundary: {relative} outside repository")
-    return cursor
-
-
-def tracked(repo: Path, relative: str) -> list[str]:
-    out = git(repo, "ls-files", "--", relative)
-    return [line for line in out.splitlines() if line]
-
-
-def initialize(repo: Path, feature: str, selected: str | None = None) -> Path:
-    relative = selected or f".release-loop/runs/{feature}/progress.md"
-    expected = f".release-loop/runs/{feature}/progress.md"
-    repo_relative(relative)
-    if relative != expected:
-        raise Blocked(f"progress path does not match run identity: {relative}")
-    target = guard_components(repo, relative, f".release-loop/runs/{feature}")
-    scope = target.parent
-    if scope.exists():
-        entries = sorted(p for p in scope.iterdir())
-        if entries and not (len(entries) == 1 and valid_progress(target, feature)):
-            names = ", ".join(str(p.relative_to(repo)) for p in entries)
-            raise Blocked(f"artifact scope collision: {names}")
-    if tracked(repo, str(scope.relative_to(repo))):
-        raise Blocked(f"artifact scope collision: tracked {scope.relative_to(repo)}")
-    scope.mkdir(parents=True, exist_ok=True)
-    if not target.exists():
-        target.write_text(progress(feature, str(scope.relative_to(repo))), encoding="utf-8")
-    return target
-
-
-def discover(repo: Path, exact: str | None = None) -> tuple[str, Path | None]:
-    candidates: list[Path] = []
-    legacy = repo / ".release-loop/progress.md"
-    if valid_progress(legacy):
-        candidates.append(legacy)
-    runs = repo / ".release-loop/runs"
-    if runs.is_dir() and not runs.is_symlink():
-        for candidate in sorted(runs.glob("*/progress.md")):
-            if valid_progress(candidate):
-                candidates.append(candidate)
-    if exact is not None:
-        selected = guard_components(repo, exact, ".release-loop")
-        if selected not in candidates:
-            raise Blocked(f"selected progress path is not a valid live record: {exact}")
-        return "resume", selected
-    if len(candidates) == 1:
-        return "resume", candidates[0]
-    if len(candidates) > 1:
-        raise Blocked("multiple valid live records require exact progress path")
-    return "new", None
-
-
-def archive_scope(repo: Path, feature: str, destination: str) -> list[str]:
-    source_rel = f".release-loop/runs/{feature}"
-    source = guard_components(repo, source_rel, source_rel)
-    dest = guard_components(repo, destination, destination)
-    dest.mkdir(parents=True, exist_ok=True)
-    order: list[str] = []
-    for child in sorted(source.iterdir()):
-        if child.name == "progress.md":
-            continue
-        shutil.move(str(child), dest / child.name)
-        order.append(child.name)
-    shutil.move(str(source / "progress.md"), dest / "progress.md")
-    order.append("progress.md")
-    source.rmdir()
-    return order
+OPERATIVE = load_operative_contract()
+Blocked = OPERATIVE["Blocked"]
+initialize = OPERATIVE["initialize"]
+discover = OPERATIVE["discover"]
+archive_scope = OPERATIVE["archive"]
+handoff_scope = OPERATIVE["handoff"]
 
 
 def sentinel(tmp: Path) -> tuple[Path, bytes]:
@@ -251,7 +181,7 @@ def run_case(name: str) -> None:
             path = initialize(repo, "alpha")
             (path.parent / "reports").mkdir()
             (path.parent / "reports/U1.md").write_text("done\n", encoding="utf-8")
-            order = archive_scope(repo, "alpha", ".release-loop/archive/2026-08-23-alpha")
+            order = archive_scope(repo, str(path.relative_to(repo)), ".release-loop/archive/2026-08-23-alpha")
             assert order[-1] == "progress.md"
             assert not path.exists()
         elif name == "one_live_record":
@@ -269,13 +199,62 @@ def run_case(name: str) -> None:
             legacy.parent.mkdir()
             legacy.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
             assert discover(repo) == ("resume", legacy)
+        elif name == "unknown_schema_with_valid_record":
+            valid = initialize(repo, "alpha")
+            invalid = repo / ".release-loop/runs/beta/progress.md"
+            invalid.parent.mkdir(parents=True)
+            invalid.write_text(progress("beta", ".release-loop/runs/beta").replace("release-loop/v1", "release-loop/v999"), encoding="utf-8")
+            assert_blocked_preserves(lambda: discover(repo), sent, before, "unknown schema")
+            assert valid.exists() and invalid.exists()
+        elif name == "symlink_progress_rejected":
+            valid = initialize(repo, "alpha")
+            linked = repo / ".release-loop/runs/beta/progress.md"
+            linked.parent.mkdir(parents=True)
+            linked.symlink_to(valid)
+            assert_blocked_preserves(lambda: discover(repo), sent, before, "path boundary")
+        elif name == "legacy_scoped_ambiguity":
+            scoped = initialize(repo, "alpha")
+            legacy = repo / ".release-loop/progress.md"
+            legacy.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+            assert_blocked_preserves(lambda: discover(repo), sent, before, "multiple valid live records require exact progress path")
+            assert discover(repo, str(scoped.relative_to(repo))) == ("resume", scoped)
         elif name == "interrupted_archive":
             path = initialize(repo, "alpha")
             destination = ".release-loop/archive/2026-08-23-alpha"
-            dest = repo / destination
-            dest.mkdir(parents=True)
-            (dest / "reports").mkdir()
-            assert archive_scope(repo, "alpha", destination)[-1] == "progress.md"
+            for child in ("briefs", "reports"):
+                directory = path.parent / child
+                directory.mkdir()
+                (directory / "owned.md").write_text(child + "\n", encoding="utf-8")
+            try:
+                archive_scope(repo, str(path.relative_to(repo)), destination, fail_after_first=True)
+            except Blocked as exc:
+                assert "injected archive interruption" in str(exc)
+            else:
+                raise AssertionError("archive interruption did not fire")
+            assert path.exists(), "progress must remain the source commit point"
+            assert f"archive-destination: {destination}" in path.read_text(encoding="utf-8")
+            order = archive_scope(repo, str(path.relative_to(repo)), None)
+            assert order[-1] == "progress.md"
+            assert (repo / destination / "progress.md").is_file()
+        elif name == "interrupted_legacy_archive":
+            legacy = repo / ".release-loop/progress.md"
+            legacy.parent.mkdir()
+            legacy.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+            for child in ("briefs", "reports"):
+                directory = legacy.parent / child
+                directory.mkdir()
+                (directory / "owned.md").write_text(child + "\n", encoding="utf-8")
+            destination = ".release-loop/archive/2026-08-23-legacy"
+            try:
+                archive_scope(repo, str(legacy.relative_to(repo)), destination, fail_after_first=True)
+            except Blocked as exc:
+                assert "injected archive interruption" in str(exc)
+            else:
+                raise AssertionError("legacy archive interruption did not fire")
+            assert legacy.exists()
+            assert f"archive-destination: {destination}" in legacy.read_text(encoding="utf-8")
+            assert archive_scope(repo, str(legacy.relative_to(repo)), None)[-1] == "progress.md"
+            assert (repo / destination / "progress.md").is_file()
         elif name in {"ignored_orphan", "occupied_scope_blocked"}:
             orphan = repo / ".release-loop/runs/alpha/orphan.txt"
             orphan.parent.mkdir(parents=True)
@@ -301,6 +280,19 @@ def run_case(name: str) -> None:
             assert git(repo, "write-tree") == index
             assert target.read_bytes() == blob
             assert git(repo, "status", "--porcelain", "--", str(target.relative_to(repo))) == status
+        elif name == "index_only_tracked_collision":
+            target = repo / ".release-loop/runs/alpha/index-only.txt"
+            target.parent.mkdir(parents=True)
+            target.write_text("indexed\n", encoding="utf-8")
+            git(repo, "add", "-f", str(target.relative_to(repo)))
+            target.unlink()
+            try:
+                initialize(repo, "alpha")
+            except Blocked as exc:
+                assert str(exc) == "artifact scope collision: .release-loop/runs/alpha/index-only.txt", str(exc)
+            else:
+                raise AssertionError("index-only collision did not block")
+            assert not target.exists()
         elif name == "absolute_outside_root":
             assert_blocked_preserves(lambda: initialize(repo, "alpha", str(sent)), sent, before, "path boundary")
         elif name == "relative_parent_escape":
@@ -317,36 +309,122 @@ def run_case(name: str) -> None:
                 loop = repo / ".release-loop"
                 loop.mkdir()
                 (loop / "progress.md").symlink_to(sent)
-                action = lambda: guard_components(repo, ".release-loop/progress.md", ".release-loop")
+                action = lambda: discover(repo)
             elif name == "archive_symlink":
                 initialize(repo, "alpha")
                 archive = repo / ".release-loop/archive"
                 archive.symlink_to(outside, target_is_directory=True)
-                action = lambda: archive_scope(repo, "alpha", ".release-loop/archive/2026-08-23-alpha")
+                action = lambda: archive_scope(repo, ".release-loop/runs/alpha/progress.md", ".release-loop/archive/2026-08-23-alpha")
             else:
-                loop = repo / ".release-loop"
+                source = repo
+                base = new_repo(tmp, "base")
+                path = initialize(source, "alpha")
+                loop = base / ".release-loop"
                 loop.mkdir(exist_ok=True)
                 (loop / ".handoff").symlink_to(outside, target_is_directory=True)
-                action = lambda: guard_components(repo, ".release-loop/.handoff/alpha", ".release-loop/.handoff")
+                action = lambda: handoff_scope(source, base, str(path.relative_to(source)))
             assert_blocked_preserves(action, sent, before, "path boundary")
         elif name == "handoff_success":
+            source = repo
+            base = new_repo(tmp, "base")
+            path = initialize(source, "alpha")
+            (path.parent / "reports").mkdir()
+            (path.parent / "reports/U1.md").write_text("done\n", encoding="utf-8")
+            result = handoff_scope(source, base, str(path.relative_to(source)))
+            base_progress = base / ".release-loop/runs/alpha/progress.md"
+            assert result["cleanup_permitted"] is True
+            assert discover(base, str(base_progress.relative_to(base))) == ("resume", base_progress)
+            assert (base / ".release-loop/runs/alpha/reports/U1.md").read_text(encoding="utf-8") == "done\n"
+        elif name == "handoff_incomplete_rerun":
+            source = repo
+            base = new_repo(tmp, "base")
+            path = initialize(source, "alpha")
+            (path.parent / "reports").mkdir()
+            (path.parent / "reports/U1.md").write_text("done\n", encoding="utf-8")
+            try:
+                handoff_scope(source, base, str(path.relative_to(source)), fail_after_marker=True)
+            except Blocked as exc:
+                assert "injected handoff interruption" in str(exc)
+            else:
+                raise AssertionError("handoff interruption did not fire")
+            marker = base / ".release-loop/.handoff/alpha.json"
+            assert marker.is_file()
+            result = handoff_scope(source, base, str(path.relative_to(source)))
+            assert result["cleanup_permitted"] is True
+            assert discover(base, ".release-loop/runs/alpha/progress.md")[0] == "resume"
+        elif name == "handoff_mismatch_preserves_both":
+            source = repo
+            base = new_repo(tmp, "base")
+            path = initialize(source, "alpha")
+            try:
+                handoff_scope(source, base, str(path.relative_to(source)), fail_after_marker=True)
+            except Blocked:
+                pass
+            target = base / ".release-loop/runs/alpha"
+            target.mkdir(parents=True)
+            (target / "foreign.txt").write_text("foreign\n", encoding="utf-8")
+            source_before = path.read_bytes()
+            target_before = (target / "foreign.txt").read_bytes()
+            assert_blocked_preserves(lambda: handoff_scope(source, base, str(path.relative_to(source))), sent, before, "handoff target mismatch")
+            assert path.read_bytes() == source_before
+            assert (target / "foreign.txt").read_bytes() == target_before
+        elif name in {
+            "archive_direct_escape",
+            "archive_parent_escape",
+            "archive_wrong_family",
+            "legacy_direct_escape",
+            "legacy_parent_escape",
+            "handoff_direct_escape",
+            "handoff_parent_escape",
+            "handoff_wrong_family",
+        }:
             path = initialize(repo, "alpha")
-            marker = guard_components(repo, ".release-loop/.handoff/alpha", ".release-loop/.handoff")
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(str(path.relative_to(repo)) + "\n", encoding="utf-8")
-            assert marker.read_text(encoding="utf-8").strip() == ".release-loop/runs/alpha/progress.md"
+            if name == "archive_direct_escape":
+                action = lambda: archive_scope(repo, str(path.relative_to(repo)), str(sent))
+            elif name == "archive_parent_escape":
+                action = lambda: archive_scope(repo, str(path.relative_to(repo)), ".release-loop/archive/../escaped")
+            elif name == "archive_wrong_family":
+                action = lambda: archive_scope(repo, str(path.relative_to(repo)), ".release-loop/escaped/archive")
+            elif name == "legacy_direct_escape":
+                action = lambda: discover(repo, str(sent))
+            elif name == "legacy_parent_escape":
+                action = lambda: discover(repo, ".release-loop/../progress.md")
+            else:
+                base = new_repo(tmp, "base")
+                if name == "handoff_direct_escape":
+                    marker = str(sent)
+                elif name == "handoff_parent_escape":
+                    marker = ".release-loop/.handoff/../escaped.json"
+                else:
+                    marker = ".release-loop/escaped/alpha.json"
+                action = lambda: handoff_scope(repo, base, str(path.relative_to(repo)), marker_path=marker)
+            assert_blocked_preserves(action, sent, before, "path boundary")
+        elif name == "operative_contract_mutation":
+            mutated = SCHEMA.replace('SCHEMA_VERSION = "release-loop/v1"', 'SCHEMA_VERSION = "release-loop/v999"', 1)
+            assert mutated != SCHEMA, "mutation target must exist in the operative block"
+            contract = load_operative_contract(mutated)
+            legacy = repo / ".release-loop/progress.md"
+            legacy.parent.mkdir()
+            legacy.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+            try:
+                contract["discover"](repo)
+            except Exception as exc:
+                assert "unknown schema" in str(exc), str(exc)
+            else:
+                raise AssertionError("operative contract mutation escaped the fixture")
         elif name == "stateful_scoped_lifecycle":
             path = initialize(repo, "alpha")
             for child in ("briefs", "reports", "reviews", "evidence"):
                 directory = path.parent / child
                 directory.mkdir()
                 (directory / "owned.md").write_text(child + "\n", encoding="utf-8")
-            marker = guard_components(repo, ".release-loop/.handoff/alpha", ".release-loop/.handoff")
-            marker.parent.mkdir(parents=True)
-            marker.write_text(str(path.relative_to(repo)) + "\n", encoding="utf-8")
-            archive_scope(repo, "alpha", ".release-loop/archive/2026-08-23-alpha")
-            assert not (repo / ".release-loop/progress.md").exists()
-            assert (repo / ".release-loop/archive/2026-08-23-alpha/progress.md").is_file()
+            base = new_repo(tmp, "base")
+            result = handoff_scope(repo, base, str(path.relative_to(repo)))
+            assert result["cleanup_permitted"] is True
+            base_progress = base / ".release-loop/runs/alpha/progress.md"
+            archive_scope(base, str(base_progress.relative_to(base)), ".release-loop/archive/2026-08-23-alpha")
+            assert not (base / ".release-loop/progress.md").exists()
+            assert (base / ".release-loop/archive/2026-08-23-alpha/progress.md").is_file()
         else:
             raise AssertionError(f"unknown case: {name}")
 
