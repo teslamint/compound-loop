@@ -9,8 +9,9 @@ case_name="${1:-scope}"
 python3 - "$case_name" "$ROOT" <<'PY'
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 import tempfile
@@ -22,10 +23,13 @@ SKILL = (ROOT / "skills/release-loop/SKILL.md").read_text(encoding="utf-8")
 SCHEMA = (ROOT / "skills/release-loop/references/progress-schema.md").read_text(encoding="utf-8")
 ARCHIVE = (ROOT / "skills/release-loop/references/resume-and-archive.md").read_text(encoding="utf-8")
 HOOKS = (ROOT / "skills/release-loop/references/transition-hooks.md").read_text(encoding="utf-8")
+CLI = ROOT / "skills/release-loop/scripts/run-artifact-integrity.py"
 
 CASES = (
     "new_scoped_run",
+    "scope_preparation_crash",
     "archive_scoped_run",
+    "archive_requires_persisted_destination",
     "one_live_record",
     "multiple_live_records",
     "valid_legacy_record",
@@ -60,24 +64,38 @@ CASES = (
 )
 
 
-def require_contract() -> None:
+INVOCATIONS = (
+    ("skill-initialize", SKILL, "python3 skills/release-loop/scripts/run-artifact-integrity.py initialize --repo . --feature <feature_slug>"),
+    ("skill-discover", SKILL, "python3 skills/release-loop/scripts/run-artifact-integrity.py discover --repo . --progress-path <repo-relative-progress-path>"),
+    ("archive", ARCHIVE, "python3 skills/release-loop/scripts/run-artifact-integrity.py archive --repo . --progress-path <repo-relative-progress-path> --destination <repo-relative-archive-path>"),
+    ("handoff", HOOKS, "python3 skills/release-loop/scripts/run-artifact-integrity.py handoff --repo <source-worktree> --base-repo <base-checkout> --progress-path <repo-relative-progress-path>"),
+)
+
+
+def require_contract(texts: dict[str, str] | None = None, check_invocations: bool = True) -> None:
+    selected = texts or {"SKILL": SKILL, "SCHEMA": SCHEMA, "ARCHIVE": ARCHIVE, "HOOKS": HOOKS}
     required = (
-        (SKILL, ".release-loop/runs/<feature_slug>/progress.md"),
-        (SKILL, "Exactly one valid live record resumes without another selector."),
-        (SKILL, "Multiple valid live records require one exact repo-relative progress path."),
-        (SKILL, "An occupied scope without one matching valid progress record is an artifact-scope collision"),
-        (SKILL, "A published progress record remains resumable."),
-        (SCHEMA, "artifact_root: .release-loop/runs/<feature_slug>"),
-        (SCHEMA, "The four closed physical-root families are"),
-        (SCHEMA, "Reject every symlink in each existing source or destination component"),
-        (ARCHIVE, "Move scoped `progress.md` last as the archive commit point."),
-        (ARCHIVE, "reuse the exact recorded archive destination"),
-        (ARCHIVE, "Mid-move cancellation leaves the selected progress record in the source scope."),
-        (HOOKS, "`.release-loop/.handoff` is the fixed handoff root"),
-        (HOOKS, "Make the base owner discover and resume that exact progress path."),
-        (HOOKS, "Cancellation preserves the source worktree."),
+        (selected["SKILL"], ".release-loop/runs/<feature_slug>/progress.md"),
+        (selected["SKILL"], "Exactly one valid live record resumes without another selector."),
+        (selected["SKILL"], "Multiple valid live records require one exact repo-relative progress path."),
+        (selected["SKILL"], "An occupied scope without one matching valid progress record is an artifact-scope collision"),
+        (selected["SKILL"], "A published progress record remains resumable."),
+        (selected["SCHEMA"], "artifact_root: .release-loop/runs/<feature_slug>"),
+        (selected["SCHEMA"], "The four closed physical-root families are"),
+        (selected["SCHEMA"], "Reject every symlink in each existing source or destination component"),
+        (selected["ARCHIVE"], "Move scoped `progress.md` last as the archive commit point."),
+        (selected["ARCHIVE"], "reuse the exact recorded archive destination"),
+        (selected["ARCHIVE"], "Mid-move cancellation leaves the selected progress record in the source scope."),
+        (selected["HOOKS"], "`.release-loop/.handoff` is the fixed handoff root"),
+        (selected["HOOKS"], "Make the base owner discover and resume that exact progress path."),
+        (selected["HOOKS"], "Cancellation preserves the source worktree."),
     )
     missing = [fragment for text, fragment in required if fragment not in text]
+    if check_invocations:
+        for name, original, invocation in INVOCATIONS:
+            key = "SKILL" if original == SKILL else "ARCHIVE" if original == ARCHIVE else "HOOKS"
+            if invocation not in selected[key]:
+                missing.append(f"{name}: {invocation}")
     if missing:
         raise AssertionError("missing run-scope contract: " + " | ".join(missing))
 
@@ -118,34 +136,140 @@ def progress(feature: str, artifact_root: str) -> str:
         f"artifact_root: {artifact_root}\n"
         "phase: implement\n"
         "phase_status: in-progress\n"
+        "started: 2026-08-23T00:00:00Z\n"
+        "updated: 2026-08-23T00:00:00Z\n"
+        "branch: feat/fixture\n"
+        "base_branch: main\n"
+        "flags: []\n"
+        "final_action:\n"
+        "  kind: merge-to-base\n"
+        "  status: predicted\n"
+        "  command: null\n"
+        "  marker: null\n"
+        "  updated: 2026-08-23T00:00:00Z\n"
         "---\n"
+        "\n## Log\n"
+        "\n- 2026-08-23T00:00:00Z initialize: complete record published\n"
     )
 
 
-def load_operative_contract(text: str = SCHEMA) -> dict[str, object]:
-    start = "<!-- run-artifact-integrity-check:begin -->"
-    end = "<!-- run-artifact-integrity-check:end -->"
-    if text.count(start) != 1 or text.count(end) != 1 or text.index(start) >= text.index(end):
-        raise AssertionError("executable run-artifact contract absent")
-    section = text.split(start, 1)[1].split(end, 1)[0]
-    blocks = re.findall(r"```python\n(.*?)\n```", section, re.DOTALL)
-    if len(blocks) != 1 or section.count("```") != 2:
-        raise AssertionError("executable run-artifact contract must contain exactly one Python block")
-    namespace: dict[str, object] = {"__name__": "run_artifact_contract"}
-    exec(compile(blocks[0], "run-artifact-integrity-check.py", "exec"), namespace)
-    required = ("Blocked", "initialize", "discover", "archive", "handoff")
-    missing = [name for name in required if name not in namespace]
-    if missing:
-        raise AssertionError("executable run-artifact contract missing: " + ", ".join(missing))
-    return namespace
+class Blocked(RuntimeError):
+    pass
 
 
-OPERATIVE = load_operative_contract()
-Blocked = OPERATIVE["Blocked"]
-initialize = OPERATIVE["initialize"]
-discover = OPERATIVE["discover"]
-archive_scope = OPERATIVE["archive"]
-handoff_scope = OPERATIVE["handoff"]
+def run_cli(command: str, *args: str, failure: str | None = None) -> dict[str, object]:
+    if not CLI.is_file():
+        raise AssertionError(f"packaged run-artifact CLI absent: {CLI.relative_to(ROOT)}")
+    environment = os.environ.copy()
+    if failure is not None:
+        environment["RUN_ARTIFACT_INTEGRITY_TEST_FAIL"] = failure
+    result = subprocess.run(
+        (sys.executable, str(CLI), command, *args),
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        assert result.stdout == "", f"blocked CLI wrote stdout: {result.stdout!r}"
+        diagnostic = result.stderr.rstrip("\n")
+        assert diagnostic and "\n" not in diagnostic, f"diagnostic must be one line: {result.stderr!r}"
+        raise Blocked(diagnostic)
+    assert result.stderr == "", f"successful CLI wrote stderr: {result.stderr!r}"
+    assert result.stdout.endswith("\n") and result.stdout.count("\n") == 1, result.stdout
+    payload = json.loads(result.stdout)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    assert result.stdout == canonical, f"non-canonical JSON: {result.stdout!r}"
+    return payload
+
+
+def prepare_scope(repo: Path, feature: str, selected: str | None = None) -> tuple[Path, str]:
+    args = ["--repo", str(repo), "--feature", feature]
+    if selected is not None:
+        args.extend(("--progress-path", selected))
+    payload = run_cli("initialize", *args)
+    assert set(payload) == {"artifact_root", "progress_path", "state"}, payload
+    assert payload["state"] in {"new", "resume"}, payload
+    return repo / str(payload["progress_path"]), str(payload["state"])
+
+
+def initialize(repo: Path, feature: str, selected: str | None = None) -> Path:
+    path, state = prepare_scope(repo, feature, selected)
+    if state == "new":
+        assert path.parent.is_dir() and not any(path.parent.iterdir()), path.parent
+        path.write_text(progress(feature, path.parent.relative_to(repo).as_posix()), encoding="utf-8")
+    else:
+        assert state == "resume" and path.is_file(), (state, path)
+    return path
+
+
+def discover(repo: Path, exact: str | None = None) -> tuple[str, Path | None]:
+    args = ["--repo", str(repo)]
+    if exact is not None:
+        args.extend(("--progress-path", exact))
+    payload = run_cli("discover", *args)
+    assert set(payload) == {"progress_path", "state"}, payload
+    assert payload["state"] in {"new", "resume"}, payload
+    progress_path = payload["progress_path"]
+    return str(payload["state"]), None if progress_path is None else repo / str(progress_path)
+
+
+def archive_scope(
+    repo: Path,
+    progress_path: str,
+    destination: str | None,
+    fail_after_first: bool = False,
+    persist_authority: bool = True,
+) -> list[str]:
+    if destination is not None and persist_authority:
+        path = repo / progress_path
+        text = path.read_text(encoding="utf-8")
+        assert "archive-destination:" not in text
+        text = text.replace("phase: implement\n", "phase: done\n", 1)
+        text = text.replace("phase_status: in-progress\n", "phase_status: complete\n", 1)
+        text += f"- 2026-08-23T00:00:01Z retro: archive-destination: {destination}\n"
+        path.write_text(text, encoding="utf-8")
+    args = ["--repo", str(repo), "--progress-path", progress_path]
+    if destination is not None:
+        args.extend(("--destination", destination))
+    payload = run_cli(
+        "archive",
+        *args,
+        failure="archive-after-first" if fail_after_first else None,
+    )
+    assert set(payload) == {"archive_path", "moved", "progress_path", "state"}, payload
+    assert payload["state"] == "archived", payload
+    return list(payload["moved"])
+
+
+def handoff_scope(
+    repo: Path,
+    base_repo: Path,
+    progress_path: str,
+    marker_path: str | None = None,
+    fail_after_marker: bool = False,
+) -> dict[str, object]:
+    args = [
+        "--repo", str(repo),
+        "--base-repo", str(base_repo),
+        "--progress-path", progress_path,
+    ]
+    if marker_path is not None:
+        args.extend(("--marker-path", marker_path))
+    payload = run_cli(
+        "handoff",
+        *args,
+        failure="handoff-after-marker" if fail_after_marker else None,
+    )
+    assert set(payload) == {"cleanup_permitted", "marker_path", "progress_path", "state"}, payload
+    assert payload["state"] == "complete" and payload["cleanup_permitted"] is True, payload
+    return {
+        "cleanup_permitted": True,
+        "marker": base_repo / str(payload["marker_path"]),
+        "progress": base_repo / str(payload["progress_path"]),
+    }
 
 
 def sentinel(tmp: Path) -> tuple[Path, bytes]:
@@ -167,7 +291,7 @@ def assert_blocked_preserves(action, sentinel_path: Path, before: bytes, diagnos
 
 
 def run_case(name: str) -> None:
-    require_contract()
+    require_contract(check_invocations=name == "operative_contract_mutation")
     with tempfile.TemporaryDirectory(prefix=f"run-artifact-{name}-") as tmp_name:
         tmp = Path(tmp_name)
         repo = new_repo(tmp)
@@ -177,6 +301,16 @@ def run_case(name: str) -> None:
             path = initialize(repo, "alpha")
             assert path.relative_to(repo).as_posix() == ".release-loop/runs/alpha/progress.md"
             assert not (repo / ".release-loop/progress.md").exists()
+        elif name == "scope_preparation_crash":
+            path, state = prepare_scope(repo, "alpha")
+            assert state == "new"
+            assert path.parent.is_dir() and not any(path.parent.iterdir())
+            assert not path.exists()
+            retry_path, retry_state = prepare_scope(repo, "alpha")
+            assert (retry_path, retry_state) == (path, "new")
+            assert not retry_path.exists()
+            retry_path.write_text(progress("alpha", ".release-loop/runs/alpha"), encoding="utf-8")
+            assert prepare_scope(repo, "alpha") == (retry_path, "resume")
         elif name == "archive_scoped_run":
             path = initialize(repo, "alpha")
             (path.parent / "reports").mkdir()
@@ -184,6 +318,23 @@ def run_case(name: str) -> None:
             order = archive_scope(repo, str(path.relative_to(repo)), ".release-loop/archive/2026-08-23-alpha")
             assert order[-1] == "progress.md"
             assert not path.exists()
+        elif name == "archive_requires_persisted_destination":
+            path = initialize(repo, "alpha")
+            before_progress = path.read_bytes()
+            destination = ".release-loop/archive/2026-08-23-alpha"
+            assert_blocked_preserves(
+                lambda: archive_scope(
+                    repo,
+                    str(path.relative_to(repo)),
+                    destination,
+                    persist_authority=False,
+                ),
+                sent,
+                before,
+                "missing persisted destination",
+            )
+            assert path.read_bytes() == before_progress
+            assert not (repo / destination).exists()
         elif name == "one_live_record":
             path = initialize(repo, "alpha")
             state, selected = discover(repo)
@@ -314,7 +465,7 @@ def run_case(name: str) -> None:
                 initialize(repo, "alpha")
                 archive = repo / ".release-loop/archive"
                 archive.symlink_to(outside, target_is_directory=True)
-                action = lambda: archive_scope(repo, ".release-loop/runs/alpha/progress.md", ".release-loop/archive/2026-08-23-alpha")
+                action = lambda: archive_scope(repo, ".release-loop/runs/alpha/progress.md", ".release-loop/archive/2026-08-23-alpha", persist_authority=False)
             else:
                 source = repo
                 base = new_repo(tmp, "base")
@@ -380,11 +531,11 @@ def run_case(name: str) -> None:
         }:
             path = initialize(repo, "alpha")
             if name == "archive_direct_escape":
-                action = lambda: archive_scope(repo, str(path.relative_to(repo)), str(sent))
+                action = lambda: archive_scope(repo, str(path.relative_to(repo)), str(sent), persist_authority=False)
             elif name == "archive_parent_escape":
-                action = lambda: archive_scope(repo, str(path.relative_to(repo)), ".release-loop/archive/../escaped")
+                action = lambda: archive_scope(repo, str(path.relative_to(repo)), ".release-loop/archive/../escaped", persist_authority=False)
             elif name == "archive_wrong_family":
-                action = lambda: archive_scope(repo, str(path.relative_to(repo)), ".release-loop/escaped/archive")
+                action = lambda: archive_scope(repo, str(path.relative_to(repo)), ".release-loop/escaped/archive", persist_authority=False)
             elif name == "legacy_direct_escape":
                 action = lambda: discover(repo, str(sent))
             elif name == "legacy_parent_escape":
@@ -400,18 +551,19 @@ def run_case(name: str) -> None:
                 action = lambda: handoff_scope(repo, base, str(path.relative_to(repo)), marker_path=marker)
             assert_blocked_preserves(action, sent, before, "path boundary")
         elif name == "operative_contract_mutation":
-            mutated = SCHEMA.replace('SCHEMA_VERSION = "release-loop/v1"', 'SCHEMA_VERSION = "release-loop/v999"', 1)
-            assert mutated != SCHEMA, "mutation target must exist in the operative block"
-            contract = load_operative_contract(mutated)
-            legacy = repo / ".release-loop/progress.md"
-            legacy.parent.mkdir()
-            legacy.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
-            try:
-                contract["discover"](repo)
-            except Exception as exc:
-                assert "unknown schema" in str(exc), str(exc)
-            else:
-                raise AssertionError("operative contract mutation escaped the fixture")
+            baseline = {"SKILL": SKILL, "SCHEMA": SCHEMA, "ARCHIVE": ARCHIVE, "HOOKS": HOOKS}
+            for name_label, original, invocation in INVOCATIONS:
+                key = "SKILL" if original == SKILL else "ARCHIVE" if original == ARCHIVE else "HOOKS"
+                for mutation in ("", invocation.replace("run-artifact-integrity.py", "changed-run-artifact.py")):
+                    texts = dict(baseline)
+                    texts[key] = texts[key].replace(invocation, mutation, 1)
+                    assert texts[key] != baseline[key], f"structural mutation target absent: {name_label}"
+                    try:
+                        require_contract(texts)
+                    except AssertionError as exc:
+                        assert name_label in str(exc), str(exc)
+                    else:
+                        raise AssertionError(f"structural invocation mutation escaped: {name_label}")
         elif name == "stateful_scoped_lifecycle":
             path = initialize(repo, "alpha")
             for child in ("briefs", "reports", "reviews", "evidence"):
