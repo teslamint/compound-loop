@@ -14,6 +14,8 @@ from pathlib import Path, PurePosixPath
 
 SCHEMA_VERSION = "release-loop/v1"
 FEATURE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+PHASES = frozenset(("design", "plan", "implement", "review", "ship", "retro", "done", "blocked"))
+PHASE_STATUSES = frozenset(("in-progress", "waiting-user", "blocked", "complete"))
 TEST_FAILURE_ENV = "RUN_ARTIFACT_INTEGRITY_TEST_FAIL"
 TEST_FAILURES = frozenset(("archive-after-first", "handoff-after-marker"))
 
@@ -244,8 +246,18 @@ def archive(
     if mode == "completed":
         if values.get("phase") != "done" or values.get("phase_status") != "complete":
             reject("archive destination conflict", "missing persisted phase evidence")
-    elif values.get("phase") == "done" or values.get("phase_status") == "complete":
-        reject("archive destination conflict", "incomplete marker requires nonterminal phase")
+    else:
+        phase = values.get("phase")
+        phase_status = values.get("phase_status")
+        if phase not in PHASES:
+            reject("archive destination conflict", f"invalid incomplete phase: {phase or 'missing'}")
+        if phase_status not in PHASE_STATUSES:
+            reject(
+                "archive destination conflict",
+                f"invalid incomplete phase_status: {phase_status or 'missing'}",
+            )
+        if phase == "done" or phase_status == "complete":
+            reject("archive destination conflict", "incomplete marker requires nonterminal phase")
     if stored is not None and destination is not None and stored != destination:
         reject("archive destination conflict", f"stored={stored} requested={destination}")
     selected = stored

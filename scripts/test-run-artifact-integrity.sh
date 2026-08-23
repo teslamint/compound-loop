@@ -32,6 +32,10 @@ CASES = (
     "archive_scoped_run",
     "archive_requires_persisted_destination",
     "archive_incomplete_run",
+    "archive_incomplete_missing_phase",
+    "archive_incomplete_missing_phase_status",
+    "archive_incomplete_unknown_phase",
+    "archive_incomplete_unknown_phase_status",
     "archive_evidence_mutants",
     "one_live_record",
     "multiple_live_records",
@@ -382,6 +386,46 @@ def run_case(name: str) -> None:
             assert "phase: implement\n" in text
             assert "phase_status: in-progress\n" in text
             assert f"archived-incomplete: archive-destination: {destination}" in text
+        elif name in {
+            "archive_incomplete_missing_phase",
+            "archive_incomplete_missing_phase_status",
+            "archive_incomplete_unknown_phase",
+            "archive_incomplete_unknown_phase_status",
+        }:
+            path = initialize(repo, "alpha")
+            destination = ".release-loop/archive/2026-08-23-alpha-incomplete"
+            text = path.read_text(encoding="utf-8")
+            if name == "archive_incomplete_missing_phase":
+                text = text.replace("phase: implement\n", "", 1)
+                diagnostic = "invalid incomplete phase: missing"
+            elif name == "archive_incomplete_missing_phase_status":
+                text = text.replace("phase_status: in-progress\n", "", 1)
+                diagnostic = "invalid incomplete phase_status: missing"
+            elif name == "archive_incomplete_unknown_phase":
+                text = text.replace("phase: implement\n", "phase: unknown\n", 1)
+                diagnostic = "invalid incomplete phase: unknown"
+            else:
+                text = text.replace("phase_status: in-progress\n", "phase_status: unknown\n", 1)
+                diagnostic = "invalid incomplete phase_status: unknown"
+            path.write_text(
+                text + f"- 2026-08-23T00:00:01Z archived-incomplete: archive-destination: {destination}\n",
+                encoding="utf-8",
+            )
+            source_before = path.read_bytes()
+            assert_blocked_preserves(
+                lambda: archive_scope(
+                    repo,
+                    str(path.relative_to(repo)),
+                    destination,
+                    persist_authority=False,
+                    mode="incomplete",
+                ),
+                sent,
+                before,
+                diagnostic,
+            )
+            assert path.read_bytes() == source_before
+            assert not (repo / destination).exists()
         elif name == "archive_evidence_mutants":
             destination = ".release-loop/archive/2026-08-23-alpha"
             completed_nonterminal = new_repo(tmp, "completed-nonterminal")

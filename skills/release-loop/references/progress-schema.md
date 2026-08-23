@@ -84,7 +84,7 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - The `feature:` field stores one validated `feature_slug`. Consumers reject empty, uppercase, separator, dot-segment, or reserved `resume` values. They never silently normalize a stored value.
 - The canonical destination evidence is one Log line with the exact marker `archive-destination: <path>`. For interrupted reruns, that logged path is authoritative and must be reused without recalculating a collision suffix.
 - Completed archive evidence is `<timestamp> retro: archive-destination: <path>` with `phase: done` and `phase_status: complete`.
-- Incomplete archive evidence is `<timestamp> archived-incomplete: archive-destination: <path>` with a nonterminal phase and status. It never flips either field.
+- Incomplete archive evidence is `<timestamp> archived-incomplete: archive-destination: <path>`. Both phase fields are mandatory and must use the schema's closed vocabularies. Require `phase != done` and `phase_status != complete`. The transition never flips either field.
 - Exactly one archive-evidence mode may exist. Duplicate, mixed-mode, phase-mismatched, or destination-mismatched evidence blocks.
 - A completed record's terminal home is `.release-loop/archive/<YYYY-MM-DD>-<feature_slug>/`. The canonical archive Log line must name that containing directory. One qualifying record reports completion. Zero records trigger reconstruction. Multiple records block as ambiguous.
 - Move all remaining children from the selected artifact root before the selected progress record. Move `progress.md` last as the commit point. An interrupted archive reuses its logged destination and moves only remaining children.
