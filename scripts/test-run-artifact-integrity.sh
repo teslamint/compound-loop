@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -60,15 +61,18 @@ CASES = (
     "handoff_parent_escape",
     "handoff_wrong_family",
     "operative_contract_mutation",
+    "external_cwd_portability",
+    "feature_worktree_owns_scope",
+    "resume_skip_no_new_worktree",
     "stateful_scoped_lifecycle",
 )
 
 
 INVOCATIONS = (
-    ("skill-initialize", SKILL, "python3 skills/release-loop/scripts/run-artifact-integrity.py initialize --repo . --feature <feature_slug>"),
-    ("skill-discover", SKILL, "python3 skills/release-loop/scripts/run-artifact-integrity.py discover --repo . --progress-path <repo-relative-progress-path>"),
-    ("archive", ARCHIVE, "python3 skills/release-loop/scripts/run-artifact-integrity.py archive --repo . --progress-path <repo-relative-progress-path> --destination <repo-relative-archive-path>"),
-    ("handoff", HOOKS, "python3 skills/release-loop/scripts/run-artifact-integrity.py handoff --repo <source-worktree> --base-repo <base-checkout> --progress-path <repo-relative-progress-path>"),
+    ("skill-initialize", SKILL, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" initialize --repo . --feature <feature_slug>'),
+    ("skill-discover", SKILL, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" discover --repo . --progress-path <repo-relative-progress-path>'),
+    ("archive", ARCHIVE, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" archive --repo . --progress-path <repo-relative-progress-path> --destination <repo-relative-archive-path>'),
+    ("handoff", HOOKS, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" handoff --repo <source-worktree> --base-repo <base-checkout> --progress-path <repo-relative-progress-path>'),
 )
 
 
@@ -89,6 +93,7 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["HOOKS"], "`.release-loop/.handoff` is the fixed handoff root"),
         (selected["HOOKS"], "Make the base owner discover and resume that exact progress path."),
         (selected["HOOKS"], "Cancellation preserves the source worktree."),
+        (selected["SKILL"], "directory containing the loaded `SKILL.md`"),
     )
     missing = [fragment for text, fragment in required if fragment not in text]
     if check_invocations:
@@ -96,6 +101,14 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
             key = "SKILL" if original == SKILL else "ARCHIVE" if original == ARCHIVE else "HOOKS"
             if invocation not in selected[key]:
                 missing.append(f"{name}: {invocation}")
+        order = (
+            selected["SKILL"].find(" discover --repo ."),
+            selected["SKILL"].find("Create a feature branch from HEAD via `worktree-isolation`"),
+            selected["SKILL"].find(" initialize --repo ."),
+            selected["SKILL"].find("Write one complete schema-conformant record"),
+        )
+        if -1 in order or tuple(sorted(order)) != order:
+            missing.append("new-run order: discover -> worktree-isolation -> initialize -> complete ledger")
     if missing:
         raise AssertionError("missing run-scope contract: " + " | ".join(missing))
 
@@ -157,15 +170,21 @@ class Blocked(RuntimeError):
     pass
 
 
-def run_cli(command: str, *args: str, failure: str | None = None) -> dict[str, object]:
-    if not CLI.is_file():
-        raise AssertionError(f"packaged run-artifact CLI absent: {CLI.relative_to(ROOT)}")
+def run_cli(
+    command: str,
+    *args: str,
+    failure: str | None = None,
+    cli: Path = CLI,
+    cwd: Path = ROOT,
+) -> dict[str, object]:
+    if not cli.is_file():
+        raise AssertionError(f"packaged run-artifact CLI absent: {cli}")
     environment = os.environ.copy()
     if failure is not None:
         environment["RUN_ARTIFACT_INTEGRITY_TEST_FAIL"] = failure
     result = subprocess.run(
-        (sys.executable, str(CLI), command, *args),
-        cwd=ROOT,
+        (sys.executable, str(cli), command, *args),
+        cwd=cwd,
         env=environment,
         text=True,
         stdout=subprocess.PIPE,
@@ -564,6 +583,51 @@ def run_case(name: str) -> None:
                         assert name_label in str(exc), str(exc)
                     else:
                         raise AssertionError(f"structural invocation mutation escaped: {name_label}")
+        elif name == "external_cwd_portability":
+            plugin_root = tmp / "plugin-root"
+            copied_skill_root = plugin_root / "skills/release-loop"
+            shutil.copytree(ROOT / "skills/release-loop", copied_skill_root)
+            consumer = new_repo(tmp, "consumer")
+            loaded_skill = copied_skill_root / "SKILL.md"
+            release_loop_skill_root = loaded_skill.parent
+            payload = run_cli(
+                "initialize",
+                "--repo", ".",
+                "--feature", "portable",
+                cli=release_loop_skill_root / "scripts/run-artifact-integrity.py",
+                cwd=consumer,
+            )
+            assert payload == {
+                "artifact_root": ".release-loop/runs/portable",
+                "progress_path": ".release-loop/runs/portable/progress.md",
+                "state": "new",
+            }
+            progress_path = consumer / str(payload["progress_path"])
+            assert progress_path.parent.is_dir() and not progress_path.exists()
+            progress_path.write_text(progress("portable", str(payload["artifact_root"])), encoding="utf-8")
+            assert not (plugin_root / ".release-loop").exists()
+        elif name == "feature_worktree_owns_scope":
+            base = repo
+            feature = tmp / "feature-worktree"
+            git(base, "worktree", "add", "-q", "-b", "feat/alpha", str(feature))
+            feature = feature.resolve(strict=True)
+            path = initialize(feature, "alpha")
+            assert not (base / ".release-loop").exists()
+            files = sorted(
+                item.relative_to(feature).as_posix()
+                for item in (feature / ".release-loop").rglob("*")
+                if item.is_file()
+            )
+            assert files == [".release-loop/runs/alpha/progress.md"], files
+            assert path == feature / files[0]
+        elif name == "resume_skip_no_new_worktree":
+            base = repo
+            path = initialize(base, "alpha")
+            before_worktrees = git(base, "worktree", "list", "--porcelain")
+            assert discover(base, str(path.relative_to(base))) == ("resume", path)
+            assert prepare_scope(base, "alpha", str(path.relative_to(base))) == (path, "resume")
+            after_worktrees = git(base, "worktree", "list", "--porcelain")
+            assert after_worktrees == before_worktrees
         elif name == "stateful_scoped_lifecycle":
             path = initialize(repo, "alpha")
             for child in ("briefs", "reports", "reviews", "evidence"):
