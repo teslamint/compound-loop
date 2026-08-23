@@ -1221,6 +1221,11 @@ if failures:
 print(f"ok:   {TAG} planning and Ship review contracts present")
 PY
 
+# Run-scope discovery, closed-root, handoff, and archive fixtures.
+if ! bash "$ROOT/scripts/test-run-artifact-integrity.sh" scope; then
+  FAIL=1
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"

@@ -5,7 +5,7 @@ description: "Drive a feature from idea to merged PR to retrospective through si
 
 # Release Loop
 
-Orchestrates the full lifecycle. Holds **no phase logic** — every phase is an invocation of its standalone skill; this skill owns sequencing, gates, and `.release-loop/progress.md`. `enforces: P8` (state lives in files).
+Orchestrates the full lifecycle. Holds **no phase logic**. Each phase invokes its standalone skill. This skill owns sequencing, gates, and the selected progress record. `enforces: P8` (state lives in files).
 
 ## Flags
 
@@ -53,21 +53,26 @@ An approved plan may declare only two release-loop-owned transition families, re
 
 Before either family runs, revalidate the approved plan's `body_seal`, require the section to name an owner and a matching mutation/failure-state matrix row, and persist the transition start in `progress.md`. A missing, failed, cancelled, or unverifiable transition blocks the loop in Ship; it never advances by silence. Any outward action requires an interactive point-of-risk USER gate with exact target and values; only the human or orchestrating session receiving first-hand approval executes it. A declined, deferred, relayed, or headless outward transition leaves Ship blocked; a matrix-permitted local transition may complete headlessly only when its matrix permits it and proves every outward target unreachable.
 A post-approval deviation never overrides a transition by discovery alone. When a sealed transition's literal artifact changed, accept one override only after the current-session USER approves the exact committed addendum path and whole-file SHA-256 and the orchestrator persists one timestamped `transition-override-approved` Log line with transition ID, addendum path/digest, target path, replaced/replacement digests, `approver=USER`, and session identity. Before use, require exactly one matching approval line for the current session, re-hash the tracked byte-clean addendum and target, and prove a single exact override block names the same transition and digests and that the sealed plan contains the replaced digest. Retain prior-session approval lines as history but ignore them for current-session authority. Missing, duplicate-current-session, untracked, dirty, ambiguous, or mismatched override state blocks the transition. Override approval changes only the pinned contract; it is never merge or outward-action consent.
-On every Ship entry or resume, before trusting a base `progress.md` or removing a worktree, inspect the base checkout's `.release-loop/.handoff/`. If an owned approved-plan transition operation is present, rerun that named transition from the still-preserved feature worktree before continuing. A missing or mismatched owner marker blocks Ship without deleting the operation.
-If the authoritative base ledger records `phase: ship` and `merged: true`, resume never re-enters pre-merge `shipping` or treats “nothing to ship” as completion. Use transition start/acceptance logs plus `.handoff/` state to rerun an interrupted pre-removal transition, finish only pending cleanup after its acceptance, and then run every incomplete post-Ship transition before Retro.
+On every Ship entry or resume, inspect the base checkout's exact `.release-loop/.handoff` root. Do this before trusting the selected progress record or removing a worktree. Rerun an owned operation from the preserved feature worktree. A missing or mismatched owner marker blocks Ship and preserves the operation.
+If the authoritative base ledger records `phase: ship` and `merged: true`, resume never re-enters pre-merge `shipping`. Use transition logs and exact handoff state to resume an interrupted transfer. Finish cleanup only after acceptance. Then run each incomplete post-Ship transition before Retro.
 
-When an approved plan declares a Release-loop transition heading or .release-loop/.handoff/ is non-empty at Ship entry or resume, read references/transition-hooks.md and follow it before proceeding.
+When an approved plan declares a Release-loop transition heading, read references/transition-hooks.md. Also read it when `.release-loop/.handoff` is nonempty at Ship entry or resume.
 
 ## Starting a new loop
 
 1. Parse flags; validate `--skip-*` prerequisites (above). Before any feature-derived lookup or mutation, define one `feature_slug` from explicit feature input. Accept only `^[a-z0-9]+(?:-[a-z0-9]+)*$`, reject the reserved standalone token `resume`, never silently normalize invalid input, ask an interactive caller for a replacement, and return blocked context for an unattended caller. Reuse the exact `feature_slug` for `feature:`, the branch suffix, the archive suffix, and any archived-resume lookup.
-2. Detect base branch: `git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||' || echo main`
-3. If `.release-loop/progress.md` exists, stop and ask: resume it or archive it. An `archive it` answer runs the references/resume-and-archive.md's Archive procedure. That procedure selects its evidence-based done-flip or archived-incomplete path. Never silently overwrite a live loop.
-4. Create a feature branch from HEAD via `worktree-isolation` by default. Honor an explicit user request to work in the current checkout instead. Treat an explicit request not to create a new worktree as the same exception. Do not create a new branch or worktree when `--skip-*` resumes an existing branch.
-5. Write initial `references/progress-schema.md`-conformant state, including `final_action` (`kind: merge-to-base`, `status: predicted`) with a Log line declaring it.
-6. Enter the first applicable phase.
+2. Set the new record path to `.release-loop/runs/<feature_slug>/progress.md`. Set `artifact_root` to its containing scope.
+3. Check the legacy `.release-loop/progress.md` and every scoped `.release-loop/runs/*/progress.md`. Exactly one valid live record resumes without another selector. Multiple valid live records require one exact repo-relative progress path. An unattended ambiguous discovery returns blocked context before any write.
+4. Validate the selected path and every existing component under its closed physical root. Reject absolute paths, parent escapes, symlinks, and physical parents outside that root. An occupied scope without one matching valid progress record is an artifact-scope collision. List all filesystem and tracked collisions and stop before mutation. An absent or proven empty scope can start.
+5. Detect base branch: `git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||' || echo main`
+6. If discovery selects a live record, stop and ask: resume it or archive it. An `archive it` answer runs the Archive procedure. Never silently overwrite a live loop.
+7. Create a feature branch from HEAD via `worktree-isolation` by default. Honor an explicit user request to work in the current checkout instead. Treat an explicit request not to create a new worktree as the same exception. Do not create a new branch or worktree when `--skip-*` resumes an existing branch.
+8. Revalidate the exact scoped path. Create its parent only when it is still absent or empty. Write one schema-conformant record. Include its validated `artifact_root` and a predicted `final_action`. Add the declaration Log line in the same write.
+9. Enter the first applicable phase.
 
-On `resume` entry or when an archive is needed, the schema-version rejection rule applies: 1. If `.release-loop/progress.md` exists, read it and reject unknown `schema:` versions rather than guessing. Never silently overwrite a live loop. After Retro's exit condition holds, run the Archive procedure before reporting the loop done; the completion report names that verified archive path.
+A blocked initialization reuses the same path and reports the same state. Remove only an empty directory that this attempt created before publication. Remove an injected disposable orphan only after ownership proof. After publication, use resume or archive-incomplete compensation. A published progress record remains resumable. An unattended ambiguity returns blocked context without a prompt. Cancellation before creation changes nothing. Cancellation before publication removes only a proven empty directory.
+
+On `resume` entry or when an archive is needed, read the selected exact progress path. Reject unknown `schema:` versions rather than guessing. Never silently overwrite a live loop. After Retro's exit condition holds, run the Archive procedure before reporting the loop done. The completion report names that verified archive path.
 When the resume argument is given or the Retro exit condition holds, read references/resume-and-archive.md and follow it before proceeding.
 
 ## Gate handling
@@ -80,7 +85,7 @@ When the resume argument is given or the Retro exit condition holds, read refere
 
 ## State updates
 
-Update `.release-loop/progress.md` after every phase transition, unit completion, CI attempt, and review round — at the moment it happens, not batched at phase end. Schema: `references/progress-schema.md`.
+Update the selected exact progress path after every phase transition, unit completion, CI attempt, and review round. Write at the moment of the event. Schema: `references/progress-schema.md`.
 
 The `final_action` record is refined at each determination or invalidation point, at the moment of the event like every update above: PR created → `determined` plus the exact merge command; PR closed or new commits after determination → back to `predicted` with the reason logged in the same edit.
 
@@ -101,5 +106,3 @@ Silence is the default failure mode of a long-running dispatched worker — a de
 | Silently overwrite an existing progress.md | Ask: resume or archive |
 | Stop after merge | Retro completes the release |
 | Report the loop done with a live progress.md | Run the Archive procedure; the completion report names the archive path |
-
-
