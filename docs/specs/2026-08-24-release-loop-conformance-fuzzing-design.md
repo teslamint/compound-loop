@@ -1,6 +1,6 @@
 ---
 title: Release-loop Cross-Harness Conformance Fuzzing
-status: draft
+status: approved
 date: 2026-08-24
 schema: spec/v1
 ---
