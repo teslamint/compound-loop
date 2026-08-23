@@ -44,6 +44,7 @@ copy_phase_consumers() {
   done
   cp "$ROOT/skills/planning/schemas/plan-schema.md" "$d/skills/planning/schemas/plan-schema.md"
   cp "$ROOT/skills/implementing/scripts/phase-artifact-integrity.py" "$d/skills/implementing/scripts/phase-artifact-integrity.py"
+  cp "$ROOT/skills/implementing/scripts/phase_artifact_core.py" "$d/skills/implementing/scripts/phase_artifact_core.py"
   printf '%s\n' "$d"
 }
 
@@ -2704,6 +2705,24 @@ for relative in ("briefs/U1-brief.md", "reports/U1-report.md", "reviews/U1-diff.
     source.write_text(relative + "\n", encoding="utf-8")
     published = subprocess.run((sys.executable, str(cli), "publish", "--repo", str(repo), "--progress-path", payload["progress_path"], "--source", source.relative_to(repo).as_posix(), "--target", (progress_path.parent / relative).relative_to(repo).as_posix()), check=True, text=True, capture_output=True)
     assert json.loads(published.stdout)["state"] == "published"
+other = repo / "other" / plan.name
+other.parent.mkdir()
+other.write_text(plan.read_text(encoding="utf-8"), encoding="utf-8")
+same_stem = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(other)), text=True, capture_output=True)
+assert same_stem.returncode != 0 and "plan" in same_stem.stderr, same_stem.stderr
+original_plan = plan.read_text(encoding="utf-8")
+plan.write_text(original_plan.replace("status: approved", "status: draft"), encoding="utf-8")
+tampered = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert tampered.returncode != 0 and "approved plan/v1 required" in tampered.stderr, tampered.stderr
+plan.write_text(original_plan, encoding="utf-8")
+foreign = progress_path.parent / "foreign.txt"
+foreign.write_text("foreign\n", encoding="utf-8")
+foreign_resume = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert foreign_resume.returncode != 0 and "artifact scope collision" in foreign_resume.stderr, foreign_resume.stderr
+foreign.unlink()
+subprocess.run(("git", "add", "-f", payload["progress_path"]), cwd=repo, check=True)
+tracked_resume = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert tracked_resume.returncode != 0 and "artifact scope collision" in tracked_resume.stderr, tracked_resume.stderr
 assert not (plugin_root / ".release-loop").exists()
 assert not (repo / ".release-loop/progress.md").exists()
 PY

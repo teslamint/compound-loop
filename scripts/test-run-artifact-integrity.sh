@@ -26,6 +26,8 @@ ARCHIVE = (ROOT / "skills/release-loop/references/resume-and-archive.md").read_t
 HOOKS = (ROOT / "skills/release-loop/references/transition-hooks.md").read_text(encoding="utf-8")
 CLI = ROOT / "skills/release-loop/scripts/run-artifact-integrity.py"
 IMPLEMENTING_CLI = ROOT / "skills/implementing/scripts/phase-artifact-integrity.py"
+RELEASE_CORE = ROOT / "skills/release-loop/scripts/phase_artifact_core.py"
+IMPLEMENTING_CORE = ROOT / "skills/implementing/scripts/phase_artifact_core.py"
 PHASE_CONSUMERS = {
     name: (ROOT / f"skills/{name}/SKILL.md").read_text(encoding="utf-8")
     for name in ("planning", "implementing", "reviewing", "shipping", "retrospective")
@@ -93,6 +95,9 @@ CASES = (
     "mismatched_progress_publish",
     "publish_target_escape",
     "invalid_publish_source",
+    "publisher_core_parity",
+    "publisher_atomic_recovery",
+    "publisher_journal_collisions",
     "publish_cancellation",
     "stateful_scoped_lifecycle",
 )
@@ -113,6 +118,9 @@ CONSUMER_CASES = (
     "mismatched_progress_publish",
     "publish_target_escape",
     "invalid_publish_source",
+    "publisher_core_parity",
+    "publisher_atomic_recovery",
+    "publisher_journal_collisions",
     "publish_cancellation",
     "stateful_scoped_lifecycle",
 )
@@ -412,6 +420,22 @@ def publish_phase_artifact(
     assert set(payload) == {"progress_path", "sha256", "state", "target"}, payload
     assert payload["state"] in {"published", "reused"}, payload
     return repo / str(payload["target"])
+
+
+def publish_from_cli(repo: Path, progress_path: Path, relative: str, content: bytes, cli: Path, failure: str | None = None) -> dict[str, object]:
+    source = progress_path.parent / ".tmp" / (relative.replace("/", "-") + ".tmp")
+    source.parent.mkdir(parents=True, exist_ok=True)
+    if not source.exists():
+        source.write_bytes(content)
+    return run_cli(
+        "publish",
+        "--repo", str(repo),
+        "--progress-path", progress_path.relative_to(repo).as_posix(),
+        "--source", source.relative_to(repo).as_posix(),
+        "--target", (progress_path.parent / relative).relative_to(repo).as_posix(),
+        failure=failure,
+        cli=cli,
+    )
 
 
 def run_case(name: str) -> None:
@@ -1076,7 +1100,7 @@ def run_case(name: str) -> None:
                     path,
                     "reports/U1-report.md",
                     b"cancelled\n",
-                    failure="publish-before-final",
+                    failure="publish-after-prepare",
                 ),
                 sent,
                 before,
@@ -1085,9 +1109,15 @@ def run_case(name: str) -> None:
             temporary = path.parent / ".tmp/reports-U1-report.md.tmp"
             assert temporary.read_bytes() == b"cancelled\n"
             assert not target.exists()
-            assert not (path.parent / ".phase-artifact-ownership.json").exists()
-            temporary.unlink()
-            assert not temporary.exists()
+            journal = path.parent / ".phase-artifact-ownership.json"
+            assert json.loads(journal.read_text(encoding="utf-8"))["pending"] is not None
+            compensated = run_cli(
+                "compensate",
+                "--repo", str(repo),
+                "--progress-path", path.relative_to(repo).as_posix(),
+            )
+            assert compensated["state"] == "compensated"
+            assert not temporary.exists() and json.loads(journal.read_text(encoding="utf-8"))["pending"] is None
         elif name == "publish_target_escape":
             path = initialize(repo, "alpha")
             for target in (str(sent), ".release-loop/runs/alpha/../escaped.md"):
@@ -1151,6 +1181,81 @@ def run_case(name: str) -> None:
                 before,
                 "artifact target",
             )
+        elif name == "publisher_core_parity":
+            assert RELEASE_CORE.read_bytes() == IMPLEMENTING_CORE.read_bytes()
+            observed = []
+            journals = []
+            for label, cli in (("release", CLI), ("implementing", IMPLEMENTING_CLI)):
+                candidate = new_repo(tmp, label)
+                candidate_progress = initialize(candidate, "alpha")
+                payload = publish_from_cli(candidate, candidate_progress, "reports/U1.md", b"parity\n", cli)
+                observed.append((payload["state"], payload["sha256"], Path(str(payload["target"])).name))
+                journals.append((candidate_progress.parent / ".phase-artifact-ownership.json").read_bytes())
+            assert observed[0] == observed[1]
+            assert journals[0] == journals[1]
+        elif name == "publisher_atomic_recovery":
+            failures = (
+                "publish-before-prepare",
+                "publish-after-prepare",
+                "publish-after-final",
+                "publish-before-finalize",
+            )
+            for endpoint, cli in (("release", CLI), ("implementing", IMPLEMENTING_CLI)):
+                for failure in failures:
+                    candidate = new_repo(tmp, endpoint + "-" + failure)
+                    candidate_progress = initialize(candidate, "alpha")
+                    source = candidate_progress.parent / ".tmp/reports-U1.md.tmp"
+                    target = candidate_progress.parent / "reports/U1.md"
+                    journal = candidate_progress.parent / ".phase-artifact-ownership.json"
+                    try:
+                        publish_from_cli(candidate, candidate_progress, "reports/U1.md", b"atomic\n", cli, failure)
+                    except Blocked as exc:
+                        assert "injected publish interruption" in str(exc), str(exc)
+                    else:
+                        raise AssertionError(f"{endpoint}/{failure} did not interrupt")
+                    if failure == "publish-before-prepare":
+                        assert source.is_file() and not target.exists() and not journal.exists()
+                        payload = publish_from_cli(candidate, candidate_progress, "reports/U1.md", b"atomic\n", cli)
+                    elif failure == "publish-after-prepare":
+                        state = json.loads(journal.read_text(encoding="utf-8"))
+                        assert state["pending"] is not None and source.is_file() and not target.exists()
+                        if endpoint == "release":
+                            compensated = run_cli("compensate", "--repo", str(candidate), "--progress-path", candidate_progress.relative_to(candidate).as_posix(), cli=cli)
+                            assert compensated["state"] == "compensated"
+                            assert not source.exists() and json.loads(journal.read_text(encoding="utf-8"))["pending"] is None
+                            source.parent.mkdir(parents=True, exist_ok=True)
+                            source.write_bytes(b"atomic\n")
+                        payload = publish_from_cli(candidate, candidate_progress, "reports/U1.md", b"atomic\n", cli)
+                    else:
+                        state = json.loads(journal.read_text(encoding="utf-8"))
+                        assert state["pending"] is not None and target.is_file() and not source.exists()
+                        payload = run_cli(
+                            "publish",
+                            "--repo", str(candidate),
+                            "--progress-path", candidate_progress.relative_to(candidate).as_posix(),
+                            "--source", source.relative_to(candidate).as_posix(),
+                            "--target", target.relative_to(candidate).as_posix(),
+                            cli=cli,
+                        )
+                    assert payload["state"] == "published"
+                    final_state = json.loads(journal.read_text(encoding="utf-8"))
+                    assert final_state["pending"] is None and final_state["owned"]["reports/U1.md"] == payload["sha256"]
+        elif name == "publisher_journal_collisions":
+            for suffix in ("journal", "journal-temp"):
+                candidate = new_repo(tmp, suffix)
+                candidate_progress = initialize(candidate, "alpha")
+                relative = ".release-loop/runs/alpha/.phase-artifact-ownership.json" + (".tmp" if suffix == "journal-temp" else "")
+                collision = candidate / relative
+                collision.parent.mkdir(parents=True, exist_ok=True)
+                collision.write_bytes(b"collision\n")
+                git(candidate, "add", "-f", relative)
+                collision.unlink()
+                assert_blocked_preserves(
+                    lambda candidate=candidate, candidate_progress=candidate_progress: publish_from_cli(candidate, candidate_progress, "reports/U1.md", b"journal\n", CLI),
+                    sent,
+                    before,
+                    "artifact ownership",
+                )
         elif name == "stateful_scoped_lifecycle":
             require_phase_consumer_contract()
             path = initialize(repo, "alpha")

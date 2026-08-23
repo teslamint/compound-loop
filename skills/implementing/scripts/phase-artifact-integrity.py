@@ -3,7 +3,6 @@
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 import re
@@ -11,8 +10,13 @@ import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
+from phase_artifact_core import ArtifactBlocked
+from phase_artifact_core import compensate as compensate_phase_artifact
+from phase_artifact_core import publish as publish_phase_artifact
+from phase_artifact_core import read_journal as read_core_journal
+from phase_artifact_core import validate_progress as validate_core_progress
+
 FEATURE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-JOURNAL_NAME = ".phase-artifact-ownership.json"
 
 
 class Blocked(RuntimeError):
@@ -127,6 +131,44 @@ def validate_progress(repo, relative):
     return path, values
 
 
+def add_allowed_path(allowed, root, relative):
+    current = PurePosixPath(root)
+    for part in PurePosixPath(relative).parts:
+        current = current / part
+        allowed.add(current.as_posix())
+
+
+def audit_resume(repo, progress_relative, plan_relative):
+    progress, values = validate_core_progress(repo, progress_relative)
+    root = values["artifact_root"]
+    if values.get("plan") != plan_relative:
+        reject("invalid plan", "ledger plan path mismatch")
+    tracked = git_tracked(repo, root)
+    if tracked:
+        reject("artifact scope collision", ", ".join(sorted(tracked)))
+    journal_path, _, journal = read_core_journal(repo, root)
+    allowed = {progress.relative_to(repo).as_posix()}
+    if journal_path.exists():
+        allowed.add(journal_path.relative_to(repo).as_posix())
+    temp_root = repo / root / ".tmp"
+    if temp_root.exists():
+        allowed.add(temp_root.relative_to(repo).as_posix())
+    for target in journal["owned"]:
+        add_allowed_path(allowed, root, target)
+    pending = journal["pending"]
+    if pending is not None:
+        add_allowed_path(allowed, root, pending["source"])
+        add_allowed_path(allowed, root, pending["target"])
+    observed = {
+        path.relative_to(repo).as_posix()
+        for path in (repo / root).rglob("*")
+    }
+    foreign = sorted(observed - allowed)
+    if foreign:
+        reject("artifact scope collision", ", ".join(foreign))
+    return progress
+
+
 def initialize(repo, plan_value):
     plan, plan_relative = repository_file(repo, plan_value, "plan")
     repo = repo.resolve(strict=True)
@@ -141,7 +183,7 @@ def initialize(repo, plan_value):
     progress = guard(repo, progress_rel, root_rel)
     tracked = git_tracked(repo, root_rel)
     if progress.exists():
-        validate_progress(repo, progress_rel)
+        audit_resume(repo, progress_rel, plan_relative)
         return progress, "resume"
     entries = [] if not progress.parent.exists() else [p.relative_to(repo).as_posix() for p in progress.parent.rglob("*")]
     if entries or tracked:
@@ -195,63 +237,6 @@ def initialize(repo, plan_value):
     return progress, "new"
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def journal(repo, root):
-    path = guard(repo, root + "/" + JOURNAL_NAME, root)
-    if git_tracked(repo, path.relative_to(repo).as_posix()):
-        reject("artifact ownership", "tracked journal")
-    if not path.exists():
-        return path, {}
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError):
-        reject("artifact ownership", "invalid journal")
-    if not isinstance(value, dict):
-        reject("artifact ownership", "invalid journal")
-    return path, value
-
-
-def publish(repo, progress_relative, source_relative, target_relative):
-    repo = repo.resolve(strict=True)
-    _, values = validate_progress(repo, progress_relative)
-    root = values["artifact_root"]
-    source = guard(repo, source_relative, root)
-    target = guard(repo, target_relative, root)
-    temporary_root = guard(repo, root + "/.tmp", root)
-    if not is_within(source, temporary_root) or source == temporary_root:
-        reject("artifact source", "outside transition temp root " + source_relative)
-    if is_within(target, temporary_root):
-        reject("artifact target", "inside transition temp root " + target_relative)
-    if not source.is_file() or source.is_symlink():
-        reject("artifact source", source_relative)
-    if git_tracked(repo, source_relative):
-        reject("artifact source", "tracked source " + source_relative)
-    if git_tracked(repo, target_relative):
-        reject("artifact target collision", target_relative)
-    sha = digest(source)
-    journal_path, owned = journal(repo, root)
-    key = target.relative_to(repo / root).as_posix()
-    if target.exists() or target.is_symlink():
-        if target.is_file() and not target.is_symlink() and owned.get(key) == sha and digest(target) == sha:
-            source.unlink()
-            return target, sha, "reused"
-        reject("artifact ownership", target_relative)
-    if key in owned:
-        reject("artifact ownership", "missing owned final " + target_relative)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(str(source), str(target))
-    owned[key] = sha
-    temporary = journal_path.with_name(journal_path.name + ".tmp")
-    if temporary.exists() or temporary.is_symlink():
-        reject("artifact ownership", "temporary journal collision")
-    temporary.write_text(json.dumps(owned, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
-    os.replace(str(temporary), str(journal_path))
-    return target, sha, "published"
-
-
 def parser():
     root = Parser(description=__doc__)
     commands = root.add_subparsers(dest="command", required=True)
@@ -263,6 +248,9 @@ def parser():
     pub.add_argument("--progress-path", required=True)
     pub.add_argument("--source", required=True)
     pub.add_argument("--target", required=True)
+    compensation = commands.add_parser("compensate")
+    compensation.add_argument("--repo", required=True)
+    compensation.add_argument("--progress-path", required=True)
     return root
 
 
@@ -274,10 +262,13 @@ def main():
         if args.command == "initialize":
             progress, state = initialize(repo, args.plan)
             payload = {"artifact_root": progress.parent.relative_to(physical_repo).as_posix(), "progress_path": progress.relative_to(physical_repo).as_posix(), "state": state}
-        else:
-            target, sha, state = publish(repo, args.progress_path, args.source, args.target)
+        elif args.command == "publish":
+            target, sha, state = publish_phase_artifact(repo, args.progress_path, args.source, args.target)
             payload = {"progress_path": args.progress_path, "sha256": sha, "state": state, "target": target.relative_to(physical_repo).as_posix()}
-    except (Blocked, OSError, UnicodeError) as exc:
+        else:
+            state = compensate_phase_artifact(repo, args.progress_path)
+            payload = {"progress_path": args.progress_path, "state": state}
+    except (Blocked, ArtifactBlocked, OSError, UnicodeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))

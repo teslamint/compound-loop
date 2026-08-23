@@ -201,6 +201,8 @@ committed|compound-frontmatter-validator|skills/compound/scripts/validate-frontm
 committed|plan-frontmatter-validator|skills/planning/scripts/validate-plan-frontmatter.py
 committed|run-artifact-integrity-cli|skills/release-loop/scripts/run-artifact-integrity.py
 committed|phase-artifact-integrity-cli|skills/implementing/scripts/phase-artifact-integrity.py
+committed|release-phase-artifact-core|skills/release-loop/scripts/phase_artifact_core.py
+committed|implementing-phase-artifact-core|skills/implementing/scripts/phase_artifact_core.py
 generated|release-publication-engine|scripts/release-publication.sh|RELEASE_PUBLICATION_ENGINE_PY|RELEASE_PUBLICATION_ENGINE_PY
 REGISTRY
 }
@@ -537,7 +539,9 @@ make_fixture_repo() {
   cp "$ROOT/skills/compound/scripts/validate-frontmatter.py" "$destination/skills/compound/scripts/validate-frontmatter.py"
   cp "$ROOT/skills/planning/scripts/validate-plan-frontmatter.py" "$destination/skills/planning/scripts/validate-plan-frontmatter.py"
   cp "$ROOT/skills/release-loop/scripts/run-artifact-integrity.py" "$destination/skills/release-loop/scripts/run-artifact-integrity.py"
+  cp "$ROOT/skills/release-loop/scripts/phase_artifact_core.py" "$destination/skills/release-loop/scripts/phase_artifact_core.py"
   cp "$ROOT/skills/implementing/scripts/phase-artifact-integrity.py" "$destination/skills/implementing/scripts/phase-artifact-integrity.py"
+  cp "$ROOT/skills/implementing/scripts/phase_artifact_core.py" "$destination/skills/implementing/scripts/phase_artifact_core.py"
   cp "$ROOT/scripts/release-publication.sh" "$destination/scripts/release-publication.sh"
 }
 
@@ -550,8 +554,10 @@ make_validation_fixture_repo() {
   done < <(git -C "$ROOT" ls-files -z)
   mkdir -p "$destination/skills/release-loop/scripts"
   cp "$ROOT/skills/release-loop/scripts/run-artifact-integrity.py" "$destination/skills/release-loop/scripts/run-artifact-integrity.py"
+  cp "$ROOT/skills/release-loop/scripts/phase_artifact_core.py" "$destination/skills/release-loop/scripts/phase_artifact_core.py"
   mkdir -p "$destination/skills/implementing/scripts"
   cp "$ROOT/skills/implementing/scripts/phase-artifact-integrity.py" "$destination/skills/implementing/scripts/phase-artifact-integrity.py"
+  cp "$ROOT/skills/implementing/scripts/phase_artifact_core.py" "$destination/skills/implementing/scripts/phase_artifact_core.py"
 }
 
 invoke_validation_fixture_repo() {
@@ -595,7 +601,7 @@ case_real_artifacts_and_bytes() {
     out="$(compile_artifact "$line" "$path" 2>&1)"; rc=$?; [[ $rc -eq 0 ]] || { printf '%s\n' "$out"; result=1; }
     count=$((count + $(printf '%s\n' "$out" | grep -c 'status=pass')))
   done <<< "$entries"
-  [[ $count -eq 10 ]] || { echo "  expected ten artifact pass records, got $count"; result=1; }
+  [[ $count -eq 14 ]] || { echo "  expected fourteen artifact pass records, got $count"; result=1; }
   return "$result"
 }
 
@@ -695,12 +701,14 @@ case_validate_all_registered_artifacts() {
   [[ $rc -eq 0 ]] || { printf '%s\n' "$out"; return 1; }
   [[ $(printf '%s\n' "$out" | grep -c 'endpoint role=oldest') -eq 1 ]] || result=1
   [[ $(printf '%s\n' "$out" | grep -c 'endpoint role=newest') -eq 1 ]] || result=1
-  [[ $(printf '%s\n' "$out" | grep -c 'artifact class=.*status=pass') -eq 10 ]] || result=1
+  [[ $(printf '%s\n' "$out" | grep -c 'artifact class=.*status=pass') -eq 14 ]] || result=1
   [[ $(printf '%s\n' "$out" | grep -c '^ALL CHECKS PASSED$') -eq 1 ]] || result=1
   assert_contains "$out" 'label=compound-frontmatter-validator' 'registered committed artifact' || result=1
   assert_contains "$out" 'label=plan-frontmatter-validator' 'registered committed artifact' || result=1
   assert_contains "$out" 'label=run-artifact-integrity-cli' 'registered committed artifact' || result=1
   assert_contains "$out" 'label=phase-artifact-integrity-cli' 'registered standalone implementing artifact' || result=1
+  assert_contains "$out" 'label=release-phase-artifact-core' 'registered release publisher core' || result=1
+  assert_contains "$out" 'label=implementing-phase-artifact-core' 'registered standalone publisher core' || result=1
   assert_contains "$out" 'label=release-publication-engine' 'registered generated artifact' || result=1
   [[ -z "$(find "$d/tmp" -mindepth 1 -print -quit)" ]] || result=1
   return "$result"
