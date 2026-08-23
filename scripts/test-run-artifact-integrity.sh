@@ -25,6 +25,7 @@ SCHEMA = (ROOT / "skills/release-loop/references/progress-schema.md").read_text(
 ARCHIVE = (ROOT / "skills/release-loop/references/resume-and-archive.md").read_text(encoding="utf-8")
 HOOKS = (ROOT / "skills/release-loop/references/transition-hooks.md").read_text(encoding="utf-8")
 CLI = ROOT / "skills/release-loop/scripts/run-artifact-integrity.py"
+IMPLEMENTING_CLI = ROOT / "skills/implementing/scripts/phase-artifact-integrity.py"
 PHASE_CONSUMERS = {
     name: (ROOT / f"skills/{name}/SKILL.md").read_text(encoding="utf-8")
     for name in ("planning", "implementing", "reviewing", "shipping", "retrospective")
@@ -80,8 +81,19 @@ CASES = (
     "all_consumers_one_root",
     "stateless_no_evidence",
     "legacy_resume_guarded",
+    "legacy_tracked_self_ledger_only",
     "tracked_legacy_preserved",
     "tracked_selected_target",
+    "index_only_sibling",
+    "symlink_sibling_parent",
+    "dangling_sibling_parent",
+    "foreign_same_byte",
+    "missing_progress_publish",
+    "ambiguous_progress_publish",
+    "mismatched_progress_publish",
+    "publish_target_escape",
+    "invalid_publish_source",
+    "publish_cancellation",
     "stateful_scoped_lifecycle",
 )
 
@@ -89,8 +101,19 @@ CONSUMER_CASES = (
     "all_consumers_one_root",
     "stateless_no_evidence",
     "legacy_resume_guarded",
+    "legacy_tracked_self_ledger_only",
     "tracked_legacy_preserved",
     "tracked_selected_target",
+    "index_only_sibling",
+    "symlink_sibling_parent",
+    "dangling_sibling_parent",
+    "foreign_same_byte",
+    "missing_progress_publish",
+    "ambiguous_progress_publish",
+    "mismatched_progress_publish",
+    "publish_target_escape",
+    "invalid_publish_source",
+    "publish_cancellation",
     "stateful_scoped_lifecycle",
 )
 
@@ -100,6 +123,8 @@ INVOCATIONS = (
     ("skill-discover", SKILL, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" discover --repo . --progress-path <repo-relative-progress-path>'),
     ("archive", ARCHIVE, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" archive --repo . --progress-path <repo-relative-progress-path> --destination <repo-relative-archive-path>'),
     ("handoff", HOOKS, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" handoff --repo <source-worktree> --base-repo <base-checkout> --progress-path <repo-relative-progress-path>'),
+    ("phase-packet", SKILL, 'progress_path: <repo-relative-progress-path>'),
+    ("phase-publisher", SKILL, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" publish --repo . --progress-path <repo-relative-progress-path> --source <repo-relative-temporary-path> --target <repo-relative-final-path>'),
 )
 
 
@@ -365,18 +390,28 @@ def require_phase_consumer_contract() -> None:
         raise AssertionError("fixed-root consumer contract: " + " | ".join(missing))
 
 
-def publish_phase_artifact(repo: Path, progress_path: Path, relative: str, content: bytes) -> Path:
+def publish_phase_artifact(
+    repo: Path,
+    progress_path: Path,
+    relative: str,
+    content: bytes,
+    failure: str | None = None,
+) -> Path:
     root = progress_path.parent
-    target = root / relative
-    target_relative = target.relative_to(repo).as_posix()
-    tracked = set(git(repo, "ls-files", "--", target_relative).splitlines())
-    if target.exists() and target_relative not in tracked and target.is_file() and target.read_bytes() == content:
-        return target
-    if target.exists() or target_relative in tracked:
-        raise Blocked(f"artifact target collision: {target_relative}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content)
-    return target
+    source = root / ".tmp" / (relative.replace("/", "-") + ".tmp")
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(content)
+    payload = run_cli(
+        "publish",
+        "--repo", str(repo),
+        "--progress-path", progress_path.relative_to(repo).as_posix(),
+        "--source", source.relative_to(repo).as_posix(),
+        "--target", (root / relative).relative_to(repo).as_posix(),
+        failure=failure,
+    )
+    assert set(payload) == {"progress_path", "sha256", "state", "target"}, payload
+    assert payload["state"] in {"published", "reused"}, payload
+    return repo / str(payload["target"])
 
 
 def run_case(name: str) -> None:
@@ -810,7 +845,11 @@ def run_case(name: str) -> None:
             baseline = {"SKILL": SKILL, "SCHEMA": SCHEMA, "ARCHIVE": ARCHIVE, "HOOKS": HOOKS}
             for name_label, original, invocation in INVOCATIONS:
                 key = "SKILL" if original == SKILL else "ARCHIVE" if original == ARCHIVE else "HOOKS"
-                for mutation in ("", invocation.replace("run-artifact-integrity.py", "changed-run-artifact.py")):
+                mutations = [""]
+                changed = invocation.replace("run-artifact-integrity.py", "changed-run-artifact.py")
+                if changed != invocation:
+                    mutations.append(changed)
+                for mutation in mutations:
                     texts = dict(baseline)
                     texts[key] = texts[key].replace(invocation, mutation, 1)
                     assert texts[key] != baseline[key], f"structural mutation target absent: {name_label}"
@@ -900,7 +939,7 @@ def run_case(name: str) -> None:
                 lambda: publish_phase_artifact(repo, path, "reports/U1-report.md", b"different\n"),
                 sent,
                 before,
-                "artifact target collision",
+                "artifact ownership",
             )
         elif name == "tracked_legacy_preserved":
             require_phase_consumer_contract()
@@ -919,6 +958,24 @@ def run_case(name: str) -> None:
             assert git(repo, "write-tree") == index
             assert legacy.read_bytes() == blob
             assert git(repo, "status", "--porcelain", "--", str(legacy.relative_to(repo))) == status
+        elif name == "legacy_tracked_self_ledger_only":
+            path = repo / ".release-loop/progress.md"
+            path.parent.mkdir()
+            path.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+            git(repo, "add", "-f", str(path.relative_to(repo)))
+            git(repo, "commit", "-qm", "tracked legacy ledger")
+            path.write_text(path.read_text(encoding="utf-8") + "- allowed self update\n", encoding="utf-8")
+            assert "allowed self update" in path.read_text(encoding="utf-8")
+            sibling = path.parent / "reports/U1-report.md"
+            sibling.parent.mkdir()
+            sibling.write_bytes(b"tracked sibling\n")
+            git(repo, "add", "-f", str(sibling.relative_to(repo)))
+            assert_blocked_preserves(
+                lambda: publish_phase_artifact(repo, path, "reports/U1-report.md", b"new\n"),
+                sent,
+                before,
+                "artifact target collision",
+            )
         elif name == "tracked_selected_target":
             require_phase_consumer_contract()
             path = initialize(repo, "alpha")
@@ -939,6 +996,161 @@ def run_case(name: str) -> None:
             assert git(repo, "rev-parse", "HEAD") == head
             assert git(repo, "write-tree") == index
             assert target.read_bytes() == blob
+            temporary = path.parent / ".tmp/reports-U1-report.md.tmp"
+            assert temporary.read_bytes() == b"overwrite\n"
+            temporary.unlink()
+            assert not temporary.exists()
+        elif name == "index_only_sibling":
+            path = initialize(repo, "alpha")
+            target = path.parent / "reports/U1-report.md"
+            target.parent.mkdir()
+            target.write_bytes(b"index only\n")
+            git(repo, "add", "-f", str(target.relative_to(repo)))
+            target.unlink()
+            assert_blocked_preserves(
+                lambda: publish_phase_artifact(repo, path, "reports/U1-report.md", b"new\n"),
+                sent,
+                before,
+                "artifact target collision",
+            )
+            assert not target.exists()
+        elif name in {"symlink_sibling_parent", "dangling_sibling_parent"}:
+            path = initialize(repo, "alpha")
+            parent = path.parent / "reports"
+            if name == "symlink_sibling_parent":
+                outside = tmp / "outside-reports"
+                outside.mkdir()
+                parent.symlink_to(outside, target_is_directory=True)
+            else:
+                parent.symlink_to(tmp / "missing-reports", target_is_directory=True)
+            assert_blocked_preserves(
+                lambda: publish_phase_artifact(repo, path, "reports/U1-report.md", b"new\n"),
+                sent,
+                before,
+                "path boundary",
+            )
+        elif name == "foreign_same_byte":
+            path = initialize(repo, "alpha")
+            target = path.parent / "reports/U1-report.md"
+            target.parent.mkdir()
+            target.write_bytes(b"same\n")
+            assert_blocked_preserves(
+                lambda: publish_phase_artifact(repo, path, "reports/U1-report.md", b"same\n"),
+                sent,
+                before,
+                "artifact ownership",
+            )
+        elif name == "missing_progress_publish":
+            missing = repo / ".release-loop/runs/alpha/progress.md"
+            missing.parent.mkdir(parents=True)
+            assert_blocked_preserves(
+                lambda: publish_phase_artifact(repo, missing, "reports/U1-report.md", b"new\n"),
+                sent,
+                before,
+                "invalid progress",
+            )
+        elif name == "ambiguous_progress_publish":
+            first = initialize(repo, "alpha")
+            initialize(repo, "beta")
+            assert_blocked_preserves(
+                lambda: run_cli("publish", "--repo", str(repo), "--source", str(first), "--target", "reports/U1.md"),
+                sent,
+                before,
+                "progress-path",
+            )
+        elif name == "mismatched_progress_publish":
+            path = initialize(repo, "alpha")
+            path.write_text(path.read_text(encoding="utf-8").replace("artifact_root: .release-loop/runs/alpha", "artifact_root: .release-loop/runs/beta"), encoding="utf-8")
+            assert_blocked_preserves(
+                lambda: publish_phase_artifact(repo, path, "reports/U1-report.md", b"new\n"),
+                sent,
+                before,
+                "artifact_root",
+            )
+        elif name == "publish_cancellation":
+            path = initialize(repo, "alpha")
+            target = path.parent / "reports/U1-report.md"
+            assert_blocked_preserves(
+                lambda: publish_phase_artifact(
+                    repo,
+                    path,
+                    "reports/U1-report.md",
+                    b"cancelled\n",
+                    failure="publish-before-final",
+                ),
+                sent,
+                before,
+                "injected publish interruption",
+            )
+            temporary = path.parent / ".tmp/reports-U1-report.md.tmp"
+            assert temporary.read_bytes() == b"cancelled\n"
+            assert not target.exists()
+            assert not (path.parent / ".phase-artifact-ownership.json").exists()
+            temporary.unlink()
+            assert not temporary.exists()
+        elif name == "publish_target_escape":
+            path = initialize(repo, "alpha")
+            for target in (str(sent), ".release-loop/runs/alpha/../escaped.md"):
+                source = path.parent / ".tmp/escape.tmp"
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_bytes(b"escape\n")
+                assert_blocked_preserves(
+                    lambda target=target, source=source: run_cli(
+                        "publish",
+                        "--repo", str(repo),
+                        "--progress-path", path.relative_to(repo).as_posix(),
+                        "--source", source.relative_to(repo).as_posix(),
+                        "--target", target,
+                    ),
+                    sent,
+                    before,
+                    "path boundary",
+                )
+        elif name == "invalid_publish_source":
+            path = initialize(repo, "alpha")
+            root = path.parent
+            outside_tmp = root / "source.md"
+            outside_tmp.write_bytes(b"source\n")
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "publish", "--repo", str(repo),
+                    "--progress-path", path.relative_to(repo).as_posix(),
+                    "--source", outside_tmp.relative_to(repo).as_posix(),
+                    "--target", (root / "reports/U1.md").relative_to(repo).as_posix(),
+                ),
+                sent,
+                before,
+                "artifact source",
+            )
+            tracked_source = root / ".tmp/tracked.tmp"
+            tracked_source.parent.mkdir()
+            tracked_source.write_bytes(b"tracked\n")
+            git(repo, "add", "-f", str(tracked_source.relative_to(repo)))
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "publish", "--repo", str(repo),
+                    "--progress-path", path.relative_to(repo).as_posix(),
+                    "--source", tracked_source.relative_to(repo).as_posix(),
+                    "--target", (root / "reports/U1.md").relative_to(repo).as_posix(),
+                ),
+                sent,
+                before,
+                "artifact source",
+            )
+            final_in_tmp = root / ".tmp/final.md"
+            source = root / ".tmp/source.tmp"
+            source.write_bytes(b"final\n")
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "publish", "--repo", str(repo),
+                    "--progress-path", path.relative_to(repo).as_posix(),
+                    "--source", source.relative_to(repo).as_posix(),
+                    "--target", final_in_tmp.relative_to(repo).as_posix(),
+                ),
+                sent,
+                before,
+                "artifact target",
+            )
         elif name == "stateful_scoped_lifecycle":
             require_phase_consumer_contract()
             path = initialize(repo, "alpha")

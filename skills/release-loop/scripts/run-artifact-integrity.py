@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -17,7 +18,8 @@ FEATURE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 PHASES = frozenset(("design", "plan", "implement", "review", "ship", "retro", "done", "blocked"))
 PHASE_STATUSES = frozenset(("in-progress", "waiting-user", "blocked", "complete"))
 TEST_FAILURE_ENV = "RUN_ARTIFACT_INTEGRITY_TEST_FAIL"
-TEST_FAILURES = frozenset(("archive-after-first", "handoff-after-marker"))
+TEST_FAILURES = frozenset(("archive-after-first", "handoff-after-marker", "publish-before-final"))
+OWNERSHIP_JOURNAL = ".phase-artifact-ownership.json"
 
 
 class Blocked(RuntimeError):
@@ -136,6 +138,85 @@ def git_tracked(repo: Path, relative: str) -> list[str]:
     if result.returncode != 0:
         reject("artifact scope collision", "git index unavailable")
     return [line for line in result.stdout.splitlines() if line]
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_ownership_journal(repo: Path, artifact_root: str) -> tuple[Path, dict[str, str]]:
+    journal = guard(repo, f"{artifact_root}/{OWNERSHIP_JOURNAL}", artifact_root)
+    relative = journal.relative_to(repo).as_posix()
+    if git_tracked(repo, relative):
+        reject("artifact ownership", f"tracked journal {relative}")
+    if not journal.exists():
+        return journal, {}
+    if not journal.is_file():
+        reject("artifact ownership", relative)
+    try:
+        payload = json.loads(journal.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        reject("artifact ownership", f"invalid journal {relative}")
+    if not isinstance(payload, dict) or any(
+        not isinstance(key, str)
+        or not isinstance(value, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", value)
+        for key, value in payload.items()
+    ):
+        reject("artifact ownership", f"invalid journal {relative}")
+    return journal, payload
+
+
+def write_ownership_journal(journal: Path, payload: dict[str, str]) -> None:
+    temporary = journal.with_name(journal.name + ".tmp")
+    if temporary.exists() or temporary.is_symlink():
+        reject("artifact ownership", f"temporary journal collision {temporary}")
+    temporary.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+    os.replace(temporary, journal)
+
+
+def publish(
+    repo: Path,
+    progress_path: str,
+    source_relative: str,
+    target_relative: str,
+) -> tuple[Path, str, str]:
+    repo = repo.resolve(strict=True)
+    _, values, _ = validate_progress(repo, progress_path)
+    artifact_root = values["artifact_root"]
+    source = guard(repo, source_relative, artifact_root)
+    target = guard(repo, target_relative, artifact_root)
+    temporary_root = guard(repo, f"{artifact_root}/.tmp", artifact_root)
+    if not is_within(source, temporary_root) or source == temporary_root:
+        reject("artifact source", f"outside transition temp root {source_relative}")
+    if is_within(target, temporary_root):
+        reject("artifact target", f"inside transition temp root {target_relative}")
+    if source == target:
+        reject("path boundary", "source and target must differ")
+    if not source.is_file() or source.is_symlink():
+        reject("artifact source", source_relative)
+    if git_tracked(repo, source_relative):
+        reject("artifact source", f"tracked source {source_relative}")
+    if git_tracked(repo, target_relative):
+        reject("artifact target collision", target_relative)
+    digest = file_sha256(source)
+    journal, ownership = read_ownership_journal(repo, artifact_root)
+    target_key = target.relative_to(repo / artifact_root).as_posix()
+    recorded = ownership.get(target_key)
+    if target.exists() or target.is_symlink():
+        if target.is_file() and not target.is_symlink() and recorded == digest and file_sha256(target) == digest:
+            source.unlink()
+            return target, digest, "reused"
+        reject("artifact ownership", target_relative)
+    if recorded is not None:
+        reject("artifact ownership", f"missing owned final {target_relative}")
+    if test_failure("publish-before-final"):
+        reject("injected publish interruption", target_relative)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(source, target)
+    ownership[target_key] = digest
+    write_ownership_journal(journal, ownership)
+    return target, digest, "published"
 
 
 def filesystem_entries(repo: Path, scope: Path) -> list[str]:
@@ -418,6 +499,12 @@ def parser() -> Parser:
     handoff_parser.add_argument("--base-repo", required=True)
     handoff_parser.add_argument("--progress-path", required=True)
     handoff_parser.add_argument("--marker-path")
+
+    publish_parser = subparsers.add_parser("publish")
+    publish_parser.add_argument("--repo", required=True)
+    publish_parser.add_argument("--progress-path", required=True)
+    publish_parser.add_argument("--source", required=True)
+    publish_parser.add_argument("--target", required=True)
     return root
 
 
@@ -461,6 +548,19 @@ def execute(arguments: argparse.Namespace) -> dict[str, object]:
             "marker_path": marker.relative_to(base_repo).as_posix(),
             "progress_path": progress.relative_to(base_repo).as_posix(),
             "state": "complete",
+        }
+    if arguments.command == "publish":
+        target, digest, state = publish(
+            repo,
+            arguments.progress_path,
+            arguments.source,
+            arguments.target,
+        )
+        return {
+            "progress_path": arguments.progress_path,
+            "sha256": digest,
+            "state": state,
+            "target": target.relative_to(repo).as_posix(),
         }
     reject("invalid arguments", f"unknown command {arguments.command}")
 

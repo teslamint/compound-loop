@@ -37,12 +37,13 @@ copy_consumers() {
 copy_phase_consumers() {
   local d
   d="$(mktemp -d)" || return 1
-  mkdir -p "$d/skills/planning/schemas"
+  mkdir -p "$d/skills/planning/schemas" "$d/skills/implementing/scripts"
   for consumer in planning implementing reviewing shipping retrospective; do
     mkdir -p "$d/skills/$consumer"
     cp "$ROOT/skills/$consumer/SKILL.md" "$d/skills/$consumer/SKILL.md"
   done
   cp "$ROOT/skills/planning/schemas/plan-schema.md" "$d/skills/planning/schemas/plan-schema.md"
+  cp "$ROOT/skills/implementing/scripts/phase-artifact-integrity.py" "$d/skills/implementing/scripts/phase-artifact-integrity.py"
   printf '%s\n' "$d"
 }
 
@@ -2625,11 +2626,16 @@ fixture="$(copy_phase_consumers)"
 consumer_repo="$(mktemp -d)"
 if python3 - "$fixture" "$consumer_repo" <<'PY'
 from pathlib import Path
+import json
 import re
+import subprocess
 import sys
 
 plugin_root = Path(sys.argv[1])
 repo = Path(sys.argv[2])
+subprocess.run(("git", "init", "-q"), cwd=repo, check=True)
+for key, value in (("user.name", "Fixture"), ("user.email", "fixture@example.invalid"), ("core.autocrlf", "false"), ("core.safecrlf", "false"), ("commit.gpgsign", "false")):
+    subprocess.run(("git", "config", key, value), cwd=repo, check=True)
 shared = ("exact repo-relative `progress_path`", "`artifact_root = dirname(progress_path)`")
 for name in ("planning", "implementing", "reviewing", "shipping", "retrospective"):
     text = (plugin_root / f"skills/{name}/SKILL.md").read_text(encoding="utf-8")
@@ -2652,13 +2658,52 @@ for fragment in ("<artifact_root>/evidence/U<N>/", "executable probe", "exact pa
 
 plan_filename_stem = "2026-08-23-001-fix-portable-plan"
 assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", plan_filename_stem)
-progress_path = repo / ".release-loop/runs" / plan_filename_stem / "progress.md"
-progress_path.parent.mkdir(parents=True)
-progress_path.write_text("artifact_root: " + progress_path.parent.relative_to(repo).as_posix() + "\n", encoding="utf-8")
+plan = repo / (plan_filename_stem + ".md")
+plan.write_text("---\nschema: plan/v1\ntitle: Portable\ntype: fix\nstatus: approved\ndate: 2026-08-24\nexecution: code\n---\n\n# Portable\n", encoding="utf-8")
+cli = plugin_root / "skills/implementing/scripts/phase-artifact-integrity.py"
+created = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert created.returncode == 0, created.stderr
+payload = json.loads(created.stdout)
+assert payload["state"] == "new"
+progress_path = repo / payload["progress_path"]
+real_plans = repo / "real-plans"
+real_plans.mkdir()
+linked_plan = real_plans / "linked-approved-plan.md"
+linked_plan.write_text(plan.read_text(encoding="utf-8"), encoding="utf-8")
+(repo / "linked-plans").symlink_to(real_plans, target_is_directory=True)
+linked = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(repo / "linked-plans/linked-approved-plan.md")), text=True, capture_output=True)
+assert linked.returncode != 0 and "symlink component" in linked.stderr, linked.stderr
+progress_text = progress_path.read_text(encoding="utf-8")
+branch = subprocess.run(("git", "symbolic-ref", "--short", "HEAD"), cwd=repo, check=True, text=True, capture_output=True).stdout.strip()
+for fragment in (
+    "started: 20",
+    "updated: 20",
+    "branch: " + branch,
+    "base_branch: main",
+    "spec: null",
+    "plan: " + plan.name,
+    "retro: null",
+    "design_approved: null",
+    "ship_approved: null",
+    "current_unit: null",
+    "ci_attempts: 0",
+    "review_rounds: 0",
+    "feedback_rounds: 0",
+    "comments_fixed: 0",
+    "comments_deferred: 0",
+    "pr: null",
+    "merged: false",
+    "blocked_reason: null",
+):
+    assert fragment in progress_text, fragment
+assert re.search(r"started: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", progress_text)
+assert re.search(r"updated: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", progress_text)
 for relative in ("briefs/U1-brief.md", "reports/U1-report.md", "reviews/U1-diff.txt"):
-    target = progress_path.parent / relative
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(relative + "\n", encoding="utf-8")
+    source = progress_path.parent / ".tmp" / (relative.replace("/", "-") + ".tmp")
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(relative + "\n", encoding="utf-8")
+    published = subprocess.run((sys.executable, str(cli), "publish", "--repo", str(repo), "--progress-path", payload["progress_path"], "--source", source.relative_to(repo).as_posix(), "--target", (progress_path.parent / relative).relative_to(repo).as_posix()), check=True, text=True, capture_output=True)
+    assert json.loads(published.stdout)["state"] == "published"
 assert not (plugin_root / ".release-loop").exists()
 assert not (repo / ".release-loop/progress.md").exists()
 PY
