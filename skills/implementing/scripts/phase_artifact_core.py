@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 SCHEMA_VERSION = "release-loop/v1"
 JOURNAL_SCHEMA = "phase-artifact-ownership/v1"
 JOURNAL_NAME = ".phase-artifact-ownership.json"
+CONTROL_NAMES = frozenset(("progress.md", JOURNAL_NAME, JOURNAL_NAME + ".tmp"))
 FAILURE_ENV = "RUN_ARTIFACT_INTEGRITY_TEST_FAIL"
 FAILURES = frozenset((
     "publish-before-prepare",
@@ -124,6 +125,29 @@ def empty_journal() -> dict[str, object]:
     return {"schema": JOURNAL_SCHEMA, "owned": {}, "pending": None}
 
 
+def canonical_artifact_key(value: str, role: str) -> str:
+    path = repo_relative(value)
+    canonical = path.as_posix()
+    if canonical != value:
+        reject("artifact ownership", f"non-canonical {role} path {value}")
+    if role == "source":
+        if len(path.parts) < 2 or path.parts[0] != ".tmp":
+            reject("artifact ownership", f"source outside .tmp {value}")
+    else:
+        if path.parts[0] == ".tmp" or (len(path.parts) == 1 and path.name in CONTROL_NAMES):
+            reject("artifact ownership", f"reserved target {value}")
+    return canonical
+
+
+def validate_pending_row(pending: dict[str, str], owned: dict[str, str]) -> None:
+    source = canonical_artifact_key(pending["source"], "source")
+    target = canonical_artifact_key(pending["target"], "target")
+    if source == target:
+        reject("artifact ownership", "pending source equals target")
+    if source in owned:
+        reject("artifact ownership", "pending source is already owned")
+
+
 def journal_paths(repo: Path, root: str) -> tuple[Path, Path]:
     journal = guard(repo, f"{root}/{JOURNAL_NAME}", root)
     temporary = guard(repo, f"{root}/{JOURNAL_NAME}.tmp", root)
@@ -152,13 +176,42 @@ def read_journal(repo: Path, root: str) -> tuple[Path, Path, dict[str, object]]:
         reject("artifact ownership", "invalid journal shape")
     if any(not isinstance(k, str) or not isinstance(v, str) or not SHA_PATTERN.fullmatch(v) for k, v in payload["owned"].items()):
         reject("artifact ownership", "invalid owned row")
+    for key in payload["owned"]:
+        canonical_artifact_key(key, "target")
     pending = payload["pending"]
     if pending is not None:
         if not isinstance(pending, dict) or set(pending) != {"source", "target", "sha256"}:
             reject("artifact ownership", "invalid pending row")
         if any(not isinstance(pending[key], str) for key in pending) or not SHA_PATTERN.fullmatch(pending["sha256"]):
             reject("artifact ownership", "invalid pending row")
+        validate_pending_row(pending, payload["owned"])
     return journal, temporary, payload
+
+
+def validate_owned_finals(repo: Path, root: str, state: dict[str, object]) -> None:
+    for key, digest in state["owned"].items():
+        target = guard(repo, f"{root}/{key}", root)
+        relative = target.relative_to(repo).as_posix()
+        if git_tracked(repo, relative) or target.is_symlink() or not target.is_file() or sha256(target) != digest:
+            reject("artifact ownership", f"owned final invalid {key}")
+
+
+def validate_pending_files(repo: Path, root: str, state: dict[str, object]) -> None:
+    pending = state["pending"]
+    if pending is None:
+        return
+    source = guard(repo, f"{root}/{pending['source']}", root)
+    target = guard(repo, f"{root}/{pending['target']}", root)
+    source_relative = source.relative_to(repo).as_posix()
+    source_exists = source.is_file() and not source.is_symlink()
+    target_exists = target.is_file() and not target.is_symlink()
+    if source_exists:
+        if git_tracked(repo, source_relative) or sha256(source) != pending["sha256"]:
+            reject("artifact ownership", "pending source invalid")
+    if target_exists and sha256(target) != pending["sha256"]:
+        reject("artifact ownership", "pending final invalid")
+    if source_exists == target_exists:
+        reject("artifact ownership", "inconsistent pending transaction")
 
 
 def write_journal(journal: Path, temporary: Path, payload: dict[str, object]) -> None:
@@ -179,6 +232,10 @@ def publish(repo: Path, progress_relative: str, source_relative: str, target_rel
     repo = repo.resolve(strict=True)
     _, values = validate_progress(repo, progress_relative)
     root = values["artifact_root"]
+    source_key = canonical_artifact_key(PurePosixPath(source_relative).relative_to(PurePosixPath(root)).as_posix() if PurePosixPath(root) in PurePosixPath(source_relative).parents else source_relative, "source")
+    target_key = canonical_artifact_key(PurePosixPath(target_relative).relative_to(PurePosixPath(root)).as_posix() if PurePosixPath(root) in PurePosixPath(target_relative).parents else target_relative, "target")
+    if source_key == target_key:
+        reject("artifact ownership", "source equals target")
     source = guard(repo, source_relative, root)
     target = guard(repo, target_relative, root)
     temp_root = guard(repo, f"{root}/.tmp", root)
@@ -189,8 +246,10 @@ def publish(repo: Path, progress_relative: str, source_relative: str, target_rel
     if git_tracked(repo, target_relative):
         reject("artifact target collision", target_relative)
     journal, journal_temp, state = read_journal(repo, root)
-    source_key = source.relative_to(repo / root).as_posix()
-    target_key = target.relative_to(repo / root).as_posix()
+    validate_owned_finals(repo, root, state)
+    validate_pending_files(repo, root, state)
+    if source_key in state["owned"]:
+        reject("artifact source", "source is already owned")
     pending = state["pending"]
     failure = selected_failure()
 
@@ -256,7 +315,8 @@ def compensate(repo: Path, progress_relative: str) -> str:
         reject("artifact ownership", "no pending transaction")
     source = guard(repo, f"{root}/{pending['source']}", root)
     target = guard(repo, f"{root}/{pending['target']}", root)
-    if not source.is_file() or target.exists() or sha256(source) != pending["sha256"]:
+    source_relative = source.relative_to(repo).as_posix()
+    if pending["source"] in state["owned"] or git_tracked(repo, source_relative) or source.is_symlink() or not source.is_file() or target.exists() or target.is_symlink() or sha256(source) != pending["sha256"]:
         reject("artifact ownership", "pending transaction is not compensable")
     source.unlink()
     write_journal(journal, journal_temp, {"schema": JOURNAL_SCHEMA, "owned": dict(state["owned"]), "pending": None})

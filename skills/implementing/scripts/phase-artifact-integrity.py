@@ -15,6 +15,8 @@ from phase_artifact_core import compensate as compensate_phase_artifact
 from phase_artifact_core import publish as publish_phase_artifact
 from phase_artifact_core import read_journal as read_core_journal
 from phase_artifact_core import validate_progress as validate_core_progress
+from phase_artifact_core import validate_owned_finals
+from phase_artifact_core import validate_pending_files
 
 FEATURE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -147,6 +149,8 @@ def audit_resume(repo, progress_relative, plan_relative):
     if tracked:
         reject("artifact scope collision", ", ".join(sorted(tracked)))
     journal_path, _, journal = read_core_journal(repo, root)
+    validate_owned_finals(repo, root, journal)
+    validate_pending_files(repo, root, journal)
     allowed = {progress.relative_to(repo).as_posix()}
     if journal_path.exists():
         allowed.add(journal_path.relative_to(repo).as_posix())

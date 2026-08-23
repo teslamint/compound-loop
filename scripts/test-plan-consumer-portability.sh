@@ -2705,6 +2705,25 @@ for relative in ("briefs/U1-brief.md", "reports/U1-report.md", "reviews/U1-diff.
     source.write_text(relative + "\n", encoding="utf-8")
     published = subprocess.run((sys.executable, str(cli), "publish", "--repo", str(repo), "--progress-path", payload["progress_path"], "--source", source.relative_to(repo).as_posix(), "--target", (progress_path.parent / relative).relative_to(repo).as_posix()), check=True, text=True, capture_output=True)
     assert json.loads(published.stdout)["state"] == "published"
+owned_report = progress_path.parent / "reports/U1-report.md"
+owned_bytes = owned_report.read_bytes()
+owned_report.unlink()
+missing_owned = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert missing_owned.returncode != 0 and "owned final" in missing_owned.stderr, missing_owned.stderr
+owned_report.write_bytes(owned_bytes)
+owned_report.write_bytes(b"modified\n")
+modified_owned = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert modified_owned.returncode != 0 and "owned final" in modified_owned.stderr, modified_owned.stderr
+owned_report.write_bytes(owned_bytes)
+outside_owned = repo.parent / (repo.name + "-owned-sentinel")
+outside_owned.write_bytes(b"OWNED_SENTINEL\n")
+owned_report.unlink()
+owned_report.symlink_to(outside_owned)
+symlink_owned = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert symlink_owned.returncode != 0, symlink_owned.stderr
+assert outside_owned.read_bytes() == b"OWNED_SENTINEL\n"
+owned_report.unlink()
+owned_report.write_bytes(owned_bytes)
 other = repo / "other" / plan.name
 other.parent.mkdir()
 other.write_text(plan.read_text(encoding="utf-8"), encoding="utf-8")

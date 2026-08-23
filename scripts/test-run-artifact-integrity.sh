@@ -9,6 +9,7 @@ case_name="${1:-scope}"
 python3 - "$case_name" "$ROOT" <<'PY'
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -98,6 +99,7 @@ CASES = (
     "publisher_core_parity",
     "publisher_atomic_recovery",
     "publisher_journal_collisions",
+    "publisher_semantics_attacks",
     "publish_cancellation",
     "stateful_scoped_lifecycle",
 )
@@ -121,6 +123,7 @@ CONSUMER_CASES = (
     "publisher_core_parity",
     "publisher_atomic_recovery",
     "publisher_journal_collisions",
+    "publisher_semantics_attacks",
     "publish_cancellation",
     "stateful_scoped_lifecycle",
 )
@@ -1150,7 +1153,7 @@ def run_case(name: str) -> None:
                 ),
                 sent,
                 before,
-                "artifact source",
+                "artifact",
             )
             tracked_source = root / ".tmp/tracked.tmp"
             tracked_source.parent.mkdir()
@@ -1165,7 +1168,7 @@ def run_case(name: str) -> None:
                 ),
                 sent,
                 before,
-                "artifact source",
+                "artifact",
             )
             final_in_tmp = root / ".tmp/final.md"
             source = root / ".tmp/source.tmp"
@@ -1179,7 +1182,7 @@ def run_case(name: str) -> None:
                 ),
                 sent,
                 before,
-                "artifact target",
+                "artifact",
             )
         elif name == "publisher_core_parity":
             assert RELEASE_CORE.read_bytes() == IMPLEMENTING_CORE.read_bytes()
@@ -1256,6 +1259,74 @@ def run_case(name: str) -> None:
                     before,
                     "artifact ownership",
                 )
+        elif name == "publisher_semantics_attacks":
+            control_targets = (
+                "progress.md",
+                ".phase-artifact-ownership.json",
+                ".phase-artifact-ownership.json.tmp",
+                ".tmp",
+                ".tmp/final.md",
+            )
+            for endpoint, cli in (("release", CLI), ("implementing", IMPLEMENTING_CLI)):
+                for index, target_key in enumerate(control_targets):
+                    candidate = new_repo(tmp, f"{endpoint}-control-{index}")
+                    candidate_progress = initialize(candidate, "alpha")
+                    progress_before = candidate_progress.read_bytes()
+                    target = candidate_progress.parent / target_key
+                    source = candidate_progress.parent / f".tmp/control-{index}.tmp"
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_bytes(b"control\n")
+                    assert_blocked_preserves(
+                        lambda candidate=candidate, candidate_progress=candidate_progress, source=source, target=target, cli=cli: run_cli(
+                            "publish", "--repo", str(candidate),
+                            "--progress-path", candidate_progress.relative_to(candidate).as_posix(),
+                            "--source", source.relative_to(candidate).as_posix(),
+                            "--target", target.relative_to(candidate).as_posix(),
+                            cli=cli,
+                        ),
+                        sent,
+                        before,
+                        "",
+                    )
+                    assert candidate_progress.read_bytes() == progress_before
+
+                attacks = ("source-progress", "source-tracked", "source-owned", "target-temp", "traversal", "same-path")
+                for attack in attacks:
+                    candidate = new_repo(tmp, f"{endpoint}-{attack}")
+                    candidate_progress = initialize(candidate, "alpha")
+                    root = candidate_progress.parent
+                    source = root / ".tmp/source.tmp"
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_bytes(b"pending\n")
+                    source_key = ".tmp/source.tmp"
+                    target_key = "reports/U1.md"
+                    owned = {}
+                    if attack == "source-progress": source_key = "progress.md"
+                    elif attack == "source-tracked": git(candidate, "add", "-f", source.relative_to(candidate).as_posix())
+                    elif attack == "source-owned": owned[source_key] = "0" * 64
+                    elif attack == "target-temp": target_key = ".tmp/final.md"
+                    elif attack == "traversal": source_key = ".tmp/../progress.md"
+                    elif attack == "same-path": target_key = source_key
+                    journal = root / ".phase-artifact-ownership.json"
+                    journal.write_text(json.dumps({
+                        "schema": "phase-artifact-ownership/v1",
+                        "owned": owned,
+                        "pending": {"source": source_key, "target": target_key, "sha256": hashlib.sha256(b"pending\n").hexdigest()},
+                    }, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+                    progress_before = candidate_progress.read_bytes()
+                    assert_blocked_preserves(
+                        lambda candidate=candidate, candidate_progress=candidate_progress, source=source, root=root, cli=cli: run_cli(
+                            "publish", "--repo", str(candidate),
+                            "--progress-path", candidate_progress.relative_to(candidate).as_posix(),
+                            "--source", source.relative_to(candidate).as_posix(),
+                            "--target", (root / "reports/U1.md").relative_to(candidate).as_posix(),
+                            cli=cli,
+                        ),
+                        sent,
+                        before,
+                        "",
+                    )
+                    assert candidate_progress.read_bytes() == progress_before
         elif name == "stateful_scoped_lifecycle":
             require_phase_consumer_contract()
             path = initialize(repo, "alpha")
