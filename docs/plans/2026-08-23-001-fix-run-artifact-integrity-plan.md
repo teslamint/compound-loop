@@ -2,10 +2,11 @@
 schema: plan/v1
 title: Run Artifact Integrity
 type: fix
-status: draft
+status: approved
 date: 2026-08-23
 execution: code
 origin: docs/specs/2026-08-23-run-artifact-integrity-design.md
+body_seal: 813e7492e1b8ae4a39027c0eed4aba8b2f422b2f606a9f18caf6a5d53c08936a
 ---
 
 # Run Artifact Integrity Implementation Plan
