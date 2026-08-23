@@ -34,6 +34,18 @@ copy_consumers() {
   printf '%s\n' "$d"
 }
 
+copy_phase_consumers() {
+  local d
+  d="$(mktemp -d)" || return 1
+  mkdir -p "$d/skills/planning/schemas"
+  for consumer in planning implementing reviewing shipping retrospective; do
+    mkdir -p "$d/skills/$consumer"
+    cp "$ROOT/skills/$consumer/SKILL.md" "$d/skills/$consumer/SKILL.md"
+  done
+  cp "$ROOT/skills/planning/schemas/plan-schema.md" "$d/skills/planning/schemas/plan-schema.md"
+  printf '%s\n' "$d"
+}
+
 record_results() {
   local result_file="$1" state consumer name detail
   while IFS='|' read -r state consumer name detail; do
@@ -2606,6 +2618,56 @@ else
   fi
 fi
 rm -rf "$fixture"
+
+# --- Fixture D: exact progress paths remain portable outside the plugin root ---
+echo "Fixture D: exact progress-path phase consumers"
+fixture="$(copy_phase_consumers)"
+consumer_repo="$(mktemp -d)"
+if python3 - "$fixture" "$consumer_repo" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+plugin_root = Path(sys.argv[1])
+repo = Path(sys.argv[2])
+shared = ("exact repo-relative `progress_path`", "`artifact_root = dirname(progress_path)`")
+for name in ("planning", "implementing", "reviewing", "shipping", "retrospective"):
+    text = (plugin_root / f"skills/{name}/SKILL.md").read_text(encoding="utf-8")
+    for fragment in shared:
+        assert fragment in text, f"{name}: {fragment}"
+
+implementing = (plugin_root / "skills/implementing/SKILL.md").read_text(encoding="utf-8")
+for fragment in (
+    "validated approved-plan filename stem",
+    ".release-loop/runs/<plan_filename_stem>/progress.md",
+    "<artifact_root>/briefs/U<N>-brief.md",
+    "<artifact_root>/reports/U<N>-report.md",
+    "<artifact_root>/reviews/U<N>-diff.txt",
+):
+    assert fragment in implementing, fragment
+
+schema = (plugin_root / "skills/planning/schemas/plan-schema.md").read_text(encoding="utf-8")
+for fragment in ("<artifact_root>/evidence/U<N>/", "executable probe", "exact partial durable state", "compensation owner"):
+    assert fragment in schema, fragment
+
+plan_filename_stem = "2026-08-23-001-fix-portable-plan"
+assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", plan_filename_stem)
+progress_path = repo / ".release-loop/runs" / plan_filename_stem / "progress.md"
+progress_path.parent.mkdir(parents=True)
+progress_path.write_text("artifact_root: " + progress_path.parent.relative_to(repo).as_posix() + "\n", encoding="utf-8")
+for relative in ("briefs/U1-brief.md", "reports/U1-report.md", "reviews/U1-diff.txt"):
+    target = progress_path.parent / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(relative + "\n", encoding="utf-8")
+assert not (plugin_root / ".release-loop").exists()
+assert not (repo / ".release-loop/progress.md").exists()
+PY
+then
+  pass "phase consumers derive one portable artifact root from the exact progress path"
+else
+  fail "phase consumers derive one portable artifact root from the exact progress path"
+fi
+rm -rf "$fixture" "$consumer_repo"
 
 echo "Summary: $PASS_COUNT passed, $FAIL_COUNT failed"
 if [ "$FAIL_COUNT" -ne 0 ]; then

@@ -13,6 +13,10 @@ Standalone and callable from anywhere in the loop. Measures declared success cri
 - **Exit**: retro doc committed to git at `docs/retros/YYYY-MM-DD-<context>-retro.md`.
 - **Gate**: AUTO — no human approval required to write or commit a retro.
 
+## Run artifact scope
+
+When `release-loop` invokes retrospective, it supplies one exact repo-relative `progress_path`. Validate that record before using it and require `artifact_root = dirname(progress_path)` to match the ledger's `artifact_root`. A missing, ambiguous, mismatched, symlinked, or out-of-root path blocks before any read-dependent write. Derive every persisted sibling target from `artifact_root`; before its first write, reject any unowned filesystem or tracked target. A valid legacy ledger may update itself at the selected path, but no sibling target inherits that exemption. Standalone retrospective may proceed without a run ledger and creates no release-loop artifact.
+
 ## Phase 1: Scope & Mode Detection
 
 Classify the source before collecting anything:
@@ -42,7 +46,7 @@ Plan-consumer contract lives in [references/plan-consumer-contract.md](reference
 ### Origin and coverage selection
 
 `origin` is resolved as a repo-relative spec path, while the existing no-plan fallback applies when no plan exists.
-The covered-plan set is the progress ledger's `plan:` value plus every plan cited by Phase 2 data or the retrospective body.
+The covered-plan set is the selected exact `progress_path` ledger's `plan:` value plus every plan cited by Phase 2 data or the retrospective body.
 When neither the ledger nor Phase 2/body cites a plan, no plan is selected and no terminal flip occurs.
 When multiple qualifying plans are selected, apply the same applicability and transition rules to every plan.
 
@@ -155,4 +159,3 @@ End every invocation with the exact terminal signal line from `schemas/headless-
 `compound` is the only skill invoked from inside `retrospective`, and only per Phase 7's gate. Nothing invokes `retrospective` automatically — `release-loop`'s Retro phase and direct user invocation are the only callers.
 
 Out of Scope moved to `references/out-of-scope.md`.
-

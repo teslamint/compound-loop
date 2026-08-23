@@ -25,6 +25,11 @@ SCHEMA = (ROOT / "skills/release-loop/references/progress-schema.md").read_text(
 ARCHIVE = (ROOT / "skills/release-loop/references/resume-and-archive.md").read_text(encoding="utf-8")
 HOOKS = (ROOT / "skills/release-loop/references/transition-hooks.md").read_text(encoding="utf-8")
 CLI = ROOT / "skills/release-loop/scripts/run-artifact-integrity.py"
+PHASE_CONSUMERS = {
+    name: (ROOT / f"skills/{name}/SKILL.md").read_text(encoding="utf-8")
+    for name in ("planning", "implementing", "reviewing", "shipping", "retrospective")
+}
+PLAN_SCHEMA = (ROOT / "skills/planning/schemas/plan-schema.md").read_text(encoding="utf-8")
 
 CASES = (
     "new_scoped_run",
@@ -72,6 +77,20 @@ CASES = (
     "external_cwd_portability",
     "feature_worktree_owns_scope",
     "resume_skip_no_new_worktree",
+    "all_consumers_one_root",
+    "stateless_no_evidence",
+    "legacy_resume_guarded",
+    "tracked_legacy_preserved",
+    "tracked_selected_target",
+    "stateful_scoped_lifecycle",
+)
+
+CONSUMER_CASES = (
+    "all_consumers_one_root",
+    "stateless_no_evidence",
+    "legacy_resume_guarded",
+    "tracked_legacy_preserved",
+    "tracked_selected_target",
     "stateful_scoped_lifecycle",
 )
 
@@ -325,6 +344,39 @@ def assert_blocked_preserves(action, sentinel_path: Path, before: bytes, diagnos
     else:
         raise AssertionError("attack did not block")
     assert sentinel_path.read_bytes() == before
+
+
+def require_phase_consumer_contract() -> None:
+    shared = ("exact repo-relative `progress_path`", "`artifact_root = dirname(progress_path)`")
+    missing = [f"{name}: {fragment}" for name, text in PHASE_CONSUMERS.items() for fragment in shared if fragment not in text]
+    required = (
+        (PHASE_CONSUMERS["planning"], "<artifact_root>/evidence/U<N>/"),
+        (PHASE_CONSUMERS["implementing"], "<artifact_root>/briefs/U<N>-brief.md"),
+        (PHASE_CONSUMERS["implementing"], "<artifact_root>/reports/U<N>-report.md"),
+        (PHASE_CONSUMERS["implementing"], "<artifact_root>/reviews/U<N>-diff.txt"),
+        (PHASE_CONSUMERS["reviewing"], "<artifact_root>/evidence/U<N>/"),
+        (PLAN_SCHEMA, "<artifact_root>/evidence/U<N>/"),
+        (PLAN_SCHEMA, "executable probe"),
+        (PLAN_SCHEMA, "exact partial durable state"),
+        (PLAN_SCHEMA, "compensation owner"),
+    )
+    missing.extend(fragment for text, fragment in required if fragment not in text)
+    if missing:
+        raise AssertionError("fixed-root consumer contract: " + " | ".join(missing))
+
+
+def publish_phase_artifact(repo: Path, progress_path: Path, relative: str, content: bytes) -> Path:
+    root = progress_path.parent
+    target = root / relative
+    target_relative = target.relative_to(repo).as_posix()
+    tracked = set(git(repo, "ls-files", "--", target_relative).splitlines())
+    if target.exists() and target_relative not in tracked and target.is_file() and target.read_bytes() == content:
+        return target
+    if target.exists() or target_relative in tracked:
+        raise Blocked(f"artifact target collision: {target_relative}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    return target
 
 
 def run_case(name: str) -> None:
@@ -813,12 +865,90 @@ def run_case(name: str) -> None:
             assert prepare_scope(base, "alpha", str(path.relative_to(base))) == (path, "resume")
             after_worktrees = git(base, "worktree", "list", "--porcelain")
             assert after_worktrees == before_worktrees
-        elif name == "stateful_scoped_lifecycle":
+        elif name == "all_consumers_one_root":
+            require_phase_consumer_contract()
             path = initialize(repo, "alpha")
-            for child in ("briefs", "reports", "reviews", "evidence"):
-                directory = path.parent / child
-                directory.mkdir()
-                (directory / "owned.md").write_text(child + "\n", encoding="utf-8")
+            targets = (
+                "briefs/U1-brief.md",
+                "reports/U1-report.md",
+                "reviews/U1-diff.txt",
+                "evidence/U1/T6-success.md",
+            )
+            for relative in targets:
+                published = publish_phase_artifact(repo, path, relative, relative.encode("utf-8") + b"\n")
+                assert published.parent == path.parent / Path(relative).parent
+            assert not (repo / ".release-loop/briefs").exists()
+            assert not (repo / ".release-loop/reports").exists()
+            assert not (repo / ".release-loop/reviews").exists()
+            assert not (repo / ".release-loop/evidence").exists()
+        elif name == "stateless_no_evidence":
+            require_phase_consumer_contract()
+            path = initialize(repo, "alpha")
+            publish_phase_artifact(repo, path, "briefs/U1-brief.md", b"stateless\n")
+            assert not (path.parent / "evidence").exists()
+            assert not (repo / ".release-loop/evidence").exists()
+        elif name == "legacy_resume_guarded":
+            require_phase_consumer_contract()
+            path = repo / ".release-loop/progress.md"
+            path.parent.mkdir()
+            path.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+            path.write_text(path.read_text(encoding="utf-8") + "- legacy update\n", encoding="utf-8")
+            report = publish_phase_artifact(repo, path, "reports/U1-report.md", b"owned\n")
+            assert report == repo / ".release-loop/reports/U1-report.md"
+            assert publish_phase_artifact(repo, path, "reports/U1-report.md", b"owned\n") == report
+            assert_blocked_preserves(
+                lambda: publish_phase_artifact(repo, path, "reports/U1-report.md", b"different\n"),
+                sent,
+                before,
+                "artifact target collision",
+            )
+        elif name == "tracked_legacy_preserved":
+            require_phase_consumer_contract()
+            legacy = repo / ".release-loop/reports/U1-report.md"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_bytes(b"tracked legacy\n")
+            git(repo, "add", "-f", str(legacy.relative_to(repo)))
+            git(repo, "commit", "-qm", "tracked legacy")
+            head = git(repo, "rev-parse", "HEAD")
+            index = git(repo, "write-tree")
+            blob = legacy.read_bytes()
+            status = git(repo, "status", "--porcelain", "--", str(legacy.relative_to(repo)))
+            path = initialize(repo, "alpha")
+            publish_phase_artifact(repo, path, "reports/U1-report.md", b"scoped\n")
+            assert git(repo, "rev-parse", "HEAD") == head
+            assert git(repo, "write-tree") == index
+            assert legacy.read_bytes() == blob
+            assert git(repo, "status", "--porcelain", "--", str(legacy.relative_to(repo))) == status
+        elif name == "tracked_selected_target":
+            require_phase_consumer_contract()
+            path = initialize(repo, "alpha")
+            target = path.parent / "reports/U1-report.md"
+            target.parent.mkdir()
+            target.write_bytes(b"tracked selected\n")
+            git(repo, "add", "-f", str(target.relative_to(repo)))
+            git(repo, "commit", "-qm", "tracked selected")
+            head = git(repo, "rev-parse", "HEAD")
+            index = git(repo, "write-tree")
+            blob = target.read_bytes()
+            assert_blocked_preserves(
+                lambda: publish_phase_artifact(repo, path, "reports/U1-report.md", b"overwrite\n"),
+                sent,
+                before,
+                "artifact target collision",
+            )
+            assert git(repo, "rev-parse", "HEAD") == head
+            assert git(repo, "write-tree") == index
+            assert target.read_bytes() == blob
+        elif name == "stateful_scoped_lifecycle":
+            require_phase_consumer_contract()
+            path = initialize(repo, "alpha")
+            for relative in (
+                "briefs/U1-brief.md",
+                "reports/U1-report.md",
+                "reviews/U1-diff.txt",
+                "evidence/U1/T6-success.md",
+            ):
+                publish_phase_artifact(repo, path, relative, relative.encode("utf-8") + b"\n")
             base = new_repo(tmp, "base")
             result = handoff_scope(repo, base, str(path.relative_to(repo)))
             assert result["cleanup_permitted"] is True
@@ -830,12 +960,14 @@ def run_case(name: str) -> None:
             raise AssertionError(f"unknown case: {name}")
 
 
-if CASE == "scope":
+if CASE in {"scope", "all"}:
     selected = CASES
+elif CASE == "consumers":
+    selected = CONSUMER_CASES
 elif CASE in CASES:
     selected = (CASE,)
 else:
-    print("usage: bash scripts/test-run-artifact-integrity.sh <scope|case>", file=sys.stderr)
+    print("usage: bash scripts/test-run-artifact-integrity.sh <scope|all|consumers|case>", file=sys.stderr)
     raise SystemExit(2)
 
 failures = 0

@@ -13,6 +13,10 @@ Turns an approved spec into the plan that `implementing` and `reviewing` consume
 - **Exit**: an approved plan doc committed to `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md`, or a documented skip to `implementing` per step 1.
 - **Gate**: USER. Commit the plan as `status: draft` first. Flip to `status: approved` only after the user confirms the drafted plan, in a separate commit — never combine both in one commit. Downstream consumers (`implementing`, `reviewing`, `release-loop`'s pipeline gating) depend on finding this exact draft-then-approved record.
 
+## Run artifact scope
+
+When `release-loop` invokes planning, it supplies one exact repo-relative `progress_path`. Validate that record before using it and require `artifact_root = dirname(progress_path)` to match the ledger's `artifact_root`. A missing, ambiguous, mismatched, symlinked, or out-of-root path blocks before any write. Derive every sibling artifact target from `artifact_root`; standalone planning creates no run artifact and needs no release-loop sibling.
+
 ## 1. Entry check — is a plan doc warranted?
 
 Bias toward writing one: a thin plan for small work is mild ceremony, but skipping a warranted plan costs the implementer real time. Skip the plan doc only when **all** hold:
@@ -23,7 +27,7 @@ Bias toward writing one: a thin plan for small work is mild ceremony, but skippi
 
 Stress-test anything that "looks atomic": "Add caching" hides TTL/invalidation/key-shape decisions; "migrate A to B" hides semantic-difference decisions; "add rate limiting" hides algorithm/scope decisions — all three warrant a plan. Genuine skips: a typo fix, a mechanical rename, a dependency bump with no breaking change.
 
-When skipping, attest that all four conditions hold, citing the work's scope, then hand off directly to `implementing`. When invoked from `release-loop`, also write the skip to `.release-loop/progress.md`'s Log section with the conditions cited — `plan:` stays `null` (the Log line is the record; a non-path value would break resume's artifact-pointer verification).
+When skipping, attest that all four conditions hold, citing the work's scope, then hand off directly to `implementing`. When invoked from `release-loop`, also write the skip to the supplied exact `progress_path` Log section with the conditions cited — `plan:` stays `null` (the Log line is the record; a non-path value would break resume's artifact-pointer verification).
 
 ## 2. Scope confirmation
 
@@ -115,7 +119,7 @@ Use the code or non-code unit template from `schemas/plan-schema.md` as-is — d
 
 A **stateful ceremony** is a workflow whose deliverable can cross an observable side-effect boundary. An **outward-publication boundary** — any action that makes an artifact accessible outside the local repository's default branch (pushing to a remote, creating a remote repository, publishing to a registry, creating a GitHub/platform release, changing repository visibility) — constitutes a stateful ceremony. A plan carrying the stateless fallback whose units include any of these transitions has a recognition error. A **durable transition** is a step that changes persisted or externally observable state across invocations.
 
-If the deliverable contains a stateful ceremony, add a **Mutation/failure-state matrix** plan section. Include one row for every durable transition. Each row must name the transition identity, pre-state, action, expected post-state, owning implementation unit, and evidence owner that will produce disposable fixture evidence under `.release-loop/evidence/U<N>/`. Fill all six outcome classes: success; forced failure; rerun; rollback or compensation; headless; and cancellation or abort. Every forced-failure outcome names a safe injection boundary and isolation approach. Irreversible transitions describe compensation or explicit manual recovery rather than fictional rollback. Blank cells are invalid; every not-applicable cell gives a concrete reason tied to the interface or irreversibility boundary.
+If the deliverable contains a stateful ceremony, add a **Mutation/failure-state matrix** plan section. Include one row for every durable transition. Each row must name the transition identity, pre-state, action, expected post-state, owning implementation unit, and evidence owner that will produce disposable fixture evidence under `<artifact_root>/evidence/U<N>/`. Fill all six outcome classes: success; forced failure; rerun; rollback or compensation; headless; and cancellation or abort. Every forced-failure outcome names an executable probe, a safe injection boundary and isolation approach, the exact partial durable state, and its compensation owner. Irreversible transitions describe compensation or explicit manual recovery rather than fictional rollback. Blank cells are invalid; every not-applicable cell gives a concrete reason tied to the interface or irreversibility boundary.
 
 Use `references/stateful-ceremony-matrix-example.md` as the worked example and `docs/solutions/workflow-issues/review-introduced-state-machine-deviation.md` as the deviation authority; link them rather than duplicating their contracts. Changing an approved matrix row or outcome is observable behavior and triggers item 3's deviation-addendum rule before release.
 
@@ -188,5 +192,4 @@ contradiction unless the separate addendum commit already exists.
 
 Offer a 2-option menu: **Subagent-driven** (fresh subagent per unit, review between units — recommended) or **Inline** (execute in this session with checkpoints between units). Fire the chosen path; don't just announce it.
 
-When invoked headless from `release-loop` or any pipeline caller, skip the menu: write the plan's path to `.release-loop/progress.md`'s `plan:` field and return control to the caller.
-
+When invoked headless from `release-loop` or any pipeline caller, skip the menu: write the plan's path to the supplied exact `progress_path` `plan:` field and return control to the caller.
