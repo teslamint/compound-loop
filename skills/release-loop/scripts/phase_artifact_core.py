@@ -13,6 +13,7 @@ SCHEMA_VERSION = "release-loop/v1"
 JOURNAL_SCHEMA = "phase-artifact-ownership/v1"
 JOURNAL_NAME = ".phase-artifact-ownership.json"
 CONTROL_NAMES = frozenset(("progress.md", JOURNAL_NAME, JOURNAL_NAME + ".tmp"))
+TARGET_PREFIXES = frozenset(("briefs", "reports", "reviews", "evidence"))
 FAILURE_ENV = "RUN_ARTIFACT_INTEGRITY_TEST_FAIL"
 FAILURES = frozenset((
     "publish-before-prepare",
@@ -134,7 +135,7 @@ def canonical_artifact_key(value: str, role: str) -> str:
         if len(path.parts) < 2 or path.parts[0] != ".tmp":
             reject("artifact ownership", f"source outside .tmp {value}")
     else:
-        if path.parts[0] == ".tmp" or (len(path.parts) == 1 and path.name in CONTROL_NAMES):
+        if len(path.parts) < 2 or path.parts[0] not in TARGET_PREFIXES or (len(path.parts) == 1 and path.name in CONTROL_NAMES):
             reject("artifact ownership", f"reserved target {value}")
     return canonical
 

@@ -100,6 +100,7 @@ CASES = (
     "publisher_atomic_recovery",
     "publisher_journal_collisions",
     "publisher_semantics_attacks",
+    "publisher_target_prefix_attacks",
     "publish_cancellation",
     "stateful_scoped_lifecycle",
 )
@@ -124,6 +125,7 @@ CONSUMER_CASES = (
     "publisher_atomic_recovery",
     "publisher_journal_collisions",
     "publisher_semantics_attacks",
+    "publisher_target_prefix_attacks",
     "publish_cancellation",
     "stateful_scoped_lifecycle",
 )
@@ -1289,6 +1291,41 @@ def run_case(name: str) -> None:
                         "",
                     )
                     assert candidate_progress.read_bytes() == progress_before
+        elif name == "publisher_target_prefix_attacks":
+            forbidden = ("runs/foreign.md", "archive/foreign.md", ".handoff/foreign.md", "other/foreign.md")
+            for endpoint, cli in (("release", CLI), ("implementing", IMPLEMENTING_CLI)):
+                for shape in ("requested", "owned", "pending"):
+                    for index, target_key in enumerate(forbidden):
+                        candidate = new_repo(tmp, f"{endpoint}-{shape}-{index}")
+                        legacy = candidate / ".release-loop/progress.md"
+                        legacy.parent.mkdir()
+                        legacy.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+                        protected = legacy.parent / "protected.txt"
+                        protected.write_bytes(b"PROTECTED\n")
+                        source = legacy.parent / ".tmp/source.tmp"
+                        source.parent.mkdir()
+                        source.write_bytes(b"payload\n")
+                        journal = legacy.parent / ".phase-artifact-ownership.json"
+                        requested_key = target_key if shape == "requested" else "reports/U1.md"
+                        if shape == "owned":
+                            journal.write_text(json.dumps({"schema": "phase-artifact-ownership/v1", "owned": {target_key: hashlib.sha256(b"payload\n").hexdigest()}, "pending": None}, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+                        elif shape == "pending":
+                            journal.write_text(json.dumps({"schema": "phase-artifact-ownership/v1", "owned": {}, "pending": {"source": ".tmp/source.tmp", "target": target_key, "sha256": hashlib.sha256(b"payload\n").hexdigest()}}, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+                        progress_before = legacy.read_bytes()
+                        assert_blocked_preserves(
+                            lambda candidate=candidate, legacy=legacy, source=source, requested_key=requested_key, cli=cli: run_cli(
+                                "publish", "--repo", str(candidate),
+                                "--progress-path", legacy.relative_to(candidate).as_posix(),
+                                "--source", source.relative_to(candidate).as_posix(),
+                                "--target", (legacy.parent / requested_key).relative_to(candidate).as_posix(),
+                                cli=cli,
+                            ),
+                            sent,
+                            before,
+                            "artifact ownership",
+                        )
+                        assert legacy.read_bytes() == progress_before
+                        assert protected.read_bytes() == b"PROTECTED\n"
 
                 attacks = ("source-progress", "source-tracked", "source-owned", "target-temp", "traversal", "same-path")
                 for attack in attacks:
