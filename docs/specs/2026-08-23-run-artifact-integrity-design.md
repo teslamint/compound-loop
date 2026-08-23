@@ -1,6 +1,6 @@
 ---
 title: Run Artifact Integrity
-status: draft
+status: approved
 date: 2026-08-23
 schema: spec/v1
 ---
