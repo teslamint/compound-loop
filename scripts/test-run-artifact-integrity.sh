@@ -3945,34 +3945,70 @@ def run_case(name: str) -> None:
             )
             for index, relative in enumerate(stale):
                 publish_from_cli(repo, path, relative, f"stale-{index}\n".encode(), CLI)
-            interrupted = subprocess.run(
-                (
-                    sys.executable,
-                    str(EVIDENCE_CLI),
-                    "--repo", str(repo),
-                    "--progress-path", path.relative_to(repo).as_posix(),
-                ),
-                cwd=ROOT,
-                env={**os.environ, "RUN_ARTIFACT_MATRIX_TEST_FAIL_AFTER": "5"},
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
+            real_git = shutil.which("git")
+            assert real_git is not None
+            signature_git_dir = tmp / "signature-git"
+            signature_git_dir.mkdir()
+            signature_git = signature_git_dir / "git"
+            signature_git.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "import sys\n"
+                f"real_git = {real_git!r}\n"
+                "args = sys.argv[1:]\n"
+                "if args and args[0] == 'log' and '--format=%G?' in args:\n"
+                "    counter_path = os.environ['MATRIX_TEST_SIGNATURE_COUNTER']\n"
+                "    with open(counter_path, encoding='utf-8') as stream:\n"
+                "        count = int(stream.read())\n"
+                "    with open(counter_path, 'w', encoding='utf-8') as stream:\n"
+                "        stream.write(str(count + 1))\n"
+                "    if count == 0:\n"
+                "        print(os.environ['MATRIX_TEST_SOURCE_STATUS'])\n"
+                "        raise SystemExit(0)\n"
+                "    if count == 1:\n"
+                "        print(os.environ['MATRIX_TEST_ADDENDUM_STATUS'])\n"
+                "        raise SystemExit(0)\n"
+                "os.execv(real_git, [real_git, *args])\n",
+                encoding="utf-8",
             )
+            signature_git.chmod(0o755)
+            signature_counter = signature_git_dir / "counter"
+
+            def run_evidence(source_status: str = "G", addendum_status: str = "G", failure_after: str | None = None):
+                signature_counter.write_text("0", encoding="utf-8")
+                environment = os.environ.copy()
+                environment.update({
+                    "PATH": str(signature_git_dir) + os.pathsep + environment.get("PATH", ""),
+                    "MATRIX_TEST_SIGNATURE_COUNTER": str(signature_counter),
+                    "MATRIX_TEST_SOURCE_STATUS": source_status,
+                    "MATRIX_TEST_ADDENDUM_STATUS": addendum_status,
+                })
+                if failure_after is None:
+                    environment.pop("RUN_ARTIFACT_MATRIX_TEST_FAIL_AFTER", None)
+                else:
+                    environment["RUN_ARTIFACT_MATRIX_TEST_FAIL_AFTER"] = failure_after
+                return subprocess.run(
+                    (
+                        sys.executable,
+                        str(EVIDENCE_CLI),
+                        "--repo", str(repo),
+                        "--progress-path", path.relative_to(repo).as_posix(),
+                    ),
+                    cwd=ROOT,
+                    env=environment,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+
+            source_rejected = run_evidence(source_status="E")
+            assert source_rejected.returncode != 0 and source_rejected.stderr.strip() == "matrix evidence signed source commit required"
+            addendum_rejected = run_evidence(addendum_status="E")
+            assert addendum_rejected.returncode != 0 and addendum_rejected.stderr.strip() == "matrix evidence signed addendum commit required"
+            interrupted = run_evidence(failure_after="5")
             assert interrupted.returncode != 0 and "injected matrix evidence interruption" in interrupted.stderr
-            result = subprocess.run(
-                (
-                    sys.executable,
-                    str(EVIDENCE_CLI),
-                    "--repo", str(repo),
-                    "--progress-path", path.relative_to(repo).as_posix(),
-                ),
-                cwd=ROOT,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
+            result = run_evidence()
             assert result.returncode == 0, result.stderr
             payload = json.loads(result.stdout)
             assert payload["state"] == "published" and payload["record_count"] == 36
@@ -3982,19 +4018,7 @@ def run_case(name: str) -> None:
             before_manifest = manifest.read_bytes()
 
             def assert_authority_blocked(label: str, diagnostic: str) -> None:
-                attack = subprocess.run(
-                    (
-                        sys.executable,
-                        str(EVIDENCE_CLI),
-                        "--repo", str(repo),
-                        "--progress-path", path.relative_to(repo).as_posix(),
-                    ),
-                    cwd=ROOT,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=False,
-                )
+                attack = run_evidence()
                 assert attack.returncode != 0 and diagnostic in attack.stderr, (label, attack.stderr)
 
             missing = json.loads(before_manifest)
@@ -4078,19 +4102,7 @@ def run_case(name: str) -> None:
             assert_authority_blocked("unowned-stale", "publisher-owned")
             journal_path.write_bytes(journal_bytes)
             manifest.write_bytes(before_manifest)
-            replay = subprocess.run(
-                (
-                    sys.executable,
-                    str(EVIDENCE_CLI),
-                    "--repo", str(repo),
-                    "--progress-path", path.relative_to(repo).as_posix(),
-                ),
-                cwd=ROOT,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
+            replay = run_evidence()
             assert replay.returncode == 0, replay.stderr
             assert json.loads(replay.stdout)["state"] == "reused"
             assert manifest.read_bytes() == before_manifest
