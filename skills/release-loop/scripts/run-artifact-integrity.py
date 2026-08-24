@@ -22,6 +22,8 @@ from phase_artifact_core import sha256 as phase_artifact_sha256
 from phase_artifact_core import validate_pending_files as validate_phase_artifact_pending
 
 SCHEMA_VERSION = "release-loop/v1"
+ARCHIVE_MANIFEST_NAME = ".archive-source-manifest.json"
+ARCHIVE_MANIFEST_SCHEMA = "archive-source-manifest/v1"
 FEATURE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 PHASES = frozenset(("design", "plan", "implement", "review", "ship", "retro", "done", "blocked"))
 PHASE_STATUSES = frozenset(("in-progress", "waiting-user", "blocked", "complete"))
@@ -238,6 +240,57 @@ def move_one(source: Path, destination: Path) -> None:
     shutil.move(str(source), str(target))
 
 
+def archive_manifest_entries(root: Path, children: list[Path]) -> list[dict[str, object]]:
+    entries = []
+    for child in children:
+        paths = [child]
+        if child.is_dir() and not child.is_symlink():
+            paths.extend(sorted(child.rglob("*")))
+        for path in paths:
+            if path.is_symlink():
+                reject("path boundary", f"symlink component {path}")
+            relative = path.relative_to(root).as_posix()
+            if path.is_dir():
+                entries.append({"kind": "directory", "path": relative})
+            elif path.is_file():
+                entries.append({"kind": "file", "path": relative, "sha256": phase_artifact_sha256(path)})
+            else:
+                reject("archive destination conflict", f"unsupported source entry {relative}")
+    return sorted(entries, key=lambda row: str(row["path"]))
+
+
+def prepare_archive_manifest(source: Path, children: list[Path], destination: Path) -> None:
+    manifest_path = destination / ARCHIVE_MANIFEST_NAME
+    temporary = destination / (ARCHIVE_MANIFEST_NAME + ".tmp")
+    if temporary.exists() or temporary.is_symlink():
+        reject("archive destination conflict", temporary.as_posix())
+    if manifest_path.exists() or manifest_path.is_symlink():
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            reject("archive destination conflict", manifest_path.as_posix())
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise Blocked("archive destination conflict: invalid source manifest") from exc
+        if set(manifest) != {"schema", "entries"} or manifest.get("schema") != ARCHIVE_MANIFEST_SCHEMA or not isinstance(manifest.get("entries"), list):
+            reject("archive destination conflict", "invalid source manifest")
+    else:
+        existing = list(destination.iterdir())
+        if existing:
+            reject("archive destination conflict", existing[0].as_posix())
+        manifest = {"schema": ARCHIVE_MANIFEST_SCHEMA, "entries": archive_manifest_entries(source, children)}
+        temporary.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        os.replace(temporary, manifest_path)
+    destination_children = [
+        child
+        for child in destination.iterdir()
+        if child.name != ARCHIVE_MANIFEST_NAME
+    ]
+    observed = archive_manifest_entries(source, children) + archive_manifest_entries(destination, destination_children)
+    observed.sort(key=lambda row: str(row["path"]))
+    if observed != manifest["entries"]:
+        reject("archive destination conflict", "source manifest mismatch")
+
+
 def validate_archive_publication(
     repo: Path,
     source_root: str,
@@ -334,6 +387,7 @@ def archive(
         for child in children:
             guard(repo, child.relative_to(repo).as_posix(), source_rel)
     destination_path.mkdir(parents=True, exist_ok=True)
+    prepare_archive_manifest(source, children, destination_path)
     order = []
     for child in children:
         move_one(child, destination_path)

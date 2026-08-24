@@ -70,6 +70,7 @@ CASES = (
     "archive_pending_publication",
     "interrupted_legacy_published_archive",
     "archive_journal_resume_tamper",
+    "archive_destination_foreign_entry",
     "archive_requires_persisted_destination",
     "archive_incomplete_run",
     "archive_incomplete_missing_phase",
@@ -2733,6 +2734,71 @@ def run_case(name: str) -> None:
                     persist_authority=False,
                 )[-1] == "progress.md"
                 assert (candidate / destination / "reports/U1.md").is_file()
+        elif name == "archive_destination_foreign_entry":
+            for mode in ("legacy", "scoped"):
+                candidate = new_repo(tmp, "archive-foreign-" + mode)
+                if mode == "legacy":
+                    candidate_progress = candidate / ".release-loop/progress.md"
+                    candidate_progress.parent.mkdir()
+                    candidate_progress.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+                else:
+                    candidate_progress = initialize(candidate, "alpha")
+                publish_from_cli(candidate, candidate_progress, "reports/U1.md", b"owned\n", CLI)
+                destination = ".release-loop/archive/2026-08-24-foreign-" + mode
+                persist_archive_evidence(candidate_progress, destination, "completed")
+                destination_path = candidate / destination
+                destination_path.mkdir(parents=True)
+                foreign = destination_path / "foreign.md"
+                foreign.write_bytes(b"FOREIGN\n")
+                progress_before = candidate_progress.read_bytes()
+                assert_blocked_preserves(
+                    lambda candidate=candidate, candidate_progress=candidate_progress, destination=destination: archive_scope(
+                        candidate,
+                        candidate_progress.relative_to(candidate).as_posix(),
+                        destination,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    "archive destination conflict",
+                )
+                assert candidate_progress.read_bytes() == progress_before
+                assert foreign.read_bytes() == b"FOREIGN\n"
+                foreign.unlink()
+                destination_path.rmdir()
+                try:
+                    archive_scope(
+                        candidate,
+                        candidate_progress.relative_to(candidate).as_posix(),
+                        destination,
+                        fail_after_first=True,
+                        persist_authority=False,
+                    )
+                except Blocked as exc:
+                    assert "injected archive interruption" in str(exc)
+                else:
+                    raise AssertionError("archive did not interrupt after manifest creation")
+                manifest = destination_path / ".archive-source-manifest.json"
+                assert manifest.is_file() and candidate_progress.is_file()
+                foreign.write_bytes(b"FOREIGN-AFTER-INTERRUPTION\n")
+                assert_blocked_preserves(
+                    lambda candidate=candidate, candidate_progress=candidate_progress: archive_scope(
+                        candidate,
+                        candidate_progress.relative_to(candidate).as_posix(),
+                        None,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    "archive destination conflict",
+                )
+                foreign.unlink()
+                assert archive_scope(
+                    candidate,
+                    candidate_progress.relative_to(candidate).as_posix(),
+                    None,
+                    persist_authority=False,
+                )[-1] == "progress.md"
         elif name == "archive_requires_persisted_destination":
             path = initialize(repo, "alpha")
             before_progress = path.read_bytes()
@@ -3914,6 +3980,10 @@ def run_case(name: str) -> None:
             missing_report = dict(base_row)
             missing_report["fixer_report_path"] = ".release-loop/runs/alpha/reports/missing.md"
             attacks.append(("missing-report", [missing_report], lambda _: "G", "fixer report"))
+            for label, invalid_path in (("null", None), ("number", 7)):
+                invalid_report_path = dict(base_row)
+                invalid_report_path["fixer_report_path"] = invalid_path
+                attacks.append(("invalid-report-path-" + label, [invalid_report_path], lambda _: "G", "fixer report path invalid"))
             attacks.append(("unsigned", [base_row], lambda _: "U", "signed"))
             attacks.append(("duplicate", [base_row, dict(base_row)], lambda _: "G", "duplicate"))
             for label, rows, signature, diagnostic in attacks:

@@ -239,10 +239,13 @@ def validate_migration(repo, progress_relative, adoption_relative, signature_che
         ancestor = subprocess.run(("git", "merge-base", "--is-ancestor", reviewed_head, commit), cwd=str(repo), check=False)
         if ancestor.returncode != 0:
             raise Blocked("fix migration commit/source mismatch")
+        report_path = row["fixer_report_path"]
+        if not isinstance(report_path, str):
+            raise Blocked("fix migration fixer report path invalid")
         report_sha = row["fixer_report_sha256"]
         if not isinstance(report_sha, str) or not SHA256.fullmatch(report_sha):
             raise Blocked("fix migration fixer report digest invalid")
-        validate_owned(repo, root, row["fixer_report_path"], report_sha, "fix migration fixer report")
+        validate_owned(repo, root, report_path, report_sha, "fix migration fixer report")
         event = {
             "id": row["id"],
             "kind": "fix",
@@ -250,7 +253,7 @@ def validate_migration(repo, progress_relative, adoption_relative, signature_che
             "ordinal": row["ordinal"],
             "state": "complete",
             "reviewed_head": row["reviewed_head"],
-            "result_path": row["fixer_report_path"],
+            "result_path": report_path,
             "result_sha256": report_sha,
             "outcome": "clean",
             "finding_inventory": [],
