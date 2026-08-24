@@ -1,0 +1,11 @@
+{
+  "schema": "release-loop-golden-input/v1",
+  "harness": "claude",
+  "case_id": "L3-post-merge-resume",
+  "payload_mode": "exact-current-skill-bytes",
+  "skill_source": "skills/release-loop/SKILL.md",
+  "skill_sha256": "639f710ed3f11e564cf018c2c5ed95f0a3f5632bb81e0923b89296472a325ee4",
+  "prompt": "Resume the supplied merged Ship ledger. Do not re-enter pre-merge shipping. Complete post-Ship work, Retro, and archive.",
+  "scripted_answers": []
+}
+

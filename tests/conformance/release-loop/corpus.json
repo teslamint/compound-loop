@@ -1,0 +1,371 @@
+{
+  "schema": "release-loop-conformance-corpus/v1",
+  "harnesses": [
+    "claude",
+    "codex"
+  ],
+  "grader_inventory": [
+    "design-user-gate",
+    "phase-order",
+    "final-action",
+    "retro-required",
+    "archive-complete",
+    "resume-source-truth",
+    "no-phase-replay",
+    "terminal-evidence",
+    "resume-after-merge",
+    "no-premerge-reentry",
+    "degradation-complete",
+    "no-coverage-drop",
+    "same-gates",
+    "sc2-comparison",
+    "sc2-guard",
+    "operative-section-parser"
+  ],
+  "result_classes": [
+    "conformant",
+    "pass",
+    "expected-reject"
+  ],
+  "cases": [
+    {
+      "schema": "conformance-case/v1",
+      "id": "L1-full-lifecycle",
+      "kind": "live",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "lifecycle",
+          "value": "design"
+        },
+        {
+          "sequence": 2,
+          "type": "lifecycle",
+          "value": "plan"
+        },
+        {
+          "sequence": 3,
+          "type": "lifecycle",
+          "value": "implement"
+        },
+        {
+          "sequence": 4,
+          "type": "lifecycle",
+          "value": "review"
+        },
+        {
+          "sequence": 5,
+          "type": "lifecycle",
+          "value": "ship"
+        },
+        {
+          "sequence": 6,
+          "type": "lifecycle",
+          "value": "retro"
+        },
+        {
+          "sequence": 7,
+          "type": "lifecycle",
+          "value": "archive"
+        }
+      ],
+      "expected_outcome": "conformant",
+      "eligible_mutations": [
+        "delete-design-user-gate"
+      ],
+      "required_graders": [
+        "design-user-gate",
+        "phase-order",
+        "final-action",
+        "retro-required",
+        "archive-complete"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "L2-mid-loop-resume",
+      "kind": "live",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "lifecycle",
+          "value": "resume"
+        },
+        {
+          "sequence": 2,
+          "type": "lifecycle",
+          "value": "implement"
+        },
+        {
+          "sequence": 3,
+          "type": "lifecycle",
+          "value": "review"
+        },
+        {
+          "sequence": 4,
+          "type": "lifecycle",
+          "value": "ship"
+        },
+        {
+          "sequence": 5,
+          "type": "lifecycle",
+          "value": "retro"
+        },
+        {
+          "sequence": 6,
+          "type": "lifecycle",
+          "value": "archive"
+        }
+      ],
+      "expected_outcome": "conformant",
+      "eligible_mutations": [
+        "replay-completed-phase"
+      ],
+      "required_graders": [
+        "resume-source-truth",
+        "no-phase-replay",
+        "terminal-evidence"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "L3-post-merge-resume",
+      "kind": "live",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "lifecycle",
+          "value": "resume"
+        },
+        {
+          "sequence": 2,
+          "type": "lifecycle",
+          "value": "post-ship-completion"
+        },
+        {
+          "sequence": 3,
+          "type": "lifecycle",
+          "value": "retro"
+        },
+        {
+          "sequence": 4,
+          "type": "lifecycle",
+          "value": "archive"
+        }
+      ],
+      "expected_outcome": "conformant",
+      "eligible_mutations": [
+        "reenter-premerge-shipping"
+      ],
+      "required_graders": [
+        "resume-after-merge",
+        "no-premerge-reentry",
+        "retro-required"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "L4-degraded-dispatch",
+      "kind": "live",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "lifecycle",
+          "value": "design"
+        },
+        {
+          "sequence": 2,
+          "type": "lifecycle",
+          "value": "plan"
+        },
+        {
+          "sequence": 3,
+          "type": "lifecycle",
+          "value": "implement-degraded"
+        },
+        {
+          "sequence": 4,
+          "type": "lifecycle",
+          "value": "review-degraded"
+        },
+        {
+          "sequence": 5,
+          "type": "lifecycle",
+          "value": "ship"
+        },
+        {
+          "sequence": 6,
+          "type": "lifecycle",
+          "value": "retro"
+        },
+        {
+          "sequence": 7,
+          "type": "lifecycle",
+          "value": "archive"
+        }
+      ],
+      "expected_outcome": "conformant",
+      "eligible_mutations": [
+        "drop-work-without-subagents"
+      ],
+      "required_graders": [
+        "degradation-complete",
+        "no-coverage-drop",
+        "same-gates"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "SC2-reject-a-different-kind",
+      "kind": "static",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "fixture",
+          "value": "different-artifact-kind"
+        }
+      ],
+      "expected_outcome": "expected-reject",
+      "eligible_mutations": [
+        "different-artifact-kind"
+      ],
+      "required_graders": [
+        "sc2-comparison"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "SC2-reject-b-unstable-invariance",
+      "kind": "static",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "fixture",
+          "value": "unstable-invariance-output"
+        }
+      ],
+      "expected_outcome": "expected-reject",
+      "eligible_mutations": [
+        "unstable-invariance-output"
+      ],
+      "required_graders": [
+        "sc2-comparison"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "SC2-reject-c-irrelevant-axis",
+      "kind": "static",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "fixture",
+          "value": "irrelevant-changed-axis"
+        }
+      ],
+      "expected_outcome": "expected-reject",
+      "eligible_mutations": [
+        "irrelevant-changed-axis"
+      ],
+      "required_graders": [
+        "sc2-comparison"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "SC2-reject-d-metadata-only",
+      "kind": "static",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "fixture",
+          "value": "metadata-only-difference"
+        }
+      ],
+      "expected_outcome": "expected-reject",
+      "eligible_mutations": [
+        "metadata-only-difference"
+      ],
+      "required_graders": [
+        "sc2-comparison"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "SC2-guard-reject",
+      "kind": "static",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "fixture",
+          "value": "always-passing-guard"
+        }
+      ],
+      "expected_outcome": "expected-reject",
+      "eligible_mutations": [
+        "always-passing-guard"
+      ],
+      "required_graders": [
+        "sc2-guard"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "SC2-accept-controlled-pairs",
+      "kind": "static",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "fixture",
+          "value": "controlled-same-kind-pairs"
+        }
+      ],
+      "expected_outcome": "pass",
+      "eligible_mutations": [
+        "controlled-same-kind-pairs"
+      ],
+      "required_graders": [
+        "sc2-comparison"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "parser-contradictory-substitute-command",
+      "kind": "static",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "fixture",
+          "value": "contradictory-substitute-command"
+        }
+      ],
+      "expected_outcome": "expected-reject",
+      "eligible_mutations": [
+        "contradictory-substitute-command"
+      ],
+      "required_graders": [
+        "operative-section-parser"
+      ]
+    },
+    {
+      "schema": "conformance-case/v1",
+      "id": "parser-fence-relocation",
+      "kind": "static",
+      "events": [
+        {
+          "sequence": 1,
+          "type": "fixture",
+          "value": "fence-relocation"
+        }
+      ],
+      "expected_outcome": "expected-reject",
+      "eligible_mutations": [
+        "fence-relocation"
+      ],
+      "required_graders": [
+        "operative-section-parser"
+      ]
+    }
+  ]
+}
+

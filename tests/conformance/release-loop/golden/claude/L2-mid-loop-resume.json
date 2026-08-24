@@ -1,0 +1,18 @@
+{
+  "schema": "release-loop-golden-input/v1",
+  "harness": "claude",
+  "case_id": "L2-mid-loop-resume",
+  "payload_mode": "exact-current-skill-bytes",
+  "skill_source": "skills/release-loop/SKILL.md",
+  "skill_sha256": "639f710ed3f11e564cf018c2c5ed95f0a3f5632bb81e0923b89296472a325ee4",
+  "prompt": "Resume the supplied partial release-loop ledger. Preserve completed phases and finish the remaining lifecycle.",
+  "scripted_answers": [
+    {
+      "gate_id": "ship-approval",
+      "phase": "ship",
+      "expected_answer_class": "merge-or-nonmerge-disposition",
+      "answer": "merge"
+    }
+  ]
+}
+
