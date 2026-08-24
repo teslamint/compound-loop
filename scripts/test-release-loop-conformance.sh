@@ -3305,7 +3305,20 @@ def mark_v2_acceptance(progress_path, generation_digest, archive_root, observed_
     write_bytes_atomic(progress_path, text_value.encode("utf-8"), progress_path.parent)
 
 
-def remove_consumed_handoff_after_terminal(base_root, archive_root, handoff_root, digest):
+def require_terminal_archived_progress(archive_root, digest, relative_archive):
+    archived_progress = archive_root / "progress.md"
+    mark_v2_acceptance(archived_progress, digest, relative_archive, "")
+    text_value = archived_progress.read_text(encoding="utf-8")
+    if (
+        not re.search(r"(?m)^phase: done$", text_value)
+        or not re.search(r"(?m)^phase_status: complete$", text_value)
+        or f"V2 accepted generation={digest}" not in text_value
+    ):
+        fail("handoff cleanup terminal progress missing")
+    return archived_progress
+
+
+def remove_consumed_handoff_after_terminal(base_root, archive_root, handoff_root, digest, fail_at=None):
     expected_parent = (base_root / ".release-loop/.handoff").resolve(strict=True)
     try:
         handoff_root.resolve(strict=True).relative_to(expected_parent)
@@ -3317,19 +3330,72 @@ def remove_consumed_handoff_after_terminal(base_root, archive_root, handoff_root
         or consumed.get("archive_root") != str(archive_root.relative_to(base_root))
     ):
         fail("handoff cleanup consumed marker mismatch")
-    archived_progress = archive_root / "progress.md"
-    mark_v2_acceptance(
-        archived_progress, digest, str(archive_root.relative_to(base_root)), consumed.get("consumed_at", "")
-    )
-    text_value = archived_progress.read_text(encoding="utf-8")
-    if not re.search(r"(?m)^phase: done$", text_value) or not re.search(r"(?m)^phase_status: complete$", text_value):
-        fail("handoff cleanup terminal progress missing")
-    shutil.rmtree(handoff_root)
+    relative_archive = str(archive_root.relative_to(base_root))
+    require_terminal_archived_progress(archive_root, digest, relative_archive)
+    tombstone_name = f".{handoff_root.name}.cleanup-{digest[:12]}"
+    tombstone = expected_parent / tombstone_name
+    cleanup_receipt_path = archive_root / "evidence/handoff-cleanup.json"
+    cleanup_receipt = {
+        "schema": "release-loop-handoff-cleanup/v1",
+        "handoff_name": handoff_root.name,
+        "generation_manifest_sha256": digest,
+        "archive_root": relative_archive,
+        "tombstone_name": tombstone_name,
+    }
+    if cleanup_receipt_path.is_file():
+        if load_json(cleanup_receipt_path) != cleanup_receipt:
+            fail("handoff cleanup receipt mismatch")
+    else:
+        write_json_atomic(cleanup_receipt_path, cleanup_receipt, archive_root)
+    if tombstone.exists() and handoff_root.exists():
+        fail("handoff cleanup target ambiguous")
+    if handoff_root.exists():
+        os.replace(str(handoff_root), str(tombstone))
+        directory_descriptor = os.open(str(expected_parent), os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    if fail_at == "after-rename":
+        fail("injected handoff cleanup interruption")
+    if tombstone.exists():
+        if tombstone.is_symlink() or tombstone.parent.resolve(strict=True) != expected_parent:
+            fail("handoff cleanup tombstone unsafe")
+        shutil.rmtree(tombstone)
     directory_descriptor = os.open(str(expected_parent), os.O_RDONLY)
     try:
         os.fsync(directory_descriptor)
     finally:
         os.close(directory_descriptor)
+
+
+def finish_absent_handoff_cleanup(base_root, archive_root, handoff_argument, digest):
+    relative_archive = str(archive_root.relative_to(base_root))
+    require_terminal_archived_progress(archive_root, digest, relative_archive)
+    cleanup_receipt_path = archive_root / "evidence/handoff-cleanup.json"
+    if not cleanup_receipt_path.is_file():
+        fail("handoff cleanup receipt missing")
+    receipt = load_json(cleanup_receipt_path)
+    expected_tombstone = f".{handoff_argument.name}.cleanup-{digest[:12]}"
+    if receipt != {
+        "schema": "release-loop-handoff-cleanup/v1",
+        "handoff_name": handoff_argument.name,
+        "generation_manifest_sha256": digest,
+        "archive_root": relative_archive,
+        "tombstone_name": expected_tombstone,
+    }:
+        fail("handoff cleanup receipt mismatch")
+    handoff_parent = (base_root / ".release-loop/.handoff").resolve(strict=True)
+    tombstone = handoff_parent / expected_tombstone
+    if tombstone.exists():
+        if tombstone.is_symlink() or tombstone.parent.resolve(strict=True) != handoff_parent:
+            fail("handoff cleanup tombstone unsafe")
+        shutil.rmtree(tombstone)
+        directory_descriptor = os.open(str(handoff_parent), os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
 
 
 def verify_archive_transition(base_root, archive_root, baseline_path, handoff_root, observed_at):
@@ -3360,7 +3426,7 @@ def verify_archive_transition(base_root, archive_root, baseline_path, handoff_ro
     if not handoff_argument.exists():
         if live_progress_path.is_file():
             fail("archive handoff missing before terminal move")
-        mark_v2_acceptance(progress_path, digest, relative_archive, observed_at)
+        finish_absent_handoff_cleanup(base_root, archive_root, handoff_argument, digest)
         return digest
     handoff_root = handoff_argument.resolve(strict=True)
     handoff_generation, _, _ = verify_handoff_directory(handoff_root)
@@ -3697,12 +3763,42 @@ def validate_transition_group():
         )
         archived_progress.write_text(archived_text, encoding="utf-8")
         progress_path.unlink()
+        try:
+            remove_consumed_handoff_after_terminal(
+                base_root, archive_root, handoff_root, handoff_digest, fail_at="after-rename"
+            )
+        except ValueError as exc:
+            if "injected handoff cleanup interruption" not in str(exc):
+                fail(f"transition cleanup interruption diagnostic mismatch: {exc}")
+        else:
+            fail("transition cleanup interruption accepted")
+        if handoff_root.exists():
+            fail("transition cleanup tombstone rename failed")
+        negatives += 1
         if verify_archive_transition(
             base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:03Z"
         ) != handoff_digest:
             fail("transition moved progress resume failed")
         if handoff_root.exists():
             fail("transition consumed handoff cleanup failed")
+        terminal_progress_text = archived_progress.read_text(encoding="utf-8")
+        archived_progress.write_text(
+            terminal_progress_text.replace(
+                "phase: done\nphase_status: complete", "phase: retro\nphase_status: in-progress"
+            ),
+            encoding="utf-8",
+        )
+        try:
+            verify_archive_transition(
+                base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:04Z"
+            )
+        except ValueError as exc:
+            if "handoff cleanup terminal progress missing" not in str(exc):
+                fail(f"transition absent handoff terminal diagnostic mismatch: {exc}")
+        else:
+            fail("transition absent handoff nonterminal progress accepted")
+        archived_progress.write_text(terminal_progress_text, encoding="utf-8")
+        negatives += 1
         if verify_archive_transition(
             base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:04Z"
         ) != handoff_digest:
