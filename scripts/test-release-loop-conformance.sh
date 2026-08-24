@@ -3263,12 +3263,19 @@ def publish_baseline_transition(base_root, handoff_root, archive_source, baselin
     return baseline["generation_manifest_sha256"], baseline
 
 
-def progress_frontmatter_scalar(text_value, key):
-    lines = text_value.splitlines()
-    fence_indices = [index for index, line in enumerate(lines) if line == "---"]
-    if not lines or lines[0] != "---" or len(fence_indices) < 2 or fence_indices[0] != 0:
+def progress_frontmatter_region(text_value):
+    lines = text_value.splitlines(keepends=True)
+    normalized = [line.rstrip("\r\n") for line in lines]
+    fence_indices = [index for index, line in enumerate(normalized) if line == "---"]
+    if not lines or normalized[0] != "---" or len(fence_indices) < 2 or fence_indices[0] != 0:
         fail("archive progress frontmatter missing")
-    frontmatter = "\n".join(lines[1:fence_indices[1]])
+    start = len(lines[0])
+    end = sum(len(line) for line in lines[:fence_indices[1]])
+    return text_value[start:end], start, end
+
+
+def progress_frontmatter_scalar(text_value, key):
+    frontmatter, _, _ = progress_frontmatter_region(text_value)
     matches = re.findall(rf"(?m)^{re.escape(key)}: ([^\n]+)$", frontmatter)
     if len(matches) != 1:
         fail(f"archive progress duplicate or missing field: {key}")
@@ -3292,7 +3299,8 @@ def mark_v2_acceptance(progress_path, generation_digest, archive_root, observed_
         r"  archive_root: (?P<root>[^\n]+)\n"
         r"  updated: (?P<updated>[^\n]+)$"
     )
-    records = list(record_pattern.finditer(text_value))
+    frontmatter, frontmatter_start, _ = progress_frontmatter_region(text_value)
+    records = list(record_pattern.finditer(frontmatter))
     if len(records) != 1:
         fail("archive V2 record missing or duplicate")
     record = records[0]
@@ -3310,7 +3318,9 @@ def mark_v2_acceptance(progress_path, generation_digest, archive_root, observed_
     if record.group("status") != "started" or phase != "retro" or phase_status != "in-progress":
         fail("archive V2 nonterminal state mismatch")
     replacement = record.group(0).replace("  status: started\n", "  status: accepted\n", 1)
-    text_value = text_value[:record.start()] + replacement + text_value[record.end():]
+    record_start = frontmatter_start + record.start()
+    record_end = frontmatter_start + record.end()
+    text_value = text_value[:record_start] + replacement + text_value[record_end:]
     text_value = text_value.rstrip() + (
         f"\n- {observed_at} archive: V2 accepted generation={generation_digest} archive_root={archive_root}\n"
     )
@@ -3717,6 +3727,34 @@ def validate_transition_group():
             f"- 2026-08-24T07:00:00Z retro: archive-destination: {archive_root.relative_to(base_root)}\n"
         )
         progress_path.write_text(valid_progress_text, encoding="utf-8")
+        v2_block_match = re.search(
+            r"(?m)^archive_verification:\n(?:  [^\n]+\n){4}  updated: [^\n]+$",
+            valid_progress_text,
+        )
+        if not v2_block_match:
+            fail("transition V2 block fixture missing")
+        v2_block = v2_block_match.group(0)
+        body_progress = archive_root / "body-v2-progress.md"
+        body_only_v2 = valid_progress_text.replace(v2_block, "", 1).rstrip() + "\n\n" + v2_block + "\n"
+        body_progress.write_text(body_only_v2, encoding="utf-8")
+        try:
+            mark_v2_acceptance(
+                body_progress, handoff_digest, str(archive_root.relative_to(base_root)), "2026-08-24T07:00:01Z"
+            )
+        except ValueError as exc:
+            if "archive V2 record missing or duplicate" not in str(exc):
+                fail(f"transition body-only V2 diagnostic mismatch: {exc}")
+        else:
+            fail("transition body-only V2 accepted")
+        negatives += 1
+        duplicate_body_v2 = valid_progress_text.rstrip() + "\n\n" + v2_block + "\n"
+        body_progress.write_text(duplicate_body_v2, encoding="utf-8")
+        mark_v2_acceptance(
+            body_progress, handoff_digest, str(archive_root.relative_to(base_root)), "2026-08-24T07:00:01Z"
+        )
+        if body_progress.read_text(encoding="utf-8").count("  status: accepted") != 1:
+            fail("transition body duplicate changed authoritative count")
+        controls += 1
         wrong_baseline_path = data_dir / "wrong-baseline.json"
         wrong_baseline = copy.deepcopy(baseline)
         wrong_baseline["generation_manifest_sha256"] = "0" * 64
