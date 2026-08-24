@@ -1787,6 +1787,7 @@ def validate_paid_receipt(
     expected_models,
     expected_caps,
     expected_auth_brokers,
+    expected_source_identity,
     session_marker,
     session_started,
     observed_at,
@@ -1794,7 +1795,7 @@ def validate_paid_receipt(
 ):
     required = {
         "schema", "gate_kind", "command_sha256", "models", "caps", "approved_at",
-        "auth_brokers", "session_marker", "nonce", "status",
+        "auth_brokers", "source_identity", "session_marker", "nonce", "status",
     }
     if not isinstance(receipt, dict) or set(receipt) != required:
         return "paid-receipt-shape"
@@ -1823,6 +1824,18 @@ def validate_paid_receipt(
         return "paid-receipt-auth-brokers"
     if any(not re.fullmatch(r"[0-9a-f]{64}", str(value)) for value in expected_auth_brokers.values()):
         return "paid-receipt-auth-brokers"
+    if receipt["source_identity"] != expected_source_identity:
+        return "paid-receipt-source"
+    if not isinstance(expected_source_identity, dict) or set(expected_source_identity) != {
+        "snapshot_sha256", "head_sha", "plan_body_seal"
+    }:
+        return "paid-receipt-source"
+    if not re.fullmatch(r"[0-9a-f]{64}", str(expected_source_identity["snapshot_sha256"])):
+        return "paid-receipt-source"
+    if not re.fullmatch(r"[0-9a-f]{40,64}", str(expected_source_identity["head_sha"])):
+        return "paid-receipt-source"
+    if not re.fullmatch(r"[0-9a-f]{64}", str(expected_source_identity["plan_body_seal"])):
+        return "paid-receipt-source"
     approved = parse_gate_timestamp(receipt["approved_at"])
     started = parse_gate_timestamp(session_started)
     observed = parse_gate_timestamp(observed_at)
@@ -1918,6 +1931,8 @@ def consume_paid_receipt_file(
     models,
     caps,
     auth_brokers,
+    source_identity,
+    source_identity_reader,
     session_marker,
     session_started,
     observed_at,
@@ -1948,6 +1963,8 @@ def consume_paid_receipt_file(
         ):
             fail("paid nonce ledger invalid")
         used_nonces = {row.get("nonce") for row in nonce_ledger["consumptions"] if isinstance(row, dict)}
+        if source_identity_reader() != source_identity:
+            fail("paid-receipt-source")
         invariant = validate_paid_receipt(
             receipt,
             command,
@@ -1955,6 +1972,7 @@ def consume_paid_receipt_file(
             models,
             caps,
             auth_brokers,
+            source_identity,
             session_marker,
             session_started,
             observed_at,
@@ -2644,6 +2662,8 @@ def run_paid_mode_entry(
     launcher,
     evidence_root,
     auth_brokers,
+    source_identity,
+    source_identity_reader,
     session_marker,
     session_started,
     observed_at,
@@ -2659,6 +2679,8 @@ def run_paid_mode_entry(
         models,
         caps,
         auth_brokers,
+        source_identity,
+        source_identity_reader,
         session_marker,
         session_started,
         observed_at,
@@ -2936,8 +2958,14 @@ def paid_auth_preflight():
                 fail("auth-isolation-unavailable")
             if not broker_path.is_file() or not os.access(str(broker_path), os.X_OK):
                 fail("auth-isolation-unavailable")
+            broker_bytes = broker_path.read_bytes()
+            if len(broker_bytes) > 16777216:
+                fail("auth-isolation-unavailable")
+            private_broker = auth_root / f"{harness}-broker"
+            private_broker.write_bytes(broker_bytes)
+            private_broker.chmod(0o500)
             result = run_bounded(
-                [str(broker_path), "status", "--json", "--harness", harness],
+                [str(private_broker), "status", "--json", "--harness", harness],
                 auth_root,
                 env,
                 output_cap=8192,
@@ -2952,8 +2980,8 @@ def paid_auth_preflight():
             if status != {"authenticated": True, "harness": harness, "method": "brokered"}:
                 fail("auth-isolation-unavailable")
             readiness[harness] = {
-                "path": str(broker_path),
-                "sha256": hashlib.sha256(broker_path.read_bytes()).hexdigest(),
+                "bytes": broker_bytes,
+                "sha256": hashlib.sha256(broker_bytes).hexdigest(),
             }
     return readiness
 
@@ -2979,7 +3007,22 @@ def paid_source_preflight():
     )
     if status.returncode != 0 or status.stdout.strip():
         fail("paid-source-preflight-dirty")
-    return adapter_source_snapshot(root)
+    snapshot = adapter_source_snapshot(root)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(root), check=True, capture_output=True, text=True, timeout=10
+    ).stdout.strip()
+    plan_path = root / "docs/plans/2026-08-24-001-feat-release-loop-conformance-fuzzing-plan.md"
+    seal_match = re.search(r"(?m)^body_seal: ([0-9a-f]{64})$", plan_path.read_text(encoding="utf-8"))
+    if not re.fullmatch(r"[0-9a-f]{40,64}", head) or not seal_match:
+        fail("paid-source-preflight-identity")
+    return {
+        "snapshot": snapshot,
+        "receipt": {
+            "snapshot_sha256": object_digest(snapshot),
+            "head_sha": head,
+            "plan_body_seal": seal_match.group(1),
+        },
+    }
 
 
 def actual_paid_launcher(call_spec):
@@ -3040,6 +3083,23 @@ def actual_paid_launcher(call_spec):
         CONFORMANCE_PYTHON=sys.executable,
         CONFORMANCE_WRAPPER_SHA256=hashlib.sha256(wrapper_path.read_bytes()).hexdigest(),
     )
+    private_brokers = {}
+    for broker_harness, broker_bytes in call_spec["auth_broker_bytes"].items():
+        private_path = run_root / f".{broker_harness}-auth-broker"
+        private_path.write_bytes(broker_bytes)
+        private_path.chmod(0o500)
+        private_brokers[broker_harness] = private_path
+
+    def verified_private_broker(broker_harness):
+        private_path = private_brokers[broker_harness]
+        if private_path.is_symlink():
+            fail("auth-broker-identity-mismatch")
+        metadata = private_path.stat()
+        expected_digest = call_spec["auth_broker_digests"][broker_harness]
+        if metadata.st_nlink != 1 or hashlib.sha256(private_path.read_bytes()).hexdigest() != expected_digest:
+            fail("auth-broker-identity-mismatch")
+        return str(private_path)
+
     harness = call_spec["harness"]
     case_id = call_spec["case_id"]
     golden = load_json(data_root / f"golden/{harness}/{case_id}.json")
@@ -3058,7 +3118,7 @@ def actual_paid_launcher(call_spec):
         command = build_codex_initial(repo_path, call_spec["models"]["codex"], result_path)
         command[0] = codex_path
         stdin_bytes = adapter_packet(golden, root)
-    broker_path = call_spec["auth_broker_paths"][harness]
+    broker_path = verified_private_broker(harness)
     command = [broker_path, "--", *command]
     outputs = []
     proofs = []
@@ -3108,6 +3168,7 @@ def actual_paid_launcher(call_spec):
             resume = build_codex_resume(call_spec["models"]["codex"], parsed_id)
             resume[0] = codex_path
             resume_input = (answer["answer"] + "\n").encode()
+        broker_path = verified_private_broker(harness)
         resume = [broker_path, "--", *resume]
         resume_turn_id = f"{call_spec['call_id']}:turn-{turns}"
         call_spec["before_invocation"](resume_turn_id, time.monotonic() - actual_session_started)
@@ -3178,6 +3239,11 @@ def validate_resource_group():
     }
     models = {"claude": "claude-fixture-model", "codex": "codex-fixture-model"}
     auth_brokers = {"claude": "c" * 64, "codex": "d" * 64}
+    source_identity = {
+        "snapshot_sha256": "e" * 64,
+        "head_sha": "f" * 40,
+        "plan_body_seal": "a" * 64,
+    }
     broker_test_root = root / ".release-loop/evidence/U6"
     broker_test_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="broker-test-", dir=str(broker_test_root)) as broker_temp:
@@ -3208,6 +3274,24 @@ def validate_resource_group():
                 key: hashlib.sha256(path.read_bytes()).hexdigest() for key, path in broker_paths.items()
             }:
                 fail("resource broker readiness mismatch")
+            broker_marker = broker_root / "replacement-executed"
+            broker_paths["claude"].write_text(
+                f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(broker_marker)!r}).write_text('executed')\n",
+                encoding="utf-8",
+            )
+            broker_paths["claude"].chmod(0o755)
+            verified_copy = broker_root / "verified-claude-broker"
+            verified_copy.write_bytes(broker_readiness["claude"]["bytes"])
+            verified_copy.chmod(0o500)
+            verified_status = run_bounded(
+                [str(verified_copy), "status", "--json", "--harness", "claude"],
+                broker_root,
+                {"PATH": "/usr/bin:/bin", "HOME": str(broker_root), "LC_ALL": "C", "LANG": "C"},
+                output_cap=8192,
+                timeout=10,
+            )
+            if verified_status.returncode != 0 or broker_marker.exists():
+                fail("resource broker replacement bytes executed")
             del os.environ["CONFORMANCE_CLAUDE_AUTH_BROKER"]
             try:
                 paid_auth_preflight()
@@ -3238,13 +3322,14 @@ def validate_resource_group():
         "models": models,
         "caps": pilot_caps,
         "auth_brokers": auth_brokers,
+        "source_identity": source_identity,
         "approved_at": "2026-08-24T06:00:30Z",
         "session_marker": session_marker,
         "nonce": "a" * 32,
         "status": "approved",
     }
     if validate_paid_receipt(
-        receipt, pilot, "live-pilot", models, pilot_caps, auth_brokers, session_marker, session_started, observed_at, used_nonces
+        receipt, pilot, "live-pilot", models, pilot_caps, auth_brokers, source_identity, session_marker, session_started, observed_at, used_nonces
     ) is not None:
         fail("resource pilot receipt control failed")
     consumed, invariant = consume_paid_receipt(receipt, used_nonces)
@@ -3265,6 +3350,8 @@ def validate_resource_group():
             models,
             pilot_caps,
             auth_brokers,
+            source_identity,
+            lambda: source_identity,
             session_marker,
             session_started,
             observed_at,
@@ -3281,6 +3368,8 @@ def validate_resource_group():
                 models,
                 pilot_caps,
                 auth_brokers,
+                source_identity,
+                lambda: source_identity,
                 session_marker,
                 session_started,
                 observed_at,
@@ -3308,6 +3397,8 @@ def validate_resource_group():
                         models,
                         pilot_caps,
                         auth_brokers,
+                        source_identity,
+                        lambda: source_identity,
                         session_marker,
                         session_started,
                         observed_at,
@@ -3323,6 +3414,33 @@ def validate_resource_group():
             statuses.append(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 255)
         if sorted(statuses) != [0, 2]:
             fail(f"resource concurrent receipt consumption mismatch: {statuses}")
+        source_race_receipt = {**receipt, "nonce": "7" * 32}
+        source_race_path = receipt_temp_root / "source-race-receipt.json"
+        source_race_nonces = receipt_temp_root / "source-race-nonces.json"
+        write_json_atomic(source_race_path, source_race_receipt, receipt_temp_root)
+        try:
+            consume_paid_receipt_file(
+                source_race_path,
+                source_race_nonces,
+                pilot,
+                "live-pilot",
+                models,
+                pilot_caps,
+                auth_brokers,
+                source_identity,
+                lambda: {**source_identity, "head_sha": "0" * 40},
+                session_marker,
+                session_started,
+                observed_at,
+                receipt_temp_root,
+            )
+        except ValueError as exc:
+            if "paid-receipt-source" not in str(exc):
+                fail(f"resource source-under-lock diagnostic mismatch: {exc}")
+        else:
+            fail("resource source change under lock accepted")
+        if source_race_nonces.exists():
+            fail("resource source failure mutated nonce authority")
     ledger = new_resource_ledger(pilot_caps)
     if reserve_claude(ledger, pilot_caps, "pilot-claude") is not None:
         fail("resource Claude pilot reservation failed")
@@ -3351,7 +3469,7 @@ def validate_resource_group():
         nonce="b" * 32,
     )
     if validate_paid_receipt(
-        full_receipt, full_command, "live", models, caps, auth_brokers, session_marker, session_started, observed_at, used_nonces
+        full_receipt, full_command, "live", models, caps, auth_brokers, source_identity, session_marker, session_started, observed_at, used_nonces
     ) is not None:
         fail("resource full receipt control failed")
     consume_paid_receipt(full_receipt, used_nonces)
@@ -3490,6 +3608,8 @@ def validate_resource_group():
             fake_paid_launcher,
             paid_root,
             auth_brokers,
+            source_identity,
+            lambda: source_identity,
             session_marker,
             session_started,
             observed_at,
@@ -3546,6 +3666,8 @@ def validate_resource_group():
                 fake_paid_launcher,
                 paid_root,
                 auth_brokers,
+                source_identity,
+                lambda: source_identity,
                 session_marker,
                 session_started,
                 observed_at,
@@ -3563,6 +3685,8 @@ def validate_resource_group():
             fake_paid_launcher,
             paid_root,
             auth_brokers,
+            source_identity,
+            lambda: source_identity,
             session_marker,
             session_started,
             observed_at,
@@ -3587,7 +3711,7 @@ def validate_resource_group():
         fail("resource unavailable process table accepted")
     negatives += 1
     if validate_paid_receipt(
-        None, pilot, "live-pilot", models, pilot_caps, auth_brokers, session_marker, session_started, observed_at, used_nonces
+        None, pilot, "live-pilot", models, pilot_caps, auth_brokers, source_identity, session_marker, session_started, observed_at, used_nonces
     ) != "paid-receipt-shape":
         fail("resource missing receipt accepted")
     negatives += 1
@@ -3598,9 +3722,10 @@ def validate_resource_group():
         ("models", {**receipt, "models": {"claude": "other", "codex": models["codex"]}, "nonce": "f" * 32}, "paid-receipt-models"),
         ("caps", {**receipt, "caps": {**caps, "max_turns_per_session": 5}, "nonce": "1" * 32}, "paid-receipt-caps"),
         ("broker", {**receipt, "auth_brokers": {"claude": "0" * 64, "codex": auth_brokers["codex"]}, "nonce": "5" * 32}, "paid-receipt-auth-brokers"),
+        ("source", {**receipt, "source_identity": {**source_identity, "head_sha": "0" * 40}, "nonce": "6" * 32}, "paid-receipt-source"),
     ):
         actual = validate_paid_receipt(
-            mutant, pilot, "live-pilot", models, pilot_caps, auth_brokers, session_marker, session_started, observed_at, used_nonces
+            mutant, pilot, "live-pilot", models, pilot_caps, auth_brokers, source_identity, session_marker, session_started, observed_at, used_nonces
         )
         if actual != expected:
             fail(f"resource receipt mutant mismatch: {label}")
@@ -4214,16 +4339,17 @@ if mode in {"live-pilot", "live"}:
     if not live_session_marker or parse_gate_timestamp(live_session_started) is None:
         fail("paid-call-session-identity missing")
     process_table()
-    live_source_snapshot = paid_source_preflight()
+    live_source_readiness = paid_source_preflight()
     live_auth_readiness = paid_auth_preflight()
     live_auth_brokers = {harness: row["sha256"] for harness, row in live_auth_readiness.items()}
 
     def live_launcher(call_spec):
         enriched = copy.copy(call_spec)
-        enriched["auth_broker_paths"] = {
-            harness: row["path"] for harness, row in live_auth_readiness.items()
+        enriched["auth_broker_bytes"] = {
+            harness: row["bytes"] for harness, row in live_auth_readiness.items()
         }
-        enriched["expected_source_snapshot"] = live_source_snapshot
+        enriched["auth_broker_digests"] = live_auth_brokers
+        enriched["expected_source_snapshot"] = live_source_readiness["snapshot"]
         return actual_paid_launcher(enriched)
 
     live_observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -4233,6 +4359,8 @@ if mode in {"live-pilot", "live"}:
         live_launcher,
         live_evidence_root,
         live_auth_brokers,
+        live_source_readiness["receipt"],
+        lambda: paid_source_preflight()["receipt"],
         live_session_marker,
         live_session_started,
         live_observed_at,
