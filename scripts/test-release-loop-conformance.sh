@@ -1071,18 +1071,20 @@ def validate_policy_files(fixture_root, feature_root=root):
     codex_bin_dir = codex_link.parent
     codex_runtime_root = codex_link.resolve(strict=True).parent.parent
     profile_template = codex_profile_source.read_text(encoding="utf-8")
-    required_profile_literals = {
-        'default_permissions = "conformance"',
-        'approval_policy = "on-request"',
-        'approvals_reviewer = "auto_review"',
-        '":minimal" = "read"',
-        '"__CODEX_BIN_DIR__" = "read"',
-        '"__CODEX_RUNTIME_ROOT__" = "read"',
-        '"__FEATURE_ROOT__" = "read"',
-        '[permissions.conformance.filesystem.":workspace_roots"]',
-        '"." = "write"',
-    }
-    if any(profile_template.count(literal) != 1 for literal in required_profile_literals):
+    expected_profile_template = '''default_permissions = "conformance"
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+
+[permissions.conformance.filesystem]
+":minimal" = "read"
+"__CODEX_BIN_DIR__" = "read"
+"__CODEX_RUNTIME_ROOT__" = "read"
+"__FEATURE_ROOT__" = "read"
+
+[permissions.conformance.filesystem.":workspace_roots"]
+"." = "write"
+'''
+    if profile_template != expected_profile_template:
         fail("Codex permission profile template mismatch")
     runtime_profile = profile_template
     for placeholder, value in (
@@ -2867,10 +2869,16 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                     if harness == "claude" and ledger["claude_active"] is not None:
                         active_id = ledger["claude_active"]["call_id"]
                         settle_claude(ledger, active_id, None)
-                    persist_state(
-                        "failed-active-process" if ledger["active_process"] is not None else "failed",
-                        failure="scheduler-exception",
-                    )
+                    existing_failure = None
+                    if state_path is not None and state_path.exists():
+                        existing_state = json.loads(read_bounded_file(state_path, state_root, 1048576))
+                        if str(existing_state.get("status", "")).startswith("failed"):
+                            existing_failure = existing_state.get("failure")
+                    if existing_failure is None:
+                        persist_state(
+                            "failed-active-process" if ledger["active_process"] is not None else "failed",
+                            failure="scheduler-exception",
+                        )
                     raise
                 if not session_proofs:
                     reject_schedule("process-exit-proof-missing")
@@ -4714,6 +4722,7 @@ def actual_paid_launcher(call_spec):
             "invocation_id": call_spec["call_id"],
             "harness": harness,
             "turns": turns,
+            "codex_profile_sha256": policy_digests.get(codex_profile_path) if harness == "codex" else None,
             "wrapper_audit_sha256": hashlib.sha256(wrapper_audit_path.read_bytes()).hexdigest()
             if wrapper_audit_path.is_file() else None,
             "gh_audit_sha256": hashlib.sha256(gh_audit_path.read_bytes()).hexdigest()
@@ -5603,7 +5612,7 @@ def validate_resource_group():
             if failed_value.get("status") != "failed" or failed_value.get("failure") != diagnostic:
                 fail(f"resource pilot failure state mismatch: {diagnostic}")
             negatives += 1
-        scheduler_failure_calls = {"start-cap": 0, "missing-proof": 0, "active-proof": 0}
+        scheduler_failure_calls = {"start-cap": 0, "missing-proof": 0, "active-proof": 0, "callback-proof": 0}
 
         def no_proof_launcher(call_spec):
             scheduler_failure_calls["missing-proof"] += 1
@@ -5613,6 +5622,12 @@ def validate_resource_group():
             scheduler_failure_calls["active-proof"] += 1
             call_spec["before_invocation"](f"{call_spec['call_id']}:turn-1", 0)
             return {"command_audit": {}}
+
+        def incomplete_callback_launcher(call_spec):
+            scheduler_failure_calls["callback-proof"] += 1
+            turn_id = f"{call_spec['call_id']}:turn-1"
+            call_spec["before_invocation"](turn_id, 0)
+            call_spec["after_invocation"](turn_id, {}, None, 0, 0)
 
         scheduler_failure_cases = (
             (
@@ -5635,6 +5650,15 @@ def validate_resource_group():
                 pilot_caps,
                 active_no_proof_launcher,
                 "process-exit-proof-missing",
+                "failed-active-process",
+                1,
+                time.monotonic,
+            ),
+            (
+                "callback-proof",
+                pilot_caps,
+                incomplete_callback_launcher,
+                "process-exit-proof-incomplete",
                 "failed-active-process",
                 1,
                 time.monotonic,
