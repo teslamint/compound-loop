@@ -41,6 +41,9 @@ mode_args = sys.argv[3:]
 data_root = root / "tests/conformance/release-loop"
 ADAPTER_OUTPUT_CAP = 1048576
 ADAPTER_SUMMARY_CAP = 1500000
+ADAPTER_HANDSHAKE_TIMEOUT = 2
+ADAPTER_TERM_GRACE = 0.2
+ADAPTER_GROUP_ABSENCE_TIMEOUT = 1
 corpus_path = data_root / "corpus.json"
 expected_graders = [
     "design-user-gate",
@@ -2400,12 +2403,14 @@ def descendant_pids(root_pid, table):
     return descendants
 
 
-def signal_pids(pids, signal_value):
-    for pid in sorted(pids):
-        try:
-            os.kill(pid, signal_value)
-        except (ProcessLookupError, PermissionError):
-            pass
+def pid_exists(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def managed_process(command, timeout_seconds, term_grace=0.2, table_reader=process_table):
@@ -2441,7 +2446,6 @@ def managed_process(command, timeout_seconds, term_grace=0.2, table_reader=proce
         table = read_table()
         observed_descendants.update(descendant_pids(process.pid, table))
         os.killpg(process.pid, signal.SIGTERM)
-        signal_pids(observed_descendants, signal.SIGTERM)
         term_sent = True
         deadline = time.monotonic() + term_grace
         while process.poll() is None and time.monotonic() < deadline:
@@ -2451,7 +2455,6 @@ def managed_process(command, timeout_seconds, term_grace=0.2, table_reader=proce
             kill_sent = True
         except ProcessLookupError:
             pass
-        signal_pids(observed_descendants, signal.SIGKILL)
     returncode = process.wait(timeout=2)
     absence_deadline = time.monotonic() + 1
     remaining_descendants = set(observed_descendants)
@@ -2712,8 +2715,13 @@ def normalized_resource_ledger(ledger):
 
 
 def process_proof_complete(proof):
-    required = {"leader_waited", "pgid_absent", "descendants_absent", "escaped_descendants_absent"}
-    return isinstance(proof, dict) and required <= proof.keys() and all(proof[key] is True for key in required)
+    required_true = {"leader_waited", "pgid_absent", "descendants_absent"}
+    return (
+        isinstance(proof, dict)
+        and required_true <= proof.keys()
+        and all(proof[key] is True for key in required_true)
+        and proof.get("observed_escape_detected") is False
+    )
 
 
 def empty_process_table(_root_pid):
@@ -2729,7 +2737,7 @@ def fake_paid_launcher(call_spec):
         "leader_waited": proof["reaped"],
         "pgid_absent": proof["process_group_reaped"],
         "descendants_absent": proof["descendants_absent"],
-        "escaped_descendants_absent": proof["descendants_absent"],
+        "observed_escape_detected": not proof["descendants_absent"],
         "timed_out": proof["timed_out"],
         "term_sent": proof["term_sent"],
         "kill_sent": proof["kill_sent"],
@@ -4235,18 +4243,92 @@ import os
 from pathlib import Path
 import selectors
 import signal
+import stat
 import subprocess
 import sys
 import time
+import traceback
 
 spec = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 summary_path = Path(sys.argv[2])
+error_path = Path(spec["error_path"])
+
+def report_exception(exception_type, exception, exception_traceback):
+    error_path.write_text(
+        "".join(traceback.format_exception(exception_type, exception, exception_traceback)),
+        encoding="utf-8",
+    )
+
+sys.excepthook = report_exception
 stdin_bytes = base64.b64decode(spec["stdin_base64"])
-process = subprocess.Popen(
-    spec["argv"], cwd=spec["cwd"], env=spec["env"],
-    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+launcher_source = (
+    "import json,os,signal,sys,tempfile\\n"
+    "from pathlib import Path\\n"
+    "record_path=Path(sys.argv[1]);nonce=sys.argv[2];watch_fd=int(sys.argv[3]);target=sys.argv[4:]\\n"
+    "payload=(json.dumps(dict(nonce=nonce,pid=os.getpid(),pgid=os.getpgrp(),sid=os.getsid(0)),"
+    "sort_keys=True)+'\\\\n').encode()\\n"
+    "descriptor,temporary=tempfile.mkstemp(prefix='.adapter-group-',dir=str(record_path.parent))\\n"
+    "try:\\n"
+    " os.fchmod(descriptor,0o400)\\n"
+    " written=0\\n"
+    " while written<len(payload): written+=os.write(descriptor,payload[written:])\\n"
+    " os.fsync(descriptor);os.close(descriptor);descriptor=None\\n"
+    " os.replace(temporary,record_path)\\n"
+    " directory=os.open(str(record_path.parent),os.O_RDONLY)\\n"
+    " try: os.fsync(directory)\\n"
+    " finally: os.close(directory)\\n"
+    "finally:\\n"
+    " if descriptor is not None: os.close(descriptor)\\n"
+    " if os.path.exists(temporary): os.unlink(temporary)\\n"
+    "watcher=os.fork()\\n"
+    "if watcher==0:\\n"
+    " for descriptor in (0,1,2):\\n"
+    "  try: os.close(descriptor)\\n"
+    "  except OSError: pass\\n"
+    " while os.read(watch_fd,1): pass\\n"
+    " os.killpg(os.getpgrp(),signal.SIGKILL)\\n"
+    " os._exit(125)\\n"
+    "os.close(watch_fd)\\n"
+    "if os.read(0,1)!=b'R': raise SystemExit(125)\\n"
+    "os.execvpe(target[0],target,os.environ)\\n"
 )
-process.stdin.write(stdin_bytes)
+watch_read, watch_write = os.pipe()
+process = subprocess.Popen(
+    [sys.executable, "-c", launcher_source, spec["process_group_path"],
+     spec["process_group_nonce"], str(watch_read), *spec["argv"]],
+    cwd=spec["cwd"], env=spec["env"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    start_new_session=True,
+    pass_fds=(watch_read,),
+)
+os.close(watch_read)
+record_path = Path(spec["process_group_path"])
+record_deadline = time.monotonic() + spec["handshake_timeout"]
+while not record_path.is_file() and process.poll() is None and time.monotonic() < record_deadline:
+    time.sleep(0.01)
+try:
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    metadata = record_path.stat()
+    if (
+        set(record) != {{"nonce", "pid", "pgid", "sid"}}
+        or record["nonce"] != spec["process_group_nonce"]
+        or record["pid"] != process.pid
+        or record["pgid"] != process.pid
+        or record["sid"] != process.pid
+        or stat.S_IMODE(metadata.st_mode) != 0o400
+        or metadata.st_uid != os.getuid()
+        or os.getpgid(process.pid) != process.pid
+        or os.getsid(process.pid) != process.pid
+    ):
+        raise ValueError("adapter process group handshake mismatch")
+except Exception:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+    raise
+process.stdin.write(b"R" + stdin_bytes)
 process.stdin.close()
 selector = selectors.DefaultSelector()
 selector.register(process.stdout, selectors.EVENT_READ, "stdout")
@@ -4255,28 +4337,67 @@ buffers = {{"stdout": bytearray(), "stderr": bytearray()}}
 started = time.monotonic()
 overflow = False
 timed_out = False
+term_sent = False
+kill_sent = False
+
+def process_group_exists():
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+def signal_process_group(signal_value):
+    try:
+        os.killpg(process.pid, signal_value)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+def terminate_process_group(graceful):
+    global term_sent, kill_sent
+    if graceful and signal_process_group(signal.SIGTERM):
+        term_sent = True
+        deadline = time.monotonic() + spec["term_grace"]
+        while time.monotonic() < deadline:
+            process.poll()
+            time.sleep(0.01)
+    if signal_process_group(signal.SIGKILL):
+        kill_sent = True
+
 while selector.get_map():
-    if time.monotonic() - started > spec["timeout"]:
-        process.kill()
+    if not timed_out and time.monotonic() - started > spec["timeout"]:
+        terminate_process_group(True)
         timed_out = True
     for key, _ in selector.select(0.1):
         chunk = os.read(key.fileobj.fileno(), 8192)
         if not chunk:
             selector.unregister(key.fileobj)
             continue
-        buffers[key.data].extend(chunk)
-        if len(buffers["stdout"]) + len(buffers["stderr"]) > spec["output_cap"]:
-            process.kill()
+        retained = len(buffers["stdout"]) + len(buffers["stderr"])
+        remaining = max(0, spec["output_cap"] - retained)
+        buffers[key.data].extend(chunk[:remaining])
+        if not overflow and len(chunk) > remaining:
+            terminate_process_group(False)
             overflow = True
     if (overflow or timed_out) and process.poll() is not None:
         continue
 returncode = process.wait()
+os.close(watch_write)
+absence_deadline = time.monotonic() + spec["group_absence_timeout"]
+while process_group_exists() and time.monotonic() < absence_deadline:
+    time.sleep(0.01)
 summary = {{
     "returncode": returncode,
-    "stdout_base64": base64.b64encode(bytes(buffers["stdout"][:spec["output_cap"]])).decode(),
-    "stderr_base64": base64.b64encode(bytes(buffers["stderr"][:spec["output_cap"]])).decode(),
+    "stdout_base64": base64.b64encode(bytes(buffers["stdout"])).decode(),
+    "stderr_base64": base64.b64encode(bytes(buffers["stderr"])).decode(),
     "overflow": overflow,
     "timed_out": timed_out,
+    "term_sent": term_sent,
+    "kill_sent": kill_sent,
+    "process_group_absent": not process_group_exists(),
 }}
 summary_path.write_text(json.dumps(summary, sort_keys=True) + "\\n", encoding="utf-8")
 '''
@@ -4289,6 +4410,9 @@ def managed_adapter_call(command, cwd, env, stdin_bytes, timeout_seconds, work_r
     supervisor = work_root / "adapter-supervisor.py"
     spec_path = work_root / f"adapter-spec-{uuid.uuid4().hex}.json"
     summary_path = work_root / f"adapter-summary-{uuid.uuid4().hex}.json"
+    error_path = work_root / f"adapter-error-{uuid.uuid4().hex}"
+    process_group_path = work_root / f"adapter-process-group-{uuid.uuid4().hex}"
+    process_group_nonce = uuid.uuid4().hex
     write_adapter_supervisor(supervisor)
     spec = {
         "argv": command,
@@ -4296,17 +4420,82 @@ def managed_adapter_call(command, cwd, env, stdin_bytes, timeout_seconds, work_r
         "env": env,
         "stdin_base64": base64.b64encode(stdin_bytes).decode(),
         "timeout": timeout_seconds,
+        "handshake_timeout": ADAPTER_HANDSHAKE_TIMEOUT,
+        "term_grace": ADAPTER_TERM_GRACE,
+        "group_absence_timeout": ADAPTER_GROUP_ABSENCE_TIMEOUT,
         "output_cap": ADAPTER_OUTPUT_CAP,
+        "process_group_path": str(process_group_path),
+        "process_group_nonce": process_group_nonce,
+        "error_path": str(error_path),
     }
     write_json_atomic(spec_path, spec, work_root)
     proof = managed_process(
         [sys.executable, str(supervisor), str(spec_path), str(summary_path)],
-        timeout_seconds + 2,
+        timeout_seconds
+        + ADAPTER_HANDSHAKE_TIMEOUT
+        + ADAPTER_TERM_GRACE
+        + ADAPTER_GROUP_ABSENCE_TIMEOUT
+        + 1,
         table_reader=table_reader,
     )
+    target_group_absent = True
+    record_deadline = time.monotonic() + ADAPTER_HANDSHAKE_TIMEOUT
+    while not process_group_path.is_file() and time.monotonic() < record_deadline:
+        time.sleep(0.01)
+    if process_group_path.is_file():
+        group_record = json.loads(read_bounded_file(process_group_path, work_root, 512))
+        if (
+            set(group_record) != {"nonce", "pid", "pgid", "sid"}
+            or group_record["nonce"] != process_group_nonce
+            or not all(isinstance(group_record[key], int) for key in ("pid", "pgid", "sid"))
+            or group_record["pid"] <= 1
+            or group_record["pid"] != group_record["pgid"]
+            or group_record["pid"] != group_record["sid"]
+        ):
+            fail("adapter process group record invalid")
+        group_metadata = process_group_path.stat()
+        if stat.S_IMODE(group_metadata.st_mode) != 0o400 or group_metadata.st_uid != os.getuid():
+            fail("adapter process group record unsafe")
+        target_group = group_record["pgid"]
+        if target_group == os.getpgrp():
+            fail("adapter process group record unsafe")
+        try:
+            if os.getpgid(group_record["pid"]) != target_group or os.getsid(group_record["pid"]) != target_group:
+                fail("adapter process group identity changed")
+            os.killpg(target_group, 0)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            target_group_absent = False
+        else:
+            target_group_absent = False
+        absence_deadline = time.monotonic() + ADAPTER_GROUP_ABSENCE_TIMEOUT
+        while time.monotonic() < absence_deadline:
+            try:
+                os.killpg(target_group, 0)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                target_group_absent = False
+            time.sleep(0.01)
+        try:
+            os.killpg(target_group, 0)
+        except ProcessLookupError:
+            target_group_absent = True
+        except PermissionError:
+            target_group_absent = False
+        else:
+            target_group_absent = False
+    if not target_group_absent:
+        fail("adapter process group survived cleanup")
     if not proof["reaped"] or not proof["process_group_reaped"] or not proof["descendants_absent"]:
         fail("adapter process proof incomplete")
+    if not summary_path.is_file():
+        detail = read_bounded_file(error_path, work_root, 4096).strip() if error_path.is_file() else "no detail"
+        fail(f"adapter supervisor failed: returncode={proof['returncode']}: {detail}")
     summary = json.loads(read_bounded_file(summary_path, work_root, ADAPTER_SUMMARY_CAP))
+    if not summary.get("process_group_absent"):
+        fail("adapter process group proof incomplete")
     if summary.get("overflow"):
         fail("adapter output exceeded cap")
     if summary.get("timed_out") or proof["timed_out"]:
@@ -4317,10 +4506,10 @@ def managed_adapter_call(command, cwd, env, stdin_bytes, timeout_seconds, work_r
         "leader_waited": proof["reaped"],
         "pgid_absent": proof["process_group_reaped"],
         "descendants_absent": proof["descendants_absent"],
-        "escaped_descendants_absent": proof["descendants_absent"],
+        "observed_escape_detected": not proof["descendants_absent"],
         "timed_out": proof["timed_out"],
-        "term_sent": proof["term_sent"],
-        "kill_sent": proof["kill_sent"],
+        "term_sent": proof["term_sent"] or summary.get("term_sent", False),
+        "kill_sent": proof["kill_sent"] or summary.get("kill_sent", False),
     }
     return subprocess.CompletedProcess(command, summary["returncode"], stdout, stderr), normalized_proof
 
@@ -4708,7 +4897,7 @@ def actual_paid_launcher(call_spec):
         "leader_waited": all(proof["leader_waited"] for proof in proofs),
         "pgid_absent": all(proof["pgid_absent"] for proof in proofs),
         "descendants_absent": all(proof["descendants_absent"] for proof in proofs),
-        "escaped_descendants_absent": all(proof["escaped_descendants_absent"] for proof in proofs),
+        "observed_escape_detected": any(proof["observed_escape_detected"] for proof in proofs),
     }
     wrapper_audit_path = run_root / "wrapper-audit.jsonl"
     gh_audit_path = run_root / "gh-audit.jsonl"
@@ -4812,8 +5001,20 @@ def validate_resource_group():
         fail("resource live adapter environment is not closed")
     with tempfile.TemporaryDirectory(prefix="adapter-cap-", dir=str(root / ".release-loop/evidence/U6")) as cap_temp:
         cap_root = Path(cap_temp)
+        stdin_payload = b"adapter-handshake-input"
+        stdin_result, _ = managed_adapter_call(
+            [sys.executable, "-c", "import sys;sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+            cap_root,
+            {"PATH": "/usr/bin:/bin"},
+            stdin_payload,
+            30,
+            cap_root,
+            table_reader=empty_process_table,
+        )
+        if stdin_result.returncode != 0 or stdin_result.stdout.encode() != stdin_payload:
+            fail("resource adapter handshake consumed target stdin")
         below, _ = managed_adapter_call(
-            [sys.executable, "-c", "import sys;sys.stdout.write('x'*1048575)"],
+            [sys.executable, "-c", f"import sys;sys.stdout.write('x'*{ADAPTER_OUTPUT_CAP - 1})"],
             cap_root,
             {"PATH": "/usr/bin:/bin"},
             b"",
@@ -4821,11 +5022,32 @@ def validate_resource_group():
             cap_root,
             table_reader=empty_process_table,
         )
-        if below.returncode != 0 or len(below.stdout) != 1048575:
+        if below.returncode != 0 or len(below.stdout) != ADAPTER_OUTPUT_CAP - 1:
             fail("resource adapter below-cap output rejected")
+        exact_stdout = ADAPTER_OUTPUT_CAP // 2
+        exact_stderr = ADAPTER_OUTPUT_CAP - exact_stdout
+        exact, _ = managed_adapter_call(
+            [
+                sys.executable,
+                "-c",
+                f"import sys;sys.stdout.write('x'*{exact_stdout});sys.stderr.write('y'*{exact_stderr})",
+            ],
+            cap_root,
+            {"PATH": "/usr/bin:/bin"},
+            b"",
+            30,
+            cap_root,
+            table_reader=empty_process_table,
+        )
+        if (
+            exact.returncode != 0
+            or exact.stdout != "x" * exact_stdout
+            or exact.stderr != "y" * exact_stderr
+        ):
+            fail("resource adapter exact-cap output rejected")
         try:
             managed_adapter_call(
-                [sys.executable, "-c", "import sys;sys.stdout.write('x'*1048577)"],
+                [sys.executable, "-c", f"import sys;sys.stdout.write('x'*{ADAPTER_OUTPUT_CAP + 1})"],
                 cap_root,
                 {"PATH": "/usr/bin:/bin"},
                 b"",
@@ -4838,6 +5060,125 @@ def validate_resource_group():
                 fail(f"resource adapter cap diagnostic mismatch: {exc}")
         else:
             fail("resource adapter above-cap output accepted")
+        mixed_stream_bytes = ADAPTER_OUTPUT_CAP * 3 // 4
+        try:
+            managed_adapter_call(
+                [
+                    sys.executable,
+                    "-c",
+                    f"import sys;sys.stdout.write('x'*{mixed_stream_bytes});"
+                    f"sys.stderr.write('y'*{mixed_stream_bytes})",
+                ],
+                cap_root,
+                {"PATH": "/usr/bin:/bin"},
+                b"",
+                30,
+                cap_root,
+                table_reader=empty_process_table,
+            )
+        except ValueError as exc:
+            if "adapter output exceeded cap" not in str(exc):
+                fail(f"resource adapter mixed-stream diagnostic mismatch: {exc}")
+        else:
+            fail("resource adapter mixed-stream overflow accepted")
+        descendant_pid_path = cap_root / "adapter-descendant.pid"
+        descendant_code = (
+            "import pathlib,subprocess,sys,time;"
+            "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(3)']);"
+            f"pathlib.Path({str(descendant_pid_path)!r}).write_text(str(child.pid));"
+            f"sys.stdout.write('x'*{ADAPTER_OUTPUT_CAP + 1});sys.stdout.flush();time.sleep(3)"
+        )
+        try:
+            managed_adapter_call(
+                [sys.executable, "-c", descendant_code],
+                cap_root,
+                {"PATH": "/usr/bin:/bin"},
+                b"",
+                10,
+                cap_root,
+                table_reader=empty_process_table,
+            )
+        except ValueError as exc:
+            if "adapter output exceeded cap" not in str(exc):
+                fail(f"resource adapter descendant diagnostic mismatch: {exc}")
+        else:
+            fail("resource adapter descendant overflow accepted")
+        descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
+        descendant_deadline = time.monotonic() + 1
+        while pid_exists(descendant_pid) and time.monotonic() < descendant_deadline:
+            time.sleep(0.01)
+        if pid_exists(descendant_pid):
+            fail("resource adapter descendant survived overflow")
+        timeout_term_path = cap_root / "adapter-timeout-term"
+        timeout_pid_path = cap_root / "adapter-timeout.pid"
+        timeout_code = (
+            "import os,pathlib,signal,time;"
+            f"term_path=pathlib.Path({str(timeout_term_path)!r});"
+            f"pathlib.Path({str(timeout_pid_path)!r}).write_text(str(os.getpid()));"
+            "signal.signal(signal.SIGTERM,lambda *_:term_path.write_text('term'));"
+            "time.sleep(3)"
+        )
+        timeout_summaries = set(cap_root.glob("adapter-summary-*"))
+        try:
+            managed_adapter_call(
+                [sys.executable, "-c", timeout_code],
+                cap_root,
+                {"PATH": "/usr/bin:/bin"},
+                b"",
+                0.2,
+                cap_root,
+                table_reader=empty_process_table,
+            )
+        except ValueError as exc:
+            if "adapter session timeout" not in str(exc):
+                fail(f"resource adapter timeout diagnostic mismatch: {exc}")
+        else:
+            fail("resource adapter timeout accepted")
+        if not timeout_term_path.is_file():
+            fail("resource adapter timeout skipped TERM grace")
+        timeout_summary_paths = set(cap_root.glob("adapter-summary-*")) - timeout_summaries
+        if len(timeout_summary_paths) != 1:
+            fail("resource adapter timeout summary missing")
+        timeout_summary = json.loads(read_bounded_file(timeout_summary_paths.pop(), cap_root, ADAPTER_SUMMARY_CAP))
+        if not timeout_summary.get("term_sent") or not timeout_summary.get("kill_sent"):
+            fail("resource adapter timeout signal proof incomplete")
+        timeout_pid = int(timeout_pid_path.read_text(encoding="utf-8"))
+        timeout_deadline = time.monotonic() + 1
+        while pid_exists(timeout_pid) and time.monotonic() < timeout_deadline:
+            time.sleep(0.01)
+        if pid_exists(timeout_pid):
+            fail("resource adapter survived timeout KILL")
+        crash_pid_path = cap_root / "adapter-crash.pid"
+        crash_child_pid_path = cap_root / "adapter-crash-child.pid"
+        crash_code = (
+            "import os,pathlib,subprocess,sys,time;"
+            "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(3)']);"
+            f"pathlib.Path({str(crash_pid_path)!r}).write_text(str(os.getpid()));"
+            f"pathlib.Path({str(crash_child_pid_path)!r}).write_text(str(child.pid));"
+            "os.kill(os.getppid(),9);time.sleep(3)"
+        )
+        try:
+            managed_adapter_call(
+                [sys.executable, "-c", crash_code],
+                cap_root,
+                {"PATH": "/usr/bin:/bin"},
+                b"",
+                10,
+                cap_root,
+                table_reader=empty_process_table,
+            )
+        except ValueError as exc:
+            if "adapter supervisor failed" not in str(exc):
+                fail(f"resource adapter supervisor crash diagnostic mismatch: {exc}")
+        else:
+            fail("resource adapter supervisor crash accepted")
+        crash_pid = int(crash_pid_path.read_text(encoding="utf-8"))
+        crash_child_pid = int(crash_child_pid_path.read_text(encoding="utf-8"))
+        crash_deadline = time.monotonic() + ADAPTER_GROUP_ABSENCE_TIMEOUT
+        while any(pid_exists(pid) for pid in (crash_pid, crash_child_pid)) and time.monotonic() < crash_deadline:
+            time.sleep(0.01)
+        if any(pid_exists(pid) for pid in (crash_pid, crash_child_pid)):
+            fail("resource adapter group survived supervisor crash")
     caps = {
         "max_turns_per_session": 4,
         "per_turn_timeout": 30,
@@ -5216,12 +5557,22 @@ def validate_resource_group():
         0.05,
         table_reader=scripted_process_table,
     )
-    if not escaped["timed_out"] or not escaped["descendants_absent"] or not escaped["observed_descendants"]:
+    if not escaped["timed_out"] or escaped["descendants_absent"] or not escaped["observed_descendants"]:
         fail("resource escaped descendant control failed")
+    escaped_child_pid = int(escaped_pid_file.read_text())
+    try:
+        os.kill(escaped_child_pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    escaped_deadline = time.monotonic() + 1
+    while pid_exists(escaped_child_pid) and time.monotonic() < escaped_deadline:
+        time.sleep(0.01)
+    if pid_exists(escaped_child_pid):
+        fail("resource escaped descendant fixture cleanup failed")
     if escaped_pid_file.exists():
         escaped_pid_file.unlink()
     process_controls += 1
-    process_proof = [normal, timeout, resistant, escaped]
+    process_proof = [normal, timeout, resistant]
     manifest = generation_manifest(models, results, full_command, full_receipt, full_ledger, process_proof)
     if validate_generation_manifest(manifest) is not None:
         fail("resource generation manifest control failed")
@@ -5320,7 +5671,7 @@ def validate_resource_group():
                     "leader_waited": raw_proof["reaped"],
                     "pgid_absent": raw_proof["process_group_reaped"],
                     "descendants_absent": raw_proof["descendants_absent"],
-                    "escaped_descendants_absent": raw_proof["descendants_absent"],
+                    "observed_escape_detected": not raw_proof["descendants_absent"],
                 }
                 call_spec["after_invocation"](turn_id, last_proof, None, None, 0)
             return {
