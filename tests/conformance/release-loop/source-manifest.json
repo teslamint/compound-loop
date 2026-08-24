@@ -77,7 +77,7 @@
       "path": "skills/release-loop/references/resume-and-archive.md",
       "heading": "### Archive procedure",
       "text": "3. Move remaining contents from `briefs/`, `reports/`, `reviews/`, and `evidence/` into the destination first, but keep `progress.md` live and nonterminal.",
-      "sha256": "310cd4d15aac100e3e79cf61f0a7297b9075252577f2512800fec953cbcbcba3"
+      "sha256": "7280e838872cb5acdb7ed046cdd62d0060768fdfd3048931d12d2c0594467989"
     }
   ]
 }

@@ -2991,6 +2991,22 @@ def git_common_directory(repository_root):
     return common.resolve(strict=True)
 
 
+def existing_path_has_symlink(base_root, target_path):
+    try:
+        relative = target_path.relative_to(base_root)
+    except ValueError:
+        return True
+    current = base_root
+    for part in relative.parts:
+        current = current / part
+        if current.exists() or current.is_symlink():
+            if current.is_symlink():
+                return True
+        else:
+            break
+    return False
+
+
 def verify_handoff_directory(handoff_root):
     if not handoff_root.is_dir() or handoff_root.is_symlink():
         fail("handoff missing or unsafe")
@@ -3047,9 +3063,13 @@ def install_base_generation_from_handoff(handoff_root, target):
 
 
 def install_handoff(feature_root, base_root, generation_root, handoff_name, fail_at=None):
-    feature_root = feature_root.resolve(strict=True)
-    base_root = base_root.resolve(strict=True)
-    if feature_root.is_symlink() or base_root.is_symlink() or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", handoff_name):
+    feature_argument = Path(feature_root)
+    base_argument = Path(base_root)
+    if feature_argument.is_symlink() or base_argument.is_symlink():
+        fail("handoff root or name invalid")
+    feature_root = feature_argument.resolve(strict=True)
+    base_root = base_argument.resolve(strict=True)
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", handoff_name):
         fail("handoff root or name invalid")
     if git_common_directory(feature_root) != git_common_directory(base_root):
         fail("handoff foreign repository")
@@ -3130,9 +3150,18 @@ def tracked_tree_clean(repository_root, allowed_paths=()):
 
 
 def publish_baseline_transition(base_root, handoff_root, archive_source, baseline_path, policy_path, roadmap_path, validator):
-    base_root = base_root.resolve(strict=True)
+    base_argument = Path(base_root)
+    if base_argument.is_symlink():
+        fail("baseline base root unsafe")
+    base_root = base_argument.resolve(strict=True)
     handoff_root = handoff_root.resolve(strict=True)
-    archive_source = archive_source.resolve(strict=False)
+    archive_argument = Path(archive_source)
+    expected_archive_source = base_root / ".release-loop/evidence/live-generation"
+    archive_source = archive_argument.resolve(strict=False)
+    if archive_source != expected_archive_source:
+        fail("baseline archive source path mismatch")
+    if archive_argument.is_symlink() or existing_path_has_symlink(base_argument.absolute(), archive_argument.absolute()):
+        fail("baseline archive source unsafe")
     baseline_path = baseline_path.resolve(strict=False)
     policy_path = policy_path.resolve(strict=True)
     roadmap_path = roadmap_path.resolve(strict=True)
@@ -3266,7 +3295,7 @@ def mark_v2_acceptance(progress_path, generation_digest, archive_root, observed_
         if f"V2 accepted generation={generation_digest}" not in text_value:
             fail("archive V2 accepted digest mismatch")
         return
-    if record.group("status") != "started" or phase.group(1) != "retro" or phase_status.group(1) in {"complete", "blocked"}:
+    if record.group("status") != "started" or phase.group(1) != "retro" or phase_status.group(1) != "in-progress":
         fail("archive V2 nonterminal state mismatch")
     replacement = record.group(0).replace("  status: started\n", "  status: accepted\n", 1)
     text_value = text_value[:record.start()] + replacement + text_value[record.end():]
@@ -3276,6 +3305,33 @@ def mark_v2_acceptance(progress_path, generation_digest, archive_root, observed_
     write_bytes_atomic(progress_path, text_value.encode("utf-8"), progress_path.parent)
 
 
+def remove_consumed_handoff_after_terminal(base_root, archive_root, handoff_root, digest):
+    expected_parent = (base_root / ".release-loop/.handoff").resolve(strict=True)
+    try:
+        handoff_root.resolve(strict=True).relative_to(expected_parent)
+    except (FileNotFoundError, ValueError):
+        fail("handoff cleanup target mismatch")
+    consumed = load_json(handoff_root / "consumed.json")
+    if (
+        consumed.get("generation_manifest_sha256") != digest
+        or consumed.get("archive_root") != str(archive_root.relative_to(base_root))
+    ):
+        fail("handoff cleanup consumed marker mismatch")
+    archived_progress = archive_root / "progress.md"
+    mark_v2_acceptance(
+        archived_progress, digest, str(archive_root.relative_to(base_root)), consumed.get("consumed_at", "")
+    )
+    text_value = archived_progress.read_text(encoding="utf-8")
+    if not re.search(r"(?m)^phase: done$", text_value) or not re.search(r"(?m)^phase_status: complete$", text_value):
+        fail("handoff cleanup terminal progress missing")
+    shutil.rmtree(handoff_root)
+    directory_descriptor = os.open(str(expected_parent), os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
 def verify_archive_transition(base_root, archive_root, baseline_path, handoff_root, observed_at):
     base_root = base_root.resolve(strict=True)
     archive_root = archive_root.resolve(strict=True)
@@ -3283,28 +3339,47 @@ def verify_archive_transition(base_root, archive_root, baseline_path, handoff_ro
         archive_root.relative_to((base_root / ".release-loop/archive").resolve(strict=True))
     except ValueError:
         fail("archive root outside archive tree")
+    handoff_argument = Path(handoff_root)
+    expected_handoff_parent = (base_root / ".release-loop/.handoff").resolve(strict=True)
+    try:
+        handoff_parent = handoff_argument.parent.resolve(strict=True)
+    except FileNotFoundError:
+        fail("archive handoff path mismatch")
+    if handoff_parent != expected_handoff_parent:
+        fail("archive handoff path mismatch")
     baseline = load_json(baseline_path)
-    handoff_generation, _, _ = verify_handoff_directory(handoff_root)
     staged_generation = verified_generation_tree(archive_root / "evidence/live-generation")
     digest = staged_generation["manifest_sha256"]
-    if baseline.get("generation_manifest_sha256") != digest or handoff_generation["manifest_sha256"] != digest:
+    if baseline.get("generation_manifest_sha256") != digest:
         fail("archive generation digest mismatch")
-    consumed_path = handoff_root / "consumed.json"
     live_progress_path = base_root / ".release-loop/progress.md"
     progress_path = live_progress_path if live_progress_path.is_file() else archive_root / "progress.md"
     if not progress_path.is_file():
         fail("archive progress evidence missing")
+    relative_archive = str(archive_root.relative_to(base_root))
+    if not handoff_argument.exists():
+        if live_progress_path.is_file():
+            fail("archive handoff missing before terminal move")
+        mark_v2_acceptance(progress_path, digest, relative_archive, observed_at)
+        return digest
+    handoff_root = handoff_argument.resolve(strict=True)
+    handoff_generation, _, _ = verify_handoff_directory(handoff_root)
+    if handoff_generation["manifest_sha256"] != digest:
+        fail("archive generation digest mismatch")
+    consumed_path = handoff_root / "consumed.json"
     if consumed_path.is_file():
         consumed = load_json(consumed_path)
-        if consumed.get("generation_manifest_sha256") != digest or consumed.get("archive_root") != str(archive_root.relative_to(base_root)):
+        if consumed.get("generation_manifest_sha256") != digest or consumed.get("archive_root") != relative_archive:
             fail("archive consumed marker mismatch")
-        mark_v2_acceptance(progress_path, digest, str(archive_root.relative_to(base_root)), observed_at)
+        mark_v2_acceptance(progress_path, digest, relative_archive, observed_at)
+        if not live_progress_path.is_file():
+            remove_consumed_handoff_after_terminal(base_root, archive_root, handoff_root, digest)
         return digest
-    mark_v2_acceptance(progress_path, digest, str(archive_root.relative_to(base_root)), observed_at)
+    mark_v2_acceptance(progress_path, digest, relative_archive, observed_at)
     consumed = {
         "schema": "release-loop-handoff-consumed/v1",
         "generation_manifest_sha256": digest,
-        "archive_root": str(archive_root.relative_to(base_root)),
+        "archive_root": relative_archive,
         "consumed_at": observed_at,
     }
     write_json_atomic(consumed_path, consumed, handoff_root)
@@ -3459,10 +3534,45 @@ def validate_transition_group():
         if repeated_disposition != "existing" or repeated_digest != handoff_digest:
             fail("transition handoff idempotence failed")
         controls += 1
+        feature_link = temp_root / "feature-link"
+        base_link = temp_root / "base-link"
+        feature_link.symlink_to(feature_root, target_is_directory=True)
+        base_link.symlink_to(base_root, target_is_directory=True)
+        for linked_feature, linked_base, name in (
+            (feature_link, base_root, "feature-link"),
+            (feature_root, base_link, "base-link"),
+        ):
+            try:
+                install_handoff(linked_feature, linked_base, generation_root, name)
+            except ValueError as exc:
+                if "handoff root or name invalid" not in str(exc):
+                    fail(f"transition root symlink diagnostic mismatch: {exc}")
+            else:
+                fail("transition worktree root symlink accepted")
+            negatives += 1
         archive_source = base_root / ".release-loop/evidence/live-generation"
         baseline_path = data_dir / "baseline.json"
         policy_path = data_dir / "baseline-policy.json"
         roadmap_path = base_root / "ROADMAP.md"
+        outside_archive_source = temp_root / "outside-live-generation"
+        try:
+            publish_baseline_transition(
+                base_root,
+                handoff_root,
+                outside_archive_source,
+                baseline_path,
+                policy_path,
+                roadmap_path,
+                lambda _root: "ALL CHECKS PASSED",
+            )
+        except ValueError as exc:
+            if "baseline archive source path mismatch" not in str(exc):
+                fail(f"transition archive-source path diagnostic mismatch: {exc}")
+        else:
+            fail("transition outside archive source accepted")
+        if outside_archive_source.exists():
+            fail("transition outside archive source mutated")
+        negatives += 1
         published_digest, baseline = publish_baseline_transition(
             base_root,
             handoff_root,
@@ -3539,6 +3649,21 @@ def validate_transition_group():
         else:
             fail("transition archive digest mismatch accepted")
         negatives += 1
+        progress_path.write_text(
+            valid_progress_text.replace("phase_status: in-progress", "phase_status: waiting-user"),
+            encoding="utf-8",
+        )
+        try:
+            verify_archive_transition(
+                base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:01Z"
+            )
+        except ValueError as exc:
+            if "archive V2 nonterminal state mismatch" not in str(exc):
+                fail(f"transition waiting-user V2 diagnostic mismatch: {exc}")
+        else:
+            fail("transition waiting-user V2 accepted")
+        progress_path.write_text(valid_progress_text, encoding="utf-8")
+        negatives += 1
         progress_path.write_text(valid_progress_text.replace("  id: V2", "  id: V1"), encoding="utf-8")
         try:
             verify_archive_transition(
@@ -3576,6 +3701,12 @@ def validate_transition_group():
             base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:03Z"
         ) != handoff_digest:
             fail("transition moved progress resume failed")
+        if handoff_root.exists():
+            fail("transition consumed handoff cleanup failed")
+        if verify_archive_transition(
+            base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:04Z"
+        ) != handoff_digest:
+            fail("transition post-cleanup resume failed")
         controls += 1
 
         extra_generation = temp_root / "extra-generation"
