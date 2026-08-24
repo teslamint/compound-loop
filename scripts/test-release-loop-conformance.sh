@@ -2672,9 +2672,11 @@ def finalize_generation_directory(
     approval_packet=None,
 ):
     target.mkdir(parents=True, exist_ok=False)
+    persisted_ledger = normalized_resource_ledger(ledger)
+    persisted_ledger["approved_caps"] = receipt["caps"]
     artifacts = {
         "results.json": results,
-        "resource-ledger.json": normalized_resource_ledger(ledger),
+        "resource-ledger.json": persisted_ledger,
         "process-proofs.json": process_proofs,
         "command-audit.json": command_audit,
         "receipt-consumption.json": consumption,
@@ -2794,6 +2796,8 @@ def run_paid_mode_entry(
     if mode_name == "live-pilot":
         derived_caps = derive_full_run_caps(caps, results, ledger)
         derived_full_command = full_run_command(derived_caps, models)
+        pilot_settlement = normalized_resource_ledger(ledger)
+        pilot_settlement["approved_caps"] = caps
         approval_packet = build_paid_approval_packet(
             "live",
             derived_full_command,
@@ -2803,7 +2807,7 @@ def run_paid_mode_entry(
             source_identity,
             {
                 "results_sha256": object_digest(results),
-                "settlement_sha256": object_digest(normalized_resource_ledger(ledger)),
+                "settlement_sha256": object_digest(pilot_settlement),
             },
         )
     generation_root = evidence_root / f"{mode_name}-generation-{receipt['nonce']}"
@@ -2894,6 +2898,22 @@ def install_full_approval(arguments, evidence_root, auth_brokers, source_identit
     }
     if packet.get("pilot_evidence") != expected_pilot_evidence:
         fail("full approval pilot evidence mismatch")
+    pilot_invariant = validate_pilot_results(generation_results)
+    if pilot_invariant is not None:
+        fail(pilot_invariant)
+    pilot_caps = generation_ledger.get("approved_caps")
+    if validate_resource_caps(pilot_caps) is not None:
+        fail("full approval pilot caps missing")
+    try:
+        pilot_ledger_for_derivation = {
+            "claude_spent": Decimal(generation_ledger["claude_spent"]),
+        }
+    except (KeyError, ArithmeticError):
+        fail("full approval pilot settlement invalid")
+    derived_caps = derive_full_run_caps(pilot_caps, generation_results, pilot_ledger_for_derivation)
+    derived_command = full_run_command(derived_caps, models)
+    if caps != derived_caps or exact_command != derived_command:
+        fail("full approval command not pilot-derived")
     target = evidence_root / "live-approval.json"
     write_bytes_atomic(target, payload, evidence_root)
     installed = read_bounded_file(target, evidence_root, 1048576).encode("utf-8")
@@ -3954,6 +3974,78 @@ def validate_resource_group():
                 fail(f"resource pilot evidence diagnostic mismatch: {exc}")
         else:
             fail("resource arbitrary pilot evidence accepted")
+
+        def rebuild_generation_commit(generation_path):
+            manifest_path = generation_path / "manifest.json"
+            manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_value["results_sha256"] = hashlib.sha256((generation_path / "results.json").read_bytes()).hexdigest()
+            manifest_value["full_run_approval_sha256"] = hashlib.sha256(
+                (generation_path / "full-run-approval.json").read_bytes()
+            ).hexdigest()
+            write_json_atomic(manifest_path, manifest_value, generation_path)
+            write_json_atomic(
+                generation_path / "complete.json",
+                {
+                    "schema": "release-loop-generation-complete/v1",
+                    "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                },
+                generation_path,
+            )
+
+        failed_generation = paid_root / "failed-pilot-generation"
+        shutil.copytree(Path(pilot_entry["generation_path"]), failed_generation)
+        failed_results_path = failed_generation / "results.json"
+        failed_results = json.loads(failed_results_path.read_text(encoding="utf-8"))
+        failed_results[0]["infrastructure_status"] = "failed"
+        failed_results[0]["verdict"] = "unknown"
+        write_json_atomic(failed_results_path, failed_results, failed_generation)
+        failed_packet_path = failed_generation / "full-run-approval.json"
+        failed_packet = json.loads(failed_packet_path.read_text(encoding="utf-8"))
+        failed_packet["pilot_evidence"]["results_sha256"] = object_digest(failed_results)
+        write_json_atomic(failed_packet_path, failed_packet, failed_generation)
+        rebuild_generation_commit(failed_generation)
+        try:
+            install_full_approval(
+                [
+                    "--generation", str(failed_generation),
+                    "--approved-sha256", hashlib.sha256(failed_packet_path.read_bytes()).hexdigest(),
+                ],
+                paid_root,
+                auth_brokers,
+                source_identity,
+            )
+        except ValueError as exc:
+            if "pilot-infrastructure-failure" not in str(exc):
+                fail(f"resource failed pilot install diagnostic mismatch: {exc}")
+        else:
+            fail("resource failed pilot approval installed")
+
+        unrelated_generation = paid_root / "unrelated-command-generation"
+        shutil.copytree(Path(pilot_entry["generation_path"]), unrelated_generation)
+        unrelated_packet_path = unrelated_generation / "full-run-approval.json"
+        unrelated_packet = json.loads(unrelated_packet_path.read_text(encoding="utf-8"))
+        unrelated_caps = {**unrelated_packet["caps"], "max_turns_per_session": unrelated_packet["caps"]["max_turns_per_session"] + 1}
+        unrelated_command = full_run_command(unrelated_caps, models)
+        unrelated_packet["caps"] = unrelated_caps
+        unrelated_packet["command"] = shlex.join(unrelated_command)
+        unrelated_packet["command_sha256"] = paid_command_digest(unrelated_command)
+        write_json_atomic(unrelated_packet_path, unrelated_packet, unrelated_generation)
+        rebuild_generation_commit(unrelated_generation)
+        try:
+            install_full_approval(
+                [
+                    "--generation", str(unrelated_generation),
+                    "--approved-sha256", hashlib.sha256(unrelated_packet_path.read_bytes()).hexdigest(),
+                ],
+                paid_root,
+                auth_brokers,
+                source_identity,
+            )
+        except ValueError as exc:
+            if "full approval command not pilot-derived" not in str(exc):
+                fail(f"resource unrelated full command diagnostic mismatch: {exc}")
+        else:
+            fail("resource unrelated full command installed")
         full_entry_approval, installed_digest, installed_command, installed_packet = install_full_approval(
             ["--generation", pilot_entry["generation_path"], "--approved-sha256", generated_approval_digest],
             paid_root,
