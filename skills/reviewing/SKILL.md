@@ -44,7 +44,17 @@ Parse tokens, stripping each before treating the remainder as a PR number/URL/br
 ## Two Caller Shapes
 
 - **Standalone**: direct invocation per the trigger taxonomy above.
-- **Phase-gate** (`release-loop`'s Review phase): deliberately redundant with `implementing`'s final task-level review -- it catches issues surviving all fix rounds and gives the user a clean checkpoint between "code complete" and "ready to ship." If `implementing`'s last review already came back clean, verify that state and advance without a full re-dispatch.
+- **Phase-gate** (`release-loop`'s Review phase): deliberately redundant with `implementing`'s final task-level review -- it catches issues surviving all fix rounds and gives the user a clean checkpoint between "code complete" and "ready to ship." If `implementing`'s last review already came back clean, verify that event's immutable result and advance without a full re-dispatch. This phase-gate reuse does not allocate another event or increment a review count.
+
+## Durable standalone event
+
+When a standalone dispatch receives a valid `progress_path`, allocate `<kind>:<subject>:<ordinal>` with `kind: standalone`. Persist `state: started`, the full reviewed head, and one round-specific result path before any lane dispatch. A matching started event resumes with the same ID and path. A complete event never dispatches again.
+
+Persist the verbatim merged reviewer output through the caller's packaged phase publisher. Use a same-directory temporary path and the reserved create-once final path. Then record the final SHA-256, outcome, stable finding fingerprints, and `state: complete` in one ledger edit. Derive `standalone_passes` and finding totals from the registries; never increment them directly.
+
+On resume, a started event without a final result re-dispatches. A matching journal-owned result completes it without dispatch. A foreign or different result blocks with `review-event-conflict`. A complete event with a missing or mismatched result blocks with `review-event-integrity`; never allocate a replacement event.
+
+A standalone review without `progress_path` remains report-only. It returns the report to its caller and creates no run event or artifact.
 
 ## Step 1: Scope Discovery
 
@@ -74,6 +84,8 @@ Write a 2-3 line intent summary (PR title/body, commits, `plan:`, conversation) 
 
 Degradation ladder per `references/dispatch-degradation.md` (native parallel -> sequential passes -> single-call fallback; capacity errors are backpressure, never lane failure). **Model tiering**: `correctness`, `security`, and `adversarial` inherit the session model (highest-stakes analysis); every other lane runs on the harness's mid-tier model. The orchestrating pass (this skill) also inherits the session model.
 
+For each integrity mechanism, add one invariant-attack instruction to the dispatch. It asks for the cheapest artifact that satisfies every written check while violating the mechanism's stated guarantee. Keep conformance review as a separate obligation.
+
 ## Step 5: Merge, Dedup, Confidence Gate
 
 Full pipeline in `references/merge-pipeline.md` (fingerprint dedup, cross-lane promotion, mode-aware demotion, confidence gate last with the P0-at-50 exception, atomic artifact writes). Severity is **P0-P3 everywhere** -- the envelope's critical/important/minor `rollup` is a presentation-only projection, never a second severity scale.
@@ -92,6 +104,8 @@ Full pipeline in `references/merge-pipeline.md` (fingerprint dedup, cross-lane p
 
 - **Default**: markdown, pipe-delimited finding tables grouped by severity (no `Field:` blocks, no box-drawing separators, ASCII `->` not middot) plus an Actionable Findings summary.
 - **`mode:agent`**: one raw JSON object -- no code fence -- matching `schemas/review-envelope.schema.json` exactly. `clean` = no P0-P2 actionable findings; `actionable` = fixable findings present; `blocked` = open P0/P1 the caller must resolve before advancing.
+
+When a ledger-backed event exists, persist this exact output as the event's authoritative immutable result. Do not summarize, normalize, or re-render its bytes before publication.
 
 Requirements Completeness rule: if the diff confirms observable behavior absent from or contradictory to the approved artifact set, and no separate committed deviation addendum records that behavior, the finding stays actionable and the verdict cannot be `clean`. Preserve the existing plan-conflict handling outside this skill's suppression logic: a plan-mandated conflict still goes back to the caller/human rather than being silently authorized by the addendum rule.
 

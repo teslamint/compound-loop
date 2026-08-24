@@ -26,6 +26,18 @@ Runs **after** promotion and demotion so a borderline anchor-50 finding gets a c
 
 Order: severity (P0 first) -> confidence (descending) -> file -> line. Assign a monotonically increasing `#` once, in that order -- never renumber per severity table or per report section; a finding keeps its `#` everywhere it's referenced.
 
+## 7. Finding inventory and disposition gate
+
+Build one stable-fingerprint inventory before choosing the verdict. Include structured merged findings plus every actionable finding stated in the review body and outside-diff resolution. Label each row `structured`, `review-body`, or `outside-diff`. The review-body and outside-diff sources never become untracked prose exceptions.
+
+Use the existing fingerprint contract for every row. If an outside-diff item lacks a file, line anchor, or title, resolve that evidence gap before inventory. Do not invent a weaker identity.
+
+Recompute the inventory from the actual merged output, review body, and orchestrator outside-diff results. Compare it with the recorded inventory. An omitted or extra fingerprint blocks the verdict as an incomplete inventory.
+
+Join each actionable fingerprint to the selected ledger's current `finding_dispositions` row. A terminal disposition is `fixed`, or `deferred` with a rationale. A fix event cannot author either transition. Only a verifying source re-review may author `fixed`.
+
+The verdict cannot be `clean` while any actionable fingerprint lacks a terminal disposition. A complete control inventory may return `clean`; removing one outside-diff disposition from that same inventory must block.
+
 ## Validator protocol (interactive verification path)
 
 One independent validator sub-agent per surviving finding -- a fresh second opinion, not a critique of the original lane's reasoning.
@@ -40,4 +52,6 @@ One independent validator sub-agent per surviving finding -- a fresh second opin
 
 ## Atomic artifact writes (`enforces: P8`)
 
-Every artifact this pipeline writes (per-lane JSON, the merged envelope, the rendered report) is written to a temp file then renamed into place -- never streamed directly to the final path. A corrupt or partial artifact discovered on read is treated as a **lane failure**, handled per `references/dispatch-degradation.md`'s worker-failure rules (critical lanes kept-but-marked-degraded, advisory lanes dropped with a coverage note) -- never as an empty/clean result.
+Every intermediate artifact this pipeline writes uses a temporary file and atomic rename. This includes per-lane JSON, the merged envelope, and a rendered report. Never stream directly to a final path. A corrupt or partial artifact discovered on read is treated as a **lane failure**, handled per `references/dispatch-degradation.md`'s worker-failure rules (critical lanes kept-but-marked-degraded, advisory lanes dropped with a coverage note) -- never as an empty/clean result.
+
+For a ledger-backed review event, the authoritative result is the verbatim reviewer output. Write it to the event's same-directory temporary path. Then publish it to the reserved create-once path through the caller's packaged phase publisher. Persist the publisher's final SHA-256 before accepting the event as complete.
