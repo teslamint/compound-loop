@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 import shlex
@@ -193,10 +194,38 @@ HISTORY_CASES = (
 RETRO_CASES = (
     "retro_structured_metrics",
     "legacy_partial_metrics",
+    "legacy_partial_missing_timestamp",
+    "legacy_partial_empty_timestamp",
+    "legacy_partial_invalid_timestamp",
     "retro_stale_range",
     "facilitator_artifact_missing",
+    "facilitator_artifact_changed",
+    "facilitator_receipt_conflict",
+    "facilitator_journal_conflict",
+    "facilitator_artifact_unpublished",
     "unknown_count_completeness",
-    "full_lifecycle",
+)
+
+LIFECYCLE_CASES = ("full_lifecycle",)
+FULL_GATE_REPORT = "evidence/U5/full-validation-gate.md"
+
+FULL_VALIDATION_COMMANDS = (
+    "bash scripts/test-body-seal.sh",
+    "bash scripts/test-final-action-skip.sh",
+    "bash scripts/test-manifest-version-sync.sh",
+    "bash scripts/test-plan-consumer-portability.sh",
+    "bash scripts/test-plan-frontmatter.sh",
+    "bash scripts/test-planning-schema-portability.sh",
+    "bash scripts/test-plugin-skill-discovery.sh",
+    "bash scripts/test-python-compatibility.sh all",
+    "bash scripts/test-python-compatibility.sh fixtures",
+    "bash scripts/test-release-loop-worktree-default.sh",
+    "bash scripts/test-release-publication.sh all",
+    "bash scripts/test-retro-format-drift.sh",
+    "bash scripts/test-signal-drift.sh",
+    "bash scripts/test-run-artifact-integrity.sh all",
+    "bash scripts/validate.sh",
+    "git diff --check",
 )
 
 
@@ -623,6 +652,12 @@ def require_retro_contract() -> None:
         (retrospective, "stale-commit-range"),
         (retrospective, "reviews/facilitator/round-<N>.md"),
         (retrospective, "Persist every facilitator round verbatim"),
+        (retrospective, "publisher receipt path and SHA-256"),
+        (retrospective, "ownership journal"),
+        (retrospective, "same persisted edit"),
+        (retrospective, "valid ISO-8601 UTC timestamp"),
+        (retrospective, "full_validation_gate"),
+        (retrospective, "sixteen exact commands"),
         (RETRO_TEMPLATE, "Review rounds (unit / final / standalone)"),
         (RETRO_TEMPLATE, "Internal findings (fixed / deferred)"),
         (RETRO_TEMPLATE, "Pull request comments (fixed / deferred)"),
@@ -1250,7 +1285,7 @@ class RetroFixture:
         reviews: ReviewFixture,
         current_range: dict[str, str],
         completeness: str | None,
-        counting_started_at: str,
+        counting_started_at: str | None,
         pr_fixed: int = 0,
         pr_deferred: int = 0,
     ) -> None:
@@ -1258,18 +1293,80 @@ class RetroFixture:
         self.progress_path = progress_path
         self.reviews = reviews
         self.current_range = current_range
-        self.completeness = "partial" if completeness is None else completeness
+        self.completeness = completeness
         self.counting_started_at = counting_started_at
         self.pr_fixed = pr_fixed
         self.pr_deferred = pr_deferred
-        self.facilitator_rounds: list[str] = []
+        self.facilitator_receipts: dict[int, dict[str, str]] = {}
+        self.metric_state_writes = 0
+
+    @staticmethod
+    def valid_utc_timestamp(value: object) -> bool:
+        if not isinstance(value, str) or not value.endswith("Z"):
+            return False
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return False
+        return parsed.isoformat().replace("+00:00", "Z") == value
+
+    def adopt_legacy_partial(self) -> str:
+        if self.completeness is not None or self.counting_started_at is not None:
+            raise Blocked("legacy review count adoption conflict")
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        assert self.valid_utc_timestamp(timestamp)
+        self.completeness = "partial"
+        self.counting_started_at = timestamp
+        state = {
+            "completeness": self.completeness,
+            "counting_started_at": self.counting_started_at,
+        }
+        with self.progress_path.open("a", encoding="utf-8") as handle:
+            handle.write("\n## Retro Fixture Metric State\n\n```json\n")
+            handle.write(json.dumps(state, sort_keys=True, separators=(",", ":")))
+            handle.write("\n```\n")
+        self.metric_state_writes += 1
+        return timestamp
 
     def publish_facilitator_round(self, ordinal: int, body: bytes) -> Path:
+        if ordinal in self.facilitator_receipts:
+            raise Blocked("facilitator receipt conflict")
         relative = f"reviews/facilitator/round-{ordinal}.md"
-        path = publish_phase_artifact(self.repo, self.progress_path, relative, body)
+        payload = publish_from_cli(self.repo, self.progress_path, relative, body, CLI)
+        path = self.repo / str(payload["target"])
         assert path.read_bytes() == body
-        self.facilitator_rounds.append(relative)
+        self.facilitator_receipts[ordinal] = {
+            "path": relative,
+            "sha256": str(payload["sha256"]),
+        }
         return path
+
+    def verify_facilitator_rounds(self, expected_facilitator_rounds: int) -> None:
+        expected_ordinals = set(range(1, expected_facilitator_rounds + 1))
+        if set(self.facilitator_receipts) != expected_ordinals:
+            raise Blocked("facilitator artifact missing")
+        journal_path = self.progress_path.parent / ".phase-artifact-ownership.json"
+        try:
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise Blocked("facilitator journal conflict") from exc
+        if not isinstance(journal, dict) or not isinstance(journal.get("owned"), dict):
+            raise Blocked("facilitator journal conflict")
+        for ordinal in sorted(expected_ordinals):
+            receipt = self.facilitator_receipts[ordinal]
+            expected_path = f"reviews/facilitator/round-{ordinal}.md"
+            if set(receipt) != {"path", "sha256"} or receipt["path"] != expected_path:
+                raise Blocked("facilitator receipt conflict")
+            journal_sha = journal["owned"].get(expected_path)
+            if journal_sha is None:
+                raise Blocked("facilitator journal conflict")
+            if journal_sha != receipt["sha256"]:
+                raise Blocked("facilitator receipt conflict")
+            target = self.progress_path.parent / expected_path
+            if not target.is_file() or target.is_symlink():
+                raise Blocked("facilitator artifact unpublished")
+            if hashlib.sha256(target.read_bytes()).hexdigest() != receipt["sha256"]:
+                raise Blocked("facilitator artifact changed")
 
     def render_metrics(self, expected_facilitator_rounds: int) -> str:
         if self.current_range != {
@@ -1278,14 +1375,12 @@ class RetroFixture:
         }:
             raise Blocked("stale-commit-range")
         if self.completeness not in {"exact", "partial"}:
+            if self.completeness is None:
+                raise Blocked("review count completeness missing")
             raise Blocked(f"unknown review count completeness: {self.completeness}")
-        expected = [f"reviews/facilitator/round-{ordinal}.md" for ordinal in range(1, expected_facilitator_rounds + 1)]
-        if self.facilitator_rounds != expected:
-            raise Blocked("facilitator artifact missing")
-        for relative in expected:
-            path = self.progress_path.parent / relative
-            if not path.is_file():
-                raise Blocked("facilitator artifact missing")
+        if self.completeness == "partial" and not self.valid_utc_timestamp(self.counting_started_at):
+            raise Blocked("invalid counting_started_at")
+        self.verify_facilitator_rounds(expected_facilitator_rounds)
         counts = self.reviews.counts()
         rounds = counts["unit_passes"] + counts["final_passes"] + counts["standalone_passes"]
         completeness = "exact"
@@ -1301,6 +1396,114 @@ class RetroFixture:
             f"| Pull request comments (fixed / deferred) | {self.pr_fixed} / {self.pr_deferred} |\n"
             f"| Count completeness | {completeness} |\n"
         )
+
+
+def verify_owned_receipt(
+    repo: Path,
+    progress_path: Path,
+    receipt: dict[str, str],
+    diagnostic: str,
+) -> bytes:
+    if set(receipt) != {"path", "sha256"}:
+        raise Blocked(f"{diagnostic} receipt conflict")
+    journal_path = progress_path.parent / ".phase-artifact-ownership.json"
+    try:
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise Blocked(f"{diagnostic} journal conflict") from exc
+    owned = journal.get("owned") if isinstance(journal, dict) else None
+    if not isinstance(owned, dict) or owned.get(receipt["path"]) != receipt["sha256"]:
+        raise Blocked(f"{diagnostic} journal conflict")
+    target = progress_path.parent / receipt["path"]
+    if not target.is_file() or target.is_symlink():
+        raise Blocked(f"{diagnostic} unpublished")
+    payload = target.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != receipt["sha256"]:
+        raise Blocked(f"{diagnostic} changed")
+    return payload
+
+
+def full_gate_receipt(repo: Path, progress_path: Path) -> dict[str, str]:
+    journal_path = progress_path.parent / ".phase-artifact-ownership.json"
+    try:
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        digest = journal["owned"][FULL_GATE_REPORT]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise Blocked("full-validation-gate receipt missing") from exc
+    return {"path": FULL_GATE_REPORT, "sha256": str(digest)}
+
+
+def validate_full_gate_report(payload: bytes) -> None:
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Blocked("full-validation-gate report invalid") from exc
+    if "Result: 16/16 exact commands exited zero." not in text:
+        raise Blocked("full-validation-gate report incomplete")
+    captured = next((line for line in text.splitlines() if line.startswith("- Captured: `")), "")
+    timestamps = [part for part in captured.split("`") if part.endswith("Z")]
+    if len(timestamps) != 2 or not all(RetroFixture.valid_utc_timestamp(value) for value in timestamps):
+        raise Blocked("full-validation-gate timestamp invalid")
+    for ordinal, command in enumerate(FULL_VALIDATION_COMMANDS, 1):
+        prefix = f"| {ordinal} | `{command}` | 0 |"
+        if not any(line.startswith(prefix) for line in text.splitlines()):
+            raise Blocked(f"full-validation-gate command mismatch: {ordinal}")
+
+
+def render_full_gate_report(rows: list[dict[str, object]], started: str, finished: str) -> bytes:
+    lines = [
+        "# U5 exact full-validation gate",
+        "",
+        "- Plan: `docs/plans/2026-08-23-001-fix-run-artifact-integrity-plan.md`, U5 step 4.",
+        f"- Captured: `{started}` through `{finished}`.",
+        "- Checkout: `feat/run-artifact-integrity`; disposable fixture targets only; no hosted mutation.",
+        "",
+        "| # | Exact command | Exit | Bounded result |",
+        "|---|---|---:|---|",
+    ]
+    for row in rows:
+        summary = str(row["summary"]).replace("\n", " / ").replace("|", "\\|").replace("`", "'")
+        lines.append(f"| {row['ordinal']} | `{row['command']}` | {row['exit']} | `{summary}` |")
+    lines.extend(("", "Result: 16/16 exact commands exited zero.", ""))
+    return "\n".join(lines).encode("utf-8")
+
+
+def run_full_validation_gate() -> dict[str, str]:
+    progress_path = ROOT / os.environ.get("RUN_ARTIFACT_FULL_GATE_PROGRESS_PATH", ".release-loop/progress.md")
+    existing = progress_path.parent / FULL_GATE_REPORT
+    if existing.exists():
+        receipt = full_gate_receipt(ROOT, progress_path)
+        validate_full_gate_report(verify_owned_receipt(ROOT, progress_path, receipt, "full-validation-gate"))
+        return receipt
+    started = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    rows: list[dict[str, object]] = []
+    for ordinal, command in enumerate(FULL_VALIDATION_COMMANDS, 1):
+        result = subprocess.run(
+            shlex.split(command),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        bounded = result.stdout.strip()[-500:] or "no output"
+        rows.append({"ordinal": ordinal, "command": command, "exit": result.returncode, "summary": bounded})
+        if result.returncode != 0:
+            raise Blocked(f"full-validation-gate command failed: {ordinal}: {command}")
+    finished = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    report = render_full_gate_report(rows, started, finished)
+    payload = publish_from_cli(ROOT, progress_path, FULL_GATE_REPORT, report, CLI)
+    receipt = {"path": FULL_GATE_REPORT, "sha256": str(payload["sha256"])}
+    validate_full_gate_report(verify_owned_receipt(ROOT, progress_path, receipt, "full-validation-gate"))
+    return receipt
+
+
+def record_ae(evidence: dict[str, str], number: int, assertion: bool, observation: str) -> None:
+    key = f"AE{number}"
+    if key in evidence:
+        raise AssertionError(f"duplicate AE evidence: {key}")
+    assert assertion, f"{key} failed: {observation}"
+    evidence[key] = observation
 
 
 def history_snapshot(repo: Path, history: HistoryFixture) -> dict[str, object]:
@@ -1420,11 +1623,37 @@ def run_retro_case(name: str, tmp: Path, sent: Path, before: bytes) -> None:
         assert "| Pull request comments (fixed / deferred) | 3 / 1 |" in expected
     elif name == "legacy_partial_metrics":
         retro.completeness = None
-        retro.completeness = "partial"
+        retro.counting_started_at = None
+        before_writes = retro.metric_state_writes
+        timestamp = retro.adopt_legacy_partial()
+        assert retro.metric_state_writes == before_writes + 1
+        persisted = path.read_text(encoding="utf-8")
+        assert json.dumps(
+            {"completeness": "partial", "counting_started_at": timestamp},
+            sort_keys=True,
+            separators=(",", ":"),
+        ) in persisted
         retro.publish_facilitator_round(1, b"accepted: legacy lower bound\n")
         rendered = retro.render_metrics(1)
-        assert "partial — lower bound since 2026-08-24T00:00:00Z" in rendered
+        assert f"partial — lower bound since {timestamp}" in rendered
         assert "| Review rounds (unit / final / standalone) | 4 (2 / 1 / 1) |" in rendered
+    elif name in {
+        "legacy_partial_missing_timestamp",
+        "legacy_partial_empty_timestamp",
+        "legacy_partial_invalid_timestamp",
+    }:
+        retro.completeness = "partial"
+        retro.counting_started_at = {
+            "legacy_partial_missing_timestamp": None,
+            "legacy_partial_empty_timestamp": "",
+            "legacy_partial_invalid_timestamp": "2026-08-24 00:00:00",
+        }[name]
+        try:
+            retro.render_metrics(0)
+        except Blocked as exc:
+            assert str(exc) == "invalid counting_started_at"
+        else:
+            raise AssertionError(f"{name} did not block")
     elif name == "retro_stale_range":
         (repo / "later.txt").write_text("later\n", encoding="utf-8")
         git(repo, "add", "later.txt")
@@ -1442,6 +1671,51 @@ def run_retro_case(name: str, tmp: Path, sent: Path, before: bytes) -> None:
             assert str(exc) == "facilitator artifact missing"
         else:
             raise AssertionError("missing facilitator artifact supported a metric claim")
+    elif name == "facilitator_artifact_changed":
+        target = retro.publish_facilitator_round(1, b"accepted: immutable\n")
+        target.write_bytes(b"changed\n")
+        try:
+            retro.render_metrics(1)
+        except Blocked as exc:
+            assert str(exc) == "facilitator artifact changed"
+        else:
+            raise AssertionError("changed facilitator artifact supported a metric claim")
+    elif name == "facilitator_receipt_conflict":
+        retro.publish_facilitator_round(1, b"accepted: receipt\n")
+        retro.facilitator_receipts[1]["sha256"] = "0" * 64
+        try:
+            retro.render_metrics(1)
+        except Blocked as exc:
+            assert str(exc) == "facilitator receipt conflict"
+        else:
+            raise AssertionError("conflicting facilitator receipt supported a metric claim")
+    elif name == "facilitator_journal_conflict":
+        retro.publish_facilitator_round(1, b"accepted: journal\n")
+        journal = path.parent / ".phase-artifact-ownership.json"
+        state = json.loads(journal.read_text(encoding="utf-8"))
+        state["owned"].pop("reviews/facilitator/round-1.md")
+        journal.write_text(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        try:
+            retro.render_metrics(1)
+        except Blocked as exc:
+            assert str(exc) == "facilitator journal conflict"
+        else:
+            raise AssertionError("conflicting facilitator journal supported a metric claim")
+    elif name == "facilitator_artifact_unpublished":
+        retro.facilitator_receipts[1] = {
+            "path": "reviews/facilitator/round-1.md",
+            "sha256": hashlib.sha256(b"never published\n").hexdigest(),
+        }
+        journal = path.parent / ".phase-artifact-ownership.json"
+        state = json.loads(journal.read_text(encoding="utf-8"))
+        state["owned"]["reviews/facilitator/round-1.md"] = retro.facilitator_receipts[1]["sha256"]
+        journal.write_text(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        try:
+            retro.render_metrics(1)
+        except Blocked as exc:
+            assert str(exc) == "facilitator artifact unpublished"
+        else:
+            raise AssertionError("unpublished facilitator artifact supported a metric claim")
     elif name == "unknown_count_completeness":
         retro.completeness = "estimated"
         try:
@@ -1451,12 +1725,13 @@ def run_retro_case(name: str, tmp: Path, sent: Path, before: bytes) -> None:
         else:
             raise AssertionError("unknown completeness did not block")
     elif name == "full_lifecycle":
-        coverage: set[int] = set()
+        ae_evidence: dict[str, str] = {}
         for relative in ("briefs/U1-brief.md", "reports/U1-report.md", "evidence/U1/T6-success.md"):
             publish_phase_artifact(repo, path, relative, (relative + "\n").encode())
-        assert all((path.parent / relative).is_file() for relative in ("briefs/U1-brief.md", "reports/U1-report.md", "evidence/U1/T6-success.md"))
-        assert (path.parent / "reviews/events/unit-U1-1.md").is_file()
-        coverage.add(1)
+        scoped_artifacts = all((path.parent / relative).is_file() for relative in ("briefs/U1-brief.md", "reports/U1-report.md", "evidence/U1/T6-success.md"))
+        scoped_artifacts = scoped_artifacts and (path.parent / "reviews/events/unit-U1-1.md").is_file()
+        scoped_artifacts = scoped_artifacts and not any((repo / f".release-loop/{name}").exists() for name in ("briefs", "reports", "reviews", "evidence"))
+        record_ae(ae_evidence, 1, scoped_artifacts, "all applicable artifacts stayed in the selected scope")
 
         legacy_repo = new_repo(tmp, "legacy-proof")
         legacy = legacy_repo / ".release-loop/reports/U1-report.md"
@@ -1467,17 +1742,24 @@ def run_retro_case(name: str, tmp: Path, sent: Path, before: bytes) -> None:
         blob = legacy.read_bytes()
         scoped = initialize(legacy_repo, "proof")
         publish_phase_artifact(legacy_repo, scoped, "reports/U1-report.md", b"scoped\n")
-        assert legacy.read_bytes() == blob and git(legacy_repo, "status", "--porcelain", "--", legacy.relative_to(legacy_repo).as_posix()) == ""
-        coverage.add(2)
+        legacy_preserved = legacy.read_bytes() == blob and git(legacy_repo, "status", "--porcelain", "--", legacy.relative_to(legacy_repo).as_posix()) == ""
+        record_ae(ae_evidence, 2, legacy_preserved, "tracked legacy index/worktree bytes and status stayed unchanged")
 
         collision_repo = new_repo(tmp, "collision-proof")
         orphan = collision_repo / ".release-loop/runs/collision/orphan.txt"
         orphan.parent.mkdir(parents=True)
         orphan.write_text("orphan\n", encoding="utf-8")
         assert_blocked_preserves(lambda: initialize(collision_repo, "collision"), sent, before, "artifact scope collision")
-        coverage.add(3)
+        tracked_repo = new_repo(tmp, "tracked-collision-proof")
+        tracked = tracked_repo / ".release-loop/runs/tracked/report.md"
+        tracked.parent.mkdir(parents=True)
+        tracked.write_text("tracked\n", encoding="utf-8")
+        git(tracked_repo, "add", "-f", tracked.relative_to(tracked_repo).as_posix())
+        git(tracked_repo, "commit", "-qm", "tracked collision")
+        assert_blocked_preserves(lambda: initialize(tracked_repo, "tracked"), sent, before, "artifact scope collision")
+        record_ae(ae_evidence, 3, orphan.is_file() and tracked.is_file(), "ignored orphan and tracked selected-scope collisions both blocked before write")
 
-        assert reviews.counts() == {
+        exact_counts = reviews.counts() == {
             "unit_passes": 2,
             "fix_rounds": 1,
             "final_passes": 1,
@@ -1485,16 +1767,32 @@ def run_retro_case(name: str, tmp: Path, sent: Path, before: bytes) -> None:
             "findings_fixed": 1,
             "findings_deferred": 0,
         }
-        coverage.add(4)
+        record_ae(ae_evidence, 4, exact_counts, "actionable, fix, clean re-review, final, and standalone counters matched")
         recovered = reviews.allocate("unit", "U2", git(repo, "rev-parse", "HEAD"))
         wrapper = reviews._wrapper(recovered, reviewer_output("clean"))
         publish_from_cli(repo, path, reviews._result_relative(recovered), wrapper, IMPLEMENTING_CLI)
-        assert reviews.recover(str(recovered["id"])) == "recovered"
-        coverage.add(5)
-        assert reviews.dispositions["fp-retro"]["status"] == "fixed"
-        coverage.add(6)
-        assert reviews.counts()["standalone_passes"] == 1
-        coverage.add(7)
+        recovered_once = reviews.recover(str(recovered["id"])) == "recovered"
+        corrupt_event = reviews.event("final:branch:1")
+        corrupt_path = reviews._result_path(corrupt_event)
+        original_result = corrupt_path.read_bytes()
+        corrupt_path.write_bytes(b"corrupt\n")
+        corruption_blocked = False
+        try:
+            reviews.verify_result(str(corrupt_event["id"]))
+        except Blocked as exc:
+            corruption_blocked = "digest mismatch" in str(exc)
+        corrupt_path.write_bytes(original_result)
+        collision_event = reviews.allocate("unit", "U3", git(repo, "rev-parse", "HEAD"))
+        collision_body = reviewer_output("clean", tail=b"first\n")
+        publish_from_cli(repo, path, reviews._result_relative(collision_event), reviews._wrapper(collision_event, collision_body), IMPLEMENTING_CLI)
+        collision_blocked = False
+        try:
+            reviews.complete(str(collision_event["id"]), reviewer_output("clean", tail=b"different\n"))
+        except Blocked as exc:
+            collision_blocked = "review-event-conflict" in str(exc)
+        record_ae(ae_evidence, 5, recovered_once and corruption_blocked and collision_blocked, "matching recovery succeeded; corruption and conflicting immutable results blocked")
+        record_ae(ae_evidence, 6, reviews.dispositions["fp-retro"]["status"] == "fixed", "only the verifying re-review fixed the source fingerprint")
+        record_ae(ae_evidence, 7, reviews.counts()["standalone_passes"] == 1, "standalone dispatch counted once while reuse added no event")
 
         rewrite_repo = new_history_repo(tmp, conflict=False, name="rewrite-proof")
         rewrite_path = initialize(rewrite_repo, "rewrite")
@@ -1506,19 +1804,17 @@ def run_retro_case(name: str, tmp: Path, sent: Path, before: bytes) -> None:
             assert str(exc) == "stale-commit-range" and history.command_calls == 0
         else:
             raise AssertionError("unapproved full-lifecycle rewrite executed")
-        coverage.add(9)
+        record_ae(ae_evidence, 9, history.command_calls == 0, "unapproved non-descendant rewrite blocked before command execution")
         old_gate = dict(history.review_gate)
         history.approve(command, "origin/main")
         history.rewrite(command, "origin/main")
-        assert history.current_commit_range == history.git_range()
-        coverage.add(8)
-        assert old_gate["head"] != history.current_commit_range["head"] and history.review_gate == {"event_id": None, "head": None}
-        coverage.add(10)
+        record_ae(ae_evidence, 8, history.current_commit_range == history.git_range(), "approved rewrite refreshed both full object IDs without changing prior counts")
+        gate_invalidated = old_gate["head"] != history.current_commit_range["head"] and history.review_gate == {"event_id": None, "head": None}
+        record_ae(ae_evidence, 10, gate_invalidated, "rewritten head cleared the exact-head review gate")
 
         retro.publish_facilitator_round(1, b"accepted: full lifecycle\n")
         rendered = retro.render_metrics(1)
-        assert "| Count completeness | exact |" in rendered
-        coverage.add(11)
+        record_ae(ae_evidence, 11, "| Count completeness | exact |" in rendered, "Retro rendered exact structured totals after receipt verification")
         source = path.parent / ".tmp/outside.tmp"
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(b"outside\n")
@@ -1533,11 +1829,46 @@ def run_retro_case(name: str, tmp: Path, sent: Path, before: bytes) -> None:
             before,
             "path boundary",
         )
-        coverage.add(12)
-        validate_text = (ROOT / "scripts/validate.sh").read_text(encoding="utf-8")
-        assert 'test-run-artifact-integrity.sh" scope' in validate_text
-        assert 'test-run-artifact-integrity.sh" retro' in validate_text
-        coverage.add(13)
+        legacy_boundary_repo = new_repo(tmp, "legacy-boundary")
+        legacy_progress = legacy_boundary_repo / ".release-loop/progress.md"
+        legacy_progress.parent.mkdir()
+        legacy_progress.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+        legacy_source = legacy_progress.parent / ".tmp/outside.tmp"
+        legacy_source.parent.mkdir()
+        legacy_source.write_bytes(b"outside\n")
+        assert_blocked_preserves(
+            lambda: run_cli("publish", "--repo", str(legacy_boundary_repo), "--progress-path", ".release-loop/progress.md", "--source", ".release-loop/.tmp/outside.tmp", "--target", str(sent)),
+            sent,
+            before,
+            "path boundary",
+        )
+        archive_boundary_repo = new_repo(tmp, "archive-boundary")
+        archive_progress = initialize(archive_boundary_repo, "archive")
+        assert_blocked_preserves(
+            lambda: archive_scope(archive_boundary_repo, archive_progress.relative_to(archive_boundary_repo).as_posix(), str(sent), persist_authority=False),
+            sent,
+            before,
+            "path boundary",
+        )
+        handoff_boundary_repo = new_repo(tmp, "handoff-boundary")
+        handoff_progress = initialize(handoff_boundary_repo, "handoff")
+        handoff_base = new_repo(tmp, "handoff-boundary-base")
+        assert_blocked_preserves(
+            lambda: handoff_scope(handoff_boundary_repo, handoff_base, handoff_progress.relative_to(handoff_boundary_repo).as_posix(), marker_path=str(sent)),
+            sent,
+            before,
+            "path boundary",
+        )
+        record_ae(ae_evidence, 12, sent.read_bytes() == before, "scoped, legacy, archive, and handoff outside-root attacks preserved the sentinel")
+
+        root_progress = ROOT / ".release-loop/progress.md"
+        root_receipt = full_gate_receipt(ROOT, root_progress)
+        root_report = verify_owned_receipt(ROOT, root_progress, root_receipt, "full-validation-gate")
+        validate_full_gate_report(root_report)
+        fixture_payload = publish_from_cli(repo, path, FULL_GATE_REPORT, root_report, CLI)
+        fixture_receipt = {"path": FULL_GATE_REPORT, "sha256": str(fixture_payload["sha256"])}
+        validate_full_gate_report(verify_owned_receipt(repo, path, fixture_receipt, "full-validation-gate"))
+        record_ae(ae_evidence, 13, fixture_receipt["sha256"] == root_receipt["sha256"], "immutable packaged full-gate receipt proves all sixteen exact commands exited zero")
 
         publish_phase_artifact(repo, path, "reports/retro.md", rendered.encode())
         base = new_repo(tmp, "base")
@@ -1548,7 +1879,7 @@ def run_retro_case(name: str, tmp: Path, sent: Path, before: bytes) -> None:
         archived = base / destination
         assert (archived / "progress.md").is_file()
         assert (archived / "reviews/facilitator/round-1.md").read_bytes() == b"accepted: full lifecycle\n"
-        assert coverage == set(range(1, 14)), coverage
+        assert set(ae_evidence) == {f"AE{number}" for number in range(1, 14)}, ae_evidence
     else:
         raise AssertionError(f"unknown Retro case: {name}")
     assert sent.read_bytes() == before
@@ -1559,7 +1890,7 @@ def run_case(name: str) -> None:
     with tempfile.TemporaryDirectory(prefix=f"run-artifact-{name}-") as tmp_name:
         tmp = Path(tmp_name)
         sent, before = sentinel(tmp)
-        if name in RETRO_CASES:
+        if name in RETRO_CASES + LIFECYCLE_CASES:
             run_retro_case(name, tmp, sent, before)
             return
         if name in HISTORY_CASES:
@@ -2915,10 +3246,22 @@ elif CASE == "history":
     selected = HISTORY_CASES
 elif CASE == "retro":
     selected = RETRO_CASES
-elif CASE in CASES + REVIEW_CASES + HISTORY_CASES + RETRO_CASES:
+elif CASE == "lifecycle":
+    selected = LIFECYCLE_CASES
+elif CASE == "full_validation_gate":
+    try:
+        receipt = run_full_validation_gate()
+        print(f"ok:   [run-artifact-integrity] full_validation_gate receipt={receipt['path']} sha256={receipt['sha256']}")
+        run_case("full_lifecycle")
+    except Exception as exc:
+        print(f"FAIL: [run-artifact-integrity] full_validation_gate: {exc}")
+        raise SystemExit(1)
+    print("ok:   [run-artifact-integrity] full_lifecycle")
+    raise SystemExit(0)
+elif CASE in CASES + REVIEW_CASES + HISTORY_CASES + RETRO_CASES + LIFECYCLE_CASES:
     selected = (CASE,)
 else:
-    print("usage: bash scripts/test-run-artifact-integrity.sh <scope|all|consumers|reviews|history|retro|case>", file=sys.stderr)
+    print("usage: bash scripts/test-run-artifact-integrity.sh <scope|all|consumers|reviews|history|retro|lifecycle|full_validation_gate|case>", file=sys.stderr)
     raise SystemExit(2)
 
 failures = 0

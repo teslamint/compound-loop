@@ -1675,6 +1675,21 @@ case_c38() {
     'Pull request comments (fixed / deferred)' 'Review comments (fixed / deferred)'
 }
 
+case_c39() {
+  case_structured_metric_mutation skills/retrospective/SKILL.md \
+    'publisher receipt path and SHA-256' 'publisher path'
+}
+
+case_c40() {
+  case_structured_metric_mutation skills/retrospective/SKILL.md \
+    'same persisted edit' 'later persisted edit'
+}
+
+case_c41() {
+  case_structured_metric_mutation schemas/retro-template.md \
+    'partial — lower bound since <persisted ISO-8601 UTC timestamp>' 'partial'
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -1723,6 +1738,9 @@ run_case C35 case_c35
 run_case C36 case_c36
 run_case C37 case_c37
 run_case C38 case_c38
+run_case C39 case_c39
+run_case C40 case_c40
+run_case C41 case_c41
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then

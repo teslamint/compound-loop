@@ -402,6 +402,8 @@ for label in metric_rows:
     matches = [line for line in lines if line.startswith(f"| {label} |")]
     if len(matches) != 1:
         fail(f"{TEMPLATE}: expected exactly one release-data row '{label}', found {len(matches)}")
+if "| Count completeness | exact / partial — lower bound since <persisted ISO-8601 UTC timestamp> |" not in template_text:
+    fail(f"{TEMPLATE}: structured partial-count timestamp form missing")
 
 metric_contract = (
     "unit_passes + final_passes + standalone_passes",
@@ -410,6 +412,12 @@ metric_contract = (
     "stale-commit-range",
     "reviews/facilitator/round-<N>.md",
     "Persist every facilitator round verbatim",
+    "publisher receipt path and SHA-256",
+    "ownership journal",
+    "same persisted edit",
+    "valid ISO-8601 UTC timestamp",
+    "full_validation_gate",
+    "sixteen exact commands",
 )
 if skill_text is not None:
     for fragment in metric_contract:
