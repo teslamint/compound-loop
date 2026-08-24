@@ -23,6 +23,7 @@ from pathlib import Path
 import re
 import selectors
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1267,14 +1268,41 @@ def run_adapter_checked(command, cwd, env, input_bytes, feature_root, source_sna
         verify_preflight_inputs(feature_root, source_snapshot, policy_digests)
 
 
-def read_bounded_file(path, size_cap=65536):
+def read_bounded_file(path, allowed_root, size_cap=65536, after_open=None):
     try:
-        size = path.stat().st_size
-    except FileNotFoundError:
-        fail("bounded result missing")
-    if size > size_cap:
-        fail("bounded result exceeded cap")
-    return path.read_text(encoding="utf-8")
+        path.parent.resolve(strict=True).relative_to(allowed_root.resolve(strict=True))
+    except (FileNotFoundError, ValueError):
+        fail("bounded result outside fixture")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(str(path), flags)
+    except (FileNotFoundError, OSError):
+        fail("bounded result missing or unsafe")
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            fail("bounded result is not regular")
+        if metadata.st_size > size_cap:
+            fail("bounded result exceeded cap")
+        if after_open is not None:
+            after_open()
+        chunks = []
+        remaining = size_cap + 1
+        while remaining:
+            chunk = os.read(descriptor, min(8192, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > size_cap:
+            fail("bounded result exceeded cap")
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError:
+            fail("bounded result is not UTF-8")
+    finally:
+        os.close(descriptor)
 
 
 def parse_session_id(output, harness):
@@ -1510,7 +1538,7 @@ def validate_preflight():
                 fail(f"{harness} fake adapter failed")
             if parse_session_id(result.stdout, harness) != expected_id:
                 fail(f"{harness} session identity mismatch")
-        if read_bounded_file(codex_result) != "fake codex result\n":
+        if read_bounded_file(codex_result, result_dir) != "fake codex result\n":
             fail("Codex bounded result missing")
         packet = json.loads(codex_stdin)
         if packet["skill_bytes"].encode("utf-8") != source_path.read_bytes():
@@ -1538,6 +1566,42 @@ def validate_preflight():
             fail("preflight adapter cwd mismatch")
 
         negatives = 0
+        external_result = fixture_root.parent / f"{fixture_root.name}-external-result"
+        external_result.write_text("external\n", encoding="utf-8")
+        codex_result.unlink()
+        codex_result.symlink_to(external_result)
+        try:
+            read_bounded_file(codex_result, result_dir)
+        except ValueError as exc:
+            if "bounded result missing or unsafe" not in str(exc):
+                fail(f"result symlink diagnostic mismatch: {exc}")
+        else:
+            fail("result symlink accepted")
+        finally:
+            codex_result.unlink()
+            codex_result.write_text("fake codex result\n", encoding="utf-8")
+        negatives += 1
+
+        replacement_result = fixture_root.parent / f"{fixture_root.name}-replacement-result"
+        replacement_result.write_text("y" * 70000, encoding="utf-8")
+
+        def replace_result_after_open():
+            codex_result.unlink()
+            codex_result.symlink_to(replacement_result)
+
+        try:
+            if read_bounded_file(codex_result, result_dir, after_open=replace_result_after_open) != "fake codex result\n":
+                fail("post-open result replacement changed descriptor bytes")
+        finally:
+            if codex_result.exists() or codex_result.is_symlink():
+                codex_result.unlink()
+            codex_result.write_text("fake codex result\n", encoding="utf-8")
+            if external_result.exists():
+                external_result.unlink()
+            if replacement_result.exists():
+                replacement_result.unlink()
+        negatives += 1
+
         missing_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, auth_mode="missing")
         if probe_fake_auth("claude", missing_env, fixture_root):
             fail("missing auth fixture accepted")
@@ -1643,7 +1707,7 @@ def validate_preflight():
         if oversized.returncode != 0:
             fail("oversized result fixture failed before result validation")
         try:
-            read_bounded_file(codex_result)
+            read_bounded_file(codex_result, result_dir)
         except ValueError as exc:
             if "bounded result exceeded cap" not in str(exc):
                 fail(f"oversized result diagnostic mismatch: {exc}")
