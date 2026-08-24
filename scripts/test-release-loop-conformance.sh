@@ -1057,7 +1057,7 @@ def validate_policy_files(fixture_root, feature_root=root):
     write_json_atomic(settings_target, runtime_claude, fixture_root)
     shutil.copyfile(codex_path, rules_target)
     empty_mcp = fixture_root / "empty-mcp.json"
-    empty_mcp.write_text("{}\n", encoding="utf-8")
+    empty_mcp.write_text('{"mcpServers": {}}\n', encoding="utf-8")
     for source, target in ((codex_path, rules_target),):
         if hashlib.sha256(source.read_bytes()).digest() != hashlib.sha256(target.read_bytes()).digest():
             fail("fixture policy copy digest mismatch")
@@ -1378,7 +1378,7 @@ def build_claude_resume(feature_root, model, settings_path, mcp_path, budget, pr
 def build_codex_initial(fixture_root, model, result_path):
     return [
         "codex", "exec", "--json", "--ignore-user-config",
-        "--model", model, "--approve-for-me", "--sandbox", "workspace-write",
+        "--model", model, "--approve-for-me",
         "--cd", str(fixture_root), "--output-last-message", str(result_path), "-",
     ]
 
@@ -1619,6 +1619,8 @@ def validate_preflight():
         guard_path = fixture_root / ".claude" / "hooks" / "conformance-path-guard"
         rules_path = fixture_root / ".codex" / "rules" / "conformance.rules"
         mcp_path = fixture_root / "empty-mcp.json"
+        if mcp_path.read_bytes() != b'{"mcpServers": {}}\n':
+            fail("Claude empty MCP contract mismatch")
         policy_digests = {
             path: hashlib.sha256(path.read_bytes()).hexdigest()
             for path in (settings_path, guard_path, rules_path, mcp_path)
@@ -1674,7 +1676,7 @@ def validate_preflight():
         ]
         expected_codex_initial = [
             "codex", "exec", "--json", "--ignore-user-config", "--model", codex_model,
-            "--approve-for-me", "--sandbox", "workspace-write", "--cd", str(fixture_root),
+            "--approve-for-me", "--cd", str(fixture_root),
             "--output-last-message", str(codex_result), "-",
         ]
         expected_codex_resume = [
@@ -2708,7 +2710,7 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
     command_audit = []
     started = time.monotonic()
 
-    def persist_state(status, generation_sha256=None):
+    def persist_state(status, generation_sha256=None, failure=None):
         if state_path is None:
             return
         state = {
@@ -2721,6 +2723,8 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
             "command_audit_count": len(command_audit),
             "generation_sha256": generation_sha256,
         }
+        if failure is not None:
+            state["failure"] = failure
         write_json_atomic(state_path, state, state_root)
 
     if state_path is not None and state_path.exists():
@@ -2803,6 +2807,7 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                     if harness == "claude" and ledger["claude_active"] is not None:
                         active_id = ledger["claude_active"]["call_id"]
                         settle_claude(ledger, active_id, None)
+                    persist_state("failed", failure="scheduler-exception")
                     raise
                 if not session_proofs:
                     fail("process-exit-proof-missing")
@@ -2822,10 +2827,14 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                 )
     if ledger["active_process"] is not None or ledger["claude_active"] is not None:
         fail("paid schedule unsettled")
-    if mode_name == "live-pilot" and validate_pilot_results(results) is not None:
-        fail(validate_pilot_results(results))
-    if mode_name == "live" and validate_strata(results) is not None:
-        fail(validate_strata(results))
+    pilot_invariant = validate_pilot_results(results) if mode_name == "live-pilot" else None
+    if pilot_invariant is not None:
+        persist_state("failed", failure=pilot_invariant)
+        fail(pilot_invariant)
+    live_invariant = validate_strata(results) if mode_name == "live" else None
+    if live_invariant is not None:
+        persist_state("failed", failure=live_invariant)
+        fail(live_invariant)
     persist_state("sessions-complete")
     return results, ledger, process_proofs, command_audit
 
@@ -4438,6 +4447,18 @@ def paid_source_preflight():
     }
 
 
+def build_live_adapter_env(bin_path, git_path, claude_path, codex_path, home_path, temp_path):
+    return {
+        "PATH": f"{bin_path}:{git_path.parent}:{claude_path.parent}:{codex_path.parent}:/usr/bin:/bin",
+        "HOME": str(home_path),
+        "TMPDIR": str(temp_path),
+        "LC_ALL": "C",
+        "LANG": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
 def actual_paid_launcher(call_spec):
     run_root = root / ".release-loop/evidence/live-runs" / uuid.uuid4().hex
     run_root.mkdir(parents=True)
@@ -4453,16 +4474,9 @@ def actual_paid_launcher(call_spec):
     codex_path = shutil.which("codex")
     if not git_path or not claude_path or not codex_path:
         fail("live adapter executable unavailable")
-    env = {
-        "PATH": f"{bin_path}:{Path(git_path).parent}:{Path(claude_path).parent}:{Path(codex_path).parent}:/usr/bin:/bin",
-        "HOME": str(home_path),
-        "TMPDIR": str(temp_path),
-        "LC_ALL": "C",
-        "LANG": "C",
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_TERMINAL_PROMPT": "0",
-        "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
-    }
+    env = build_live_adapter_env(
+        bin_path, Path(git_path), Path(claude_path), Path(codex_path), home_path, temp_path
+    )
     git_fixture_command(git_path, env, run_root, "clone", "--bare", str(root), str(origin_path))
     git_fixture_command(git_path, env, run_root, "clone", str(origin_path), str(repo_path))
     for key, value in (
@@ -4701,6 +4715,18 @@ def validate_resource_group():
             guarded = run_bounded([str(guard_path)], guard_fixture, {}, input_bytes=guard_input)
             if guarded.returncode != expected_code:
                 fail(f"resource Claude path guard mismatch: {label}")
+    live_env_control = build_live_adapter_env(
+        Path("/private/tmp/bin"),
+        Path("/usr/bin/git"),
+        Path("/usr/local/bin/claude"),
+        Path("/usr/local/bin/codex"),
+        Path("/private/tmp/home"),
+        Path("/private/tmp/session"),
+    )
+    if set(live_env_control) != {
+        "PATH", "HOME", "TMPDIR", "LC_ALL", "LANG", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT"
+    } or "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB" in live_env_control:
+        fail("resource live adapter environment is not closed")
     caps = {
         "max_turns_per_session": 4,
         "per_turn_timeout": 30,
@@ -5480,18 +5506,31 @@ def validate_resource_group():
         outcome["verdict"] = "nonconformant"
         return outcome
 
-    for launcher, diagnostic in (
-        (failed_pilot_launcher, "pilot-infrastructure-failure"),
-        (nonconformant_pilot_launcher, "pilot-conformance-failure"),
-    ):
-        try:
-            execute_paid_schedule("live-pilot", pilot_caps, models, launcher)
-        except ValueError as exc:
-            if diagnostic not in str(exc):
-                fail(f"resource pilot failure diagnostic mismatch: {exc}")
-        else:
-            fail(f"resource pilot failure accepted: {diagnostic}")
-        negatives += 1
+    with tempfile.TemporaryDirectory(prefix="failed-paid-state-", dir=str(receipt_test_root)) as failed_temp:
+        failed_root = Path(failed_temp)
+        for launcher, diagnostic in (
+            (failed_pilot_launcher, "pilot-infrastructure-failure"),
+            (nonconformant_pilot_launcher, "pilot-conformance-failure"),
+        ):
+            failed_state = failed_root / f"{diagnostic}.json"
+            try:
+                execute_paid_schedule(
+                    "live-pilot",
+                    pilot_caps,
+                    models,
+                    launcher,
+                    state_path=failed_state,
+                    state_root=failed_root,
+                )
+            except ValueError as exc:
+                if diagnostic not in str(exc):
+                    fail(f"resource pilot failure diagnostic mismatch: {exc}")
+            else:
+                fail(f"resource pilot failure accepted: {diagnostic}")
+            failed_value = json.loads(read_bounded_file(failed_state, failed_root, 1048576))
+            if failed_value.get("status") != "failed" or failed_value.get("failure") != diagnostic:
+                fail(f"resource pilot failure state mismatch: {diagnostic}")
+            negatives += 1
     with tempfile.TemporaryDirectory(prefix="live-gate-test-", dir=str(receipt_test_root)) as gate_temp:
         gate_path = Path(gate_temp) / "progress.md"
         expected_answer = {
