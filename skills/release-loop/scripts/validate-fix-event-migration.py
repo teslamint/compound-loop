@@ -205,6 +205,15 @@ def validate_migration(repo, progress_relative, adoption_relative, signature_che
         raise Blocked("fix migration duplicate ledger event")
     checker = signature_checker or default_signature_checker(repo)
     accepted = []
+    result_path_owners = {}
+    for existing_event in events:
+        existing_path = existing_event.get("result_path")
+        existing_id = existing_event.get("id")
+        if isinstance(existing_path, str):
+            owner = result_path_owners.get(existing_path)
+            if owner is not None and owner != existing_id:
+                raise Blocked("fix migration duplicate result path")
+            result_path_owners[existing_path] = existing_id
     for row in rows:
         if set(row) != required:
             raise Blocked("fix migration row invalid")
@@ -242,10 +251,16 @@ def validate_migration(repo, progress_relative, adoption_relative, signature_che
         report_path = row["fixer_report_path"]
         if not isinstance(report_path, str):
             raise Blocked("fix migration fixer report path invalid")
+        if report_path in {adoption_relative, source_path}:
+            raise Blocked("fix migration fixer report path not round-specific")
+        owner = result_path_owners.get(report_path)
+        if owner is not None and owner != row["id"]:
+            raise Blocked("fix migration duplicate fixer report path")
         report_sha = row["fixer_report_sha256"]
         if not isinstance(report_sha, str) or not SHA256.fullmatch(report_sha):
             raise Blocked("fix migration fixer report digest invalid")
         validate_owned(repo, root, report_path, report_sha, "fix migration fixer report")
+        result_path_owners[report_path] = row["id"]
         event = {
             "id": row["id"],
             "kind": "fix",

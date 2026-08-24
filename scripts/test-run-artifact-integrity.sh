@@ -71,6 +71,7 @@ CASES = (
     "interrupted_legacy_published_archive",
     "archive_journal_resume_tamper",
     "archive_destination_foreign_entry",
+    "archive_manifest_pending_recovery",
     "archive_requires_persisted_destination",
     "archive_incomplete_run",
     "archive_incomplete_missing_phase",
@@ -2878,6 +2879,59 @@ def run_case(name: str) -> None:
                     None,
                     persist_authority=False,
                 )[-1] == "progress.md"
+        elif name == "archive_manifest_pending_recovery":
+            for mode in ("legacy", "scoped"):
+                for failure in ("archive-after-manifest-prepare", "archive-after-manifest-final"):
+                    candidate = new_repo(tmp, "manifest-pending-" + mode + "-" + failure)
+                    if mode == "legacy":
+                        candidate_progress = candidate / ".release-loop/progress.md"
+                        candidate_progress.parent.mkdir()
+                        candidate_progress.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+                    else:
+                        candidate_progress = initialize(candidate, "alpha")
+                    publish_from_cli(candidate, candidate_progress, "reports/U1.md", b"owned\n", CLI)
+                    destination = ".release-loop/archive/2026-08-24-" + mode + "-" + failure
+                    persist_archive_evidence(candidate_progress, destination, "completed")
+                    interrupted = subprocess.run(
+                        (
+                            sys.executable,
+                            str(CLI),
+                            "archive",
+                            "--repo",
+                            str(candidate),
+                            "--progress-path",
+                            candidate_progress.relative_to(candidate).as_posix(),
+                            "--destination",
+                            destination,
+                        ),
+                        cwd=ROOT,
+                        env={**os.environ, "RUN_ARTIFACT_INTEGRITY_TEST_FAIL": failure},
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=False,
+                    )
+                    assert interrupted.returncode != 0 and "injected archive interruption" in interrupted.stderr
+                    source_root = candidate_progress.parent
+                    destination_path = candidate / destination
+                    source_manifest = source_root / ".tmp/archive-source-manifest.tmp"
+                    final_manifest = destination_path / ".archive-source-manifest.json"
+                    journal = json.loads((source_root / ".phase-artifact-ownership.json").read_text(encoding="utf-8"))
+                    assert journal["pending"]["source"] == ".tmp/archive-source-manifest.tmp"
+                    assert journal["pending"]["target"] == ".archive-source-manifest.json"
+                    if failure == "archive-after-manifest-prepare":
+                        assert source_manifest.is_file() and not final_manifest.exists()
+                    else:
+                        assert not source_manifest.exists() and final_manifest.is_file()
+                    assert archive_scope(
+                        candidate,
+                        candidate_progress.relative_to(candidate).as_posix(),
+                        None,
+                        persist_authority=False,
+                    )[-1] == "progress.md"
+                    archived_journal = json.loads((destination_path / ".phase-artifact-ownership.json").read_text(encoding="utf-8"))
+                    assert archived_journal["pending"] is None
+                    assert archived_journal["owned"][".archive-source-manifest.json"] == hashlib.sha256(final_manifest.read_bytes()).hexdigest()
         elif name == "archive_requires_persisted_destination":
             path = initialize(repo, "alpha")
             before_progress = path.read_bytes()
@@ -3955,6 +4009,7 @@ def run_case(name: str) -> None:
             path = initialize(repo, "alpha")
             head = git(repo, "rev-parse", "HEAD")
             source_result = publish_from_cli(repo, path, "reviews/events/U3-round1.md", b"source-review\n", CLI)
+            second_source_result = publish_from_cli(repo, path, "reviews/events/U4-round1.md", b"second-source-review\n", CLI)
             fixer_report = publish_from_cli(repo, path, "reports/U3-fix-migration.md", b"fixer-report\n", CLI)
             progress_text = path.read_text(encoding="utf-8") + (
                 "\nreview_counts:\n"
@@ -3975,6 +4030,19 @@ def run_case(name: str) -> None:
                 f"    reviewed_head: {head}\n"
                 f"    result_path: {source_result['target']}\n"
                 f"    result_sha256: {source_result['sha256']}\n"
+                "    outcome: blocked\n"
+                "    source_review_event: null\n"
+                "    re_review_of: null\n"
+                "    source_adoption_path: null\n"
+                "    source_adoption_sha256: null\n"
+                "  - id: unit:U4:1\n"
+                "    kind: unit\n"
+                "    subject: U4\n"
+                "    ordinal: 1\n"
+                "    state: complete\n"
+                f"    reviewed_head: {head}\n"
+                f"    result_path: {second_source_result['target']}\n"
+                f"    result_sha256: {second_source_result['sha256']}\n"
                 "    outcome: blocked\n"
                 "    source_review_event: null\n"
                 "    re_review_of: null\n"
@@ -4060,6 +4128,13 @@ def run_case(name: str) -> None:
             missing_report = dict(base_row)
             missing_report["fixer_report_path"] = ".release-loop/runs/alpha/reports/missing.md"
             attacks.append(("missing-report", [missing_report], lambda _: "G", "fixer report"))
+            source_report = dict(base_row)
+            source_report["fixer_report_path"] = source_result["target"]
+            source_report["fixer_report_sha256"] = source_result["sha256"]
+            attacks.append(("source-report", [source_report], lambda _: "G", "not round-specific"))
+            adoption_report = dict(base_row)
+            adoption_report["fixer_report_path"] = (path.parent / "reviews/adoptions/fix-history-adoption-report.json").relative_to(repo).as_posix()
+            attacks.append(("adoption-report", [adoption_report], lambda _: "G", "not round-specific"))
             for label, invalid_path in (("null", None), ("number", 7)):
                 invalid_report_path = dict(base_row)
                 invalid_report_path["fixer_report_path"] = invalid_path
@@ -4074,6 +4149,44 @@ def run_case(name: str) -> None:
                     assert diagnostic in str(exc), (label, str(exc))
                 else:
                     raise AssertionError(label + " migration attack passed")
+            duplicate_report_row = {
+                **base_row,
+                "id": "fix:U4:1",
+                "subject": "U4",
+                "source_review_event": "unit:U4:1",
+            }
+            duplicate_report_adoption = publish_adoption("fix-history-duplicate-report", [base_row, duplicate_report_row])
+            try:
+                migration.validate_migration(repo, path.relative_to(repo).as_posix(), duplicate_report_adoption, lambda _: "G")
+            except migration.Blocked as exc:
+                assert "duplicate fixer report path" in str(exc), str(exc)
+            else:
+                raise AssertionError("two migration rows reused one fixer report")
+
+            progress_without_owner_conflict = path.read_text(encoding="utf-8")
+            path.write_text(progress_without_owner_conflict + (
+                "  - id: standalone:other:1\n"
+                "    kind: standalone\n"
+                "    subject: other\n"
+                "    ordinal: 1\n"
+                "    state: complete\n"
+                f"    reviewed_head: {head}\n"
+                f"    result_path: {fixer_report['target']}\n"
+                f"    result_sha256: {fixer_report['sha256']}\n"
+                "    outcome: clean\n"
+                "    finding_inventory: []\n"
+                "    source_review_event: null\n"
+                "    re_review_of: null\n"
+                "    source_adoption_path: null\n"
+                "    source_adoption_sha256: null\n"
+            ), encoding="utf-8")
+            try:
+                migration.validate_migration(repo, path.relative_to(repo).as_posix(), adoption_path, lambda _: "G")
+            except migration.Blocked as exc:
+                assert "duplicate fixer report path" in str(exc), str(exc)
+            else:
+                raise AssertionError("existing event result path was reused")
+            path.write_text(progress_without_owner_conflict, encoding="utf-8")
             try:
                 migration.validate_migration(repo, path.relative_to(repo).as_posix(), "reviews/adoptions/missing.json", lambda _: "G")
             except migration.Blocked as exc:

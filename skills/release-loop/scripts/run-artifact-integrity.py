@@ -24,12 +24,20 @@ from phase_artifact_core import write_journal as write_phase_artifact_journal
 
 SCHEMA_VERSION = "release-loop/v1"
 ARCHIVE_MANIFEST_NAME = ".archive-source-manifest.json"
+ARCHIVE_MANIFEST_SOURCE = ".tmp/archive-source-manifest.tmp"
 ARCHIVE_MANIFEST_SCHEMA = "archive-source-manifest/v1"
 FEATURE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 PHASES = frozenset(("design", "plan", "implement", "review", "ship", "retro", "done", "blocked"))
 PHASE_STATUSES = frozenset(("in-progress", "waiting-user", "blocked", "complete"))
 TEST_FAILURE_ENV = "RUN_ARTIFACT_INTEGRITY_TEST_FAIL"
-TEST_FAILURES = frozenset(("archive-after-first", "archive-after-journal", "handoff-after-marker", "publish-before-final"))
+TEST_FAILURES = frozenset((
+    "archive-after-first",
+    "archive-after-journal",
+    "archive-after-manifest-prepare",
+    "archive-after-manifest-final",
+    "handoff-after-marker",
+    "publish-before-final",
+))
 
 
 class Blocked(RuntimeError):
@@ -270,39 +278,82 @@ def prepare_archive_manifest(
     publication: dict[str, object],
 ) -> None:
     manifest_path = destination / ARCHIVE_MANIFEST_NAME
-    temporary = destination / (ARCHIVE_MANIFEST_NAME + ".tmp")
-    if temporary.exists() or temporary.is_symlink():
-        reject("archive destination conflict", temporary.as_posix())
-    if manifest_path.exists() or manifest_path.is_symlink():
-        if manifest_path.is_symlink() or not manifest_path.is_file():
-            reject("archive destination conflict", manifest_path.as_posix())
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise Blocked("archive destination conflict: invalid source manifest") from exc
-        if set(manifest) != {"schema", "entries"} or manifest.get("schema") != ARCHIVE_MANIFEST_SCHEMA or not isinstance(manifest.get("entries"), list):
-            reject("archive destination conflict", "invalid source manifest")
-        recorded = publication["owned"].get(ARCHIVE_MANIFEST_NAME)
-        if recorded != phase_artifact_sha256(manifest_path):
-            reject("archive destination conflict", "archive manifest ownership mismatch")
-    else:
-        existing = list(destination.iterdir())
-        if existing:
-            reject("archive destination conflict", existing[0].as_posix())
-        manifest_children = [child for child in children if child.name != JOURNAL_NAME]
-        manifest = {"schema": ARCHIVE_MANIFEST_SCHEMA, "entries": archive_manifest_entries(source, [*manifest_children, progress])}
-        temporary.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
-        os.replace(temporary, manifest_path)
+    temporary = source / ARCHIVE_MANIFEST_SOURCE
+    pending = publication["pending"]
+    if pending is not None:
+        expected = {"source": ARCHIVE_MANIFEST_SOURCE, "target": ARCHIVE_MANIFEST_NAME}
+        if any(pending[key] != value for key, value in expected.items()):
+            reject("archive destination conflict", "different pending publication")
+        digest = pending["sha256"]
+        source_exists = temporary.is_file() and not temporary.is_symlink()
+        target_exists = manifest_path.is_file() and not manifest_path.is_symlink()
+        if source_exists == target_exists:
+            reject("archive destination conflict", "inconsistent manifest publication")
+        candidate = temporary if source_exists else manifest_path
+        if phase_artifact_sha256(candidate) != digest:
+            reject("archive destination conflict", "archive manifest pending digest mismatch")
+        if source_exists:
+            os.replace(temporary, manifest_path)
         owned = dict(publication["owned"])
-        if ARCHIVE_MANIFEST_NAME in owned:
+        recorded = owned.get(ARCHIVE_MANIFEST_NAME)
+        if recorded is not None and recorded != digest:
             reject("archive destination conflict", "archive manifest ownership conflict")
-        owned[ARCHIVE_MANIFEST_NAME] = phase_artifact_sha256(manifest_path)
+        owned[ARCHIVE_MANIFEST_NAME] = digest
         write_phase_artifact_journal(
             journal,
             journal_temporary,
             {"schema": publication["schema"], "owned": owned, "pending": None},
         )
         publication["owned"] = owned
+        publication["pending"] = None
+    elif manifest_path.exists() or manifest_path.is_symlink():
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            reject("archive destination conflict", manifest_path.as_posix())
+        recorded = publication["owned"].get(ARCHIVE_MANIFEST_NAME)
+        if recorded != phase_artifact_sha256(manifest_path):
+            reject("archive destination conflict", "archive manifest ownership mismatch")
+        if temporary.exists() or temporary.is_symlink():
+            reject("archive destination conflict", temporary.as_posix())
+    else:
+        if temporary.exists() or temporary.is_symlink():
+            reject("archive destination conflict", temporary.as_posix())
+        existing = list(destination.iterdir())
+        if existing:
+            reject("archive destination conflict", existing[0].as_posix())
+        manifest_children = [child for child in children if child.name != JOURNAL_NAME]
+        manifest = {"schema": ARCHIVE_MANIFEST_SCHEMA, "entries": archive_manifest_entries(source, [*manifest_children, progress])}
+        temporary.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        digest = phase_artifact_sha256(temporary)
+        manifest_pending = {"source": ARCHIVE_MANIFEST_SOURCE, "target": ARCHIVE_MANIFEST_NAME, "sha256": digest}
+        write_phase_artifact_journal(
+            journal,
+            journal_temporary,
+            {"schema": publication["schema"], "owned": dict(publication["owned"]), "pending": manifest_pending},
+        )
+        publication["pending"] = manifest_pending
+        if test_failure("archive-after-manifest-prepare"):
+            reject("injected archive interruption", ARCHIVE_MANIFEST_NAME)
+        os.replace(temporary, manifest_path)
+        if test_failure("archive-after-manifest-final"):
+            reject("injected archive interruption", ARCHIVE_MANIFEST_NAME)
+        owned = dict(publication["owned"])
+        if ARCHIVE_MANIFEST_NAME in owned:
+            reject("archive destination conflict", "archive manifest ownership conflict")
+        owned[ARCHIVE_MANIFEST_NAME] = digest
+        write_phase_artifact_journal(
+            journal,
+            journal_temporary,
+            {"schema": publication["schema"], "owned": owned, "pending": None},
+        )
+        publication["owned"] = owned
+        publication["pending"] = None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise Blocked("archive destination conflict: invalid source manifest") from exc
+    if set(manifest) != {"schema", "entries"} or manifest.get("schema") != ARCHIVE_MANIFEST_SCHEMA or not isinstance(manifest.get("entries"), list):
+        reject("archive destination conflict", "invalid source manifest")
     destination_children = [
         child
         for child in destination.iterdir()
@@ -335,9 +386,26 @@ def validate_archive_publication(
         assert source_state is not None
         return source_state
     journal_root, journal, temporary, state = states[0]
-    validate_phase_artifact_pending(repo, journal_root, state)
-    if state["pending"] is not None:
-        reject("archive destination conflict", "pending publication requires recovery or compensation")
+    pending = state["pending"]
+    if pending is not None:
+        archive_pending = (
+            journal_root == source_root
+            and pending["source"] == ARCHIVE_MANIFEST_SOURCE
+            and pending["target"] == ARCHIVE_MANIFEST_NAME
+        )
+        if not archive_pending:
+            validate_phase_artifact_pending(repo, journal_root, state)
+            reject("archive destination conflict", "pending publication requires recovery or compensation")
+        pending_source = guard(repo, f"{source_root}/{ARCHIVE_MANIFEST_SOURCE}", source_root)
+        pending_target = guard(repo, f"{destination_root}/{ARCHIVE_MANIFEST_NAME}", destination_root)
+        source_exists = pending_source.is_file() and not pending_source.is_symlink()
+        target_exists = pending_target.is_file() and not pending_target.is_symlink()
+        if source_exists == target_exists:
+            reject("archive destination conflict", "inconsistent manifest publication")
+        candidate = pending_source if source_exists else pending_target
+        relative = candidate.relative_to(repo).as_posix()
+        if phase_artifact_git_tracked(repo, relative) or phase_artifact_sha256(candidate) != pending["sha256"]:
+            reject("archive destination conflict", "archive manifest pending digest mismatch")
     for key, expected in state["owned"].items():
         candidates = []
         for root in (source_root, destination_root):
@@ -415,6 +483,12 @@ def archive(
         children = [child for child in sorted(source.iterdir()) if child.name != "progress.md"]
         for child in children:
             guard(repo, child.relative_to(repo).as_posix(), source_rel)
+    archive_temporary_root = guard(repo, f"{source_rel}/.tmp", source_rel)
+    manifest_owned = ARCHIVE_MANIFEST_NAME in publication["owned"]
+    if not archive_temporary_root.exists() and not manifest_owned:
+        archive_temporary_root.mkdir(parents=True, exist_ok=True)
+    if archive_temporary_root.exists() and archive_temporary_root not in children:
+        children.insert(0, archive_temporary_root)
     destination_path.mkdir(parents=True, exist_ok=True)
     prepare_archive_manifest(
         source,
