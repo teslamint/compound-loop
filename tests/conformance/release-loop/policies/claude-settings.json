@@ -18,7 +18,16 @@
       "Bash(git:*)",
       "Bash(gh:*)",
       "Bash(python:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Read(~/.claude.json)",
+      "Read(~/.claude/**)",
+      "Read(~/.codex/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.netrc)",
+      "Read(~/.aws/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.kube/**)"
     ]
   }
 }

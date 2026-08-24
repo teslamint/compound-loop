@@ -879,7 +879,12 @@ def validate_policy_files(fixture_root):
         fail("Claude policy enables project MCP")
     denied = set(claude.get("permissions", {}).get("deny", []))
     allowed = set(claude.get("permissions", {}).get("allow", []))
-    required_denials = {"WebFetch", "WebSearch", "Bash(curl:*)", "Bash(ssh:*)", "Bash(npm publish:*)"}
+    required_denials = {
+        "WebFetch", "WebSearch", "Bash(curl:*)", "Bash(ssh:*)", "Bash(npm publish:*)",
+        "Read(~/.claude.json)", "Read(~/.claude/**)", "Read(~/.codex/**)", "Read(~/.ssh/**)",
+        "Read(~/.config/gh/**)", "Read(~/.netrc)", "Read(~/.aws/**)",
+        "Read(~/.config/gcloud/**)", "Read(~/.kube/**)",
+    }
     if not required_denials <= denied:
         fail("Claude policy denial inventory mismatch")
     if allowed != {"Read", "Write", "Edit", "Glob", "Grep", "Bash(.conformance/bin/fixture-exec:*)"}:
