@@ -39,6 +39,8 @@ root = Path(sys.argv[1])
 mode = sys.argv[2]
 mode_args = sys.argv[3:]
 data_root = root / "tests/conformance/release-loop"
+ADAPTER_OUTPUT_CAP = 1048576
+ADAPTER_SUMMARY_CAP = 1500000
 corpus_path = data_root / "corpus.json"
 expected_graders = [
     "design-user-gate",
@@ -4282,7 +4284,7 @@ summary_path.write_text(json.dumps(summary, sort_keys=True) + "\\n", encoding="u
     path.chmod(0o755)
 
 
-def managed_adapter_call(command, cwd, env, stdin_bytes, timeout_seconds, work_root):
+def managed_adapter_call(command, cwd, env, stdin_bytes, timeout_seconds, work_root, table_reader=process_table):
     import base64
     supervisor = work_root / "adapter-supervisor.py"
     spec_path = work_root / f"adapter-spec-{uuid.uuid4().hex}.json"
@@ -4294,17 +4296,17 @@ def managed_adapter_call(command, cwd, env, stdin_bytes, timeout_seconds, work_r
         "env": env,
         "stdin_base64": base64.b64encode(stdin_bytes).decode(),
         "timeout": timeout_seconds,
-        "output_cap": 65536,
+        "output_cap": ADAPTER_OUTPUT_CAP,
     }
     write_json_atomic(spec_path, spec, work_root)
     proof = managed_process(
         [sys.executable, str(supervisor), str(spec_path), str(summary_path)],
         timeout_seconds + 2,
-        table_reader=process_table,
+        table_reader=table_reader,
     )
     if not proof["reaped"] or not proof["process_group_reaped"] or not proof["descendants_absent"]:
         fail("adapter process proof incomplete")
-    summary = json.loads(read_bounded_file(summary_path, work_root, 200000))
+    summary = json.loads(read_bounded_file(summary_path, work_root, ADAPTER_SUMMARY_CAP))
     if summary.get("overflow"):
         fail("adapter output exceeded cap")
     if summary.get("timed_out") or proof["timed_out"]:
@@ -4808,6 +4810,34 @@ def validate_resource_group():
         "PATH", "HOME", "TMPDIR", "LC_ALL", "LANG", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT"
     } or "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB" in live_env_control:
         fail("resource live adapter environment is not closed")
+    with tempfile.TemporaryDirectory(prefix="adapter-cap-", dir=str(root / ".release-loop/evidence/U6")) as cap_temp:
+        cap_root = Path(cap_temp)
+        below, _ = managed_adapter_call(
+            [sys.executable, "-c", "import sys;sys.stdout.write('x'*1048575)"],
+            cap_root,
+            {"PATH": "/usr/bin:/bin"},
+            b"",
+            30,
+            cap_root,
+            table_reader=empty_process_table,
+        )
+        if below.returncode != 0 or len(below.stdout) != 1048575:
+            fail("resource adapter below-cap output rejected")
+        try:
+            managed_adapter_call(
+                [sys.executable, "-c", "import sys;sys.stdout.write('x'*1048577)"],
+                cap_root,
+                {"PATH": "/usr/bin:/bin"},
+                b"",
+                30,
+                cap_root,
+                table_reader=empty_process_table,
+            )
+        except ValueError as exc:
+            if "adapter output exceeded cap" not in str(exc):
+                fail(f"resource adapter cap diagnostic mismatch: {exc}")
+        else:
+            fail("resource adapter above-cap output accepted")
     caps = {
         "max_turns_per_session": 4,
         "per_turn_timeout": 30,
