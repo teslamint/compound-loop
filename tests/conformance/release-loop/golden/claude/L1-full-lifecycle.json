@@ -5,6 +5,11 @@
   "payload_mode": "exact-current-skill-bytes",
   "skill_source": "skills/release-loop/SKILL.md",
   "skill_sha256": "639f710ed3f11e564cf018c2c5ed95f0a3f5632bb81e0923b89296472a325ee4",
+  "skill_materialization": {
+    "read_mode": "bytes",
+    "digest": "sha256",
+    "insertion": "verbatim"
+  },
   "prompt": "Run the complete release-loop lifecycle in the disposable fixture. Stop only at recorded USER gates and finish with an archived Retro.",
   "scripted_answers": [
     {
@@ -21,4 +26,3 @@
     }
   ]
 }
-

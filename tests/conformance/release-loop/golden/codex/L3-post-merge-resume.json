@@ -5,7 +5,11 @@
   "payload_mode": "exact-current-skill-bytes",
   "skill_source": "skills/release-loop/SKILL.md",
   "skill_sha256": "639f710ed3f11e564cf018c2c5ed95f0a3f5632bb81e0923b89296472a325ee4",
+  "skill_materialization": {
+    "read_mode": "bytes",
+    "digest": "sha256",
+    "insertion": "verbatim"
+  },
   "prompt": "Resume the supplied merged Ship ledger. Do not re-enter pre-merge shipping. Complete post-Ship work, Retro, and archive.",
   "scripted_answers": []
 }
-
