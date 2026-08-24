@@ -71,7 +71,7 @@ When an approved plan declares a Release-loop transition heading, read reference
 5. Detect base branch: `git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||' || echo main`
 6. Create a feature branch from HEAD via `worktree-isolation` by default. Enter the resulting feature checkout before any run-scope preparation. Honor an explicit user request to work in the current checkout instead. Treat an explicit request not to create a new worktree as the same exception.
 7. In the feature checkout, run `python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" initialize --repo . --feature <feature_slug>` before the first state write. Add `--progress-path <repo-relative-progress-path>` only for an exact selected path. For a new run, the command creates only an empty scope and returns its exact progress path with `state: new`. It never writes a partial ledger. An interrupted preparation therefore reruns as `new`. An existing valid progress record returns `state: resume`. Reject absolute paths, parent escapes, symlinks, and physical parents outside the fixed root family. An occupied scope without one matching valid progress record is an artifact-scope collision. List every filesystem or index collision by its exact path. Stop before mutation.
-8. Require the initialize result to remain `state: new` with an empty scope in the feature checkout. Write one complete schema-conformant record at the returned progress path. Include its validated `artifact_root` and a predicted `final_action`. Add the declaration Log line in that same and only ledger write.
+8. Require the initialize result to remain `state: new` with an empty scope in the feature checkout. Write one complete schema-conformant record at the returned progress path. Include its validated `artifact_root`, a predicted `final_action`, `current_commit_range` from full Git object IDs, and an empty `review_gate`. Add the declaration Log line in that same and only ledger write.
 9. Enter the first applicable phase.
 
 A blocked initialization reuses the same path and reports the same state. Remove only an empty directory that this attempt created before publication. Remove an injected disposable orphan only after ownership proof. After publication, use resume or archive-incomplete compensation. A published progress record remains resumable. An unattended ambiguity returns blocked context without a prompt. Cancellation before creation changes nothing. Cancellation before publication removes only a proven empty directory.
@@ -90,6 +90,10 @@ When the resume argument is given or the Retro exit condition holds, read refere
 ## State updates
 
 Update the selected exact progress path after every phase transition, unit completion, CI attempt, and review round. Write at the moment of the event. Schema: `references/progress-schema.md`.
+
+Validate `current_commit_range` on resume, Retro entry, and every shipping rebase. Refresh a descendant head and clear `review_gate`. A non-descendant head without matching current-session pre-mutation approval blocks with `stale-commit-range`. Any head change clears `review_gate`; historical review events and derived counts remain unchanged.
+
+Set `review_gate` only from a clean complete final or standalone event whose full `reviewed_head` equals the current full `HEAD`. Phase reuse requires the same event ID and exact head equality.
 
 The `final_action` record is refined at each determination or invalidation point, at the moment of the event like every update above: PR created → `determined` plus the exact merge command; PR closed or new commits after determination → back to `predicted` with the reason logged in the same edit.
 

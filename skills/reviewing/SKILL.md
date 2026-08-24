@@ -44,7 +44,7 @@ Parse tokens, stripping each before treating the remainder as a PR number/URL/br
 ## Two Caller Shapes
 
 - **Standalone**: direct invocation per the trigger taxonomy above.
-- **Phase-gate** (`release-loop`'s Review phase): deliberately redundant with `implementing`'s final task-level review -- it catches issues surviving all fix rounds and gives the user a clean checkpoint between "code complete" and "ready to ship." Reuse requires sealed outcome `clean` plus a successful exact inventory/disposition clean gate. `actionable` and `blocked` never reuse. Successful phase-gate reuse does not allocate another event or increment a review count.
+- **Phase-gate** (`release-loop`'s Review phase): deliberately redundant with `implementing`'s final task-level review -- it catches issues surviving all fix rounds and gives the user a clean checkpoint between "code complete" and "ready to ship." Reuse requires sealed outcome `clean`, a successful exact inventory/disposition clean gate, and a full `reviewed_head` that equals the current full `HEAD`. Persist that event ID and head as `review_gate`. `actionable` and `blocked` never reuse. Any head change clears the gate. Successful phase-gate reuse does not allocate another event or increment a review count.
 
 ## Durable standalone event
 

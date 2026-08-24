@@ -105,7 +105,7 @@ Apply this protocol to every unit review, fixer batch, and final branch review. 
 7. Count complete `unit`, `fix`, and `final` events as `unit_passes`, `fix_rounds`, and `final_passes`. A re-review is another unit pass. Event replay and later phase-gate reuse add no count.
 8. The generic disposition operation records only reasoned `deferred`; it always rejects `fixed`. Only the verifying re-review operation writes `fixed`. It validates explicit `re_review_of`, kind, subject, sequential source, sealed source and current inventories, and absence before the write. Recovery and adopted sources use this same operation. Only deferred P3 may satisfy clean; P0-P2 require `fixed`.
 9. When a source predates wrappers, publish one immutable `review-legacy-source-adoption/v1` artifact. Bind its source event, exact legacy result path and SHA-256, head, outcome, and full severity inventory. Preserve the legacy bytes. Persist the adoption path and SHA-256 on the source event, and reject every field or digest mismatch before re-review.
-10. Reuse a final or standalone result at the phase gate only when its sealed outcome is `clean` and its exact inventory/disposition clean gate succeeds. Never reuse `actionable` or `blocked`.
+10. Reuse a final or standalone result at the phase gate only when its sealed outcome is `clean`, its exact inventory/disposition clean gate succeeds, and its full `reviewed_head` equals the current full `HEAD`. Persist that event ID and head as `review_gate`. Never reuse `actionable` or `blocked`. Any head change clears the gate and requires a new final or standalone review.
 
 ## Per-unit loop
 

@@ -76,6 +76,32 @@ finding_dispositions:
     introduced_by: <review event ID>
     resolved_by: <verifying re-review event ID or terminal-triage authority>
     rationale: <required for deferred, optional for fixed>
+
+# Current Git authority and exact-head review gate. New ledgers include both.
+current_commit_range:
+  base: <full Git object ID or null>
+  head: <full Git object ID or null>
+review_gate:
+  event_id: <final or standalone event ID or null>
+  head: <full reviewed Git object ID or null>
+
+# History rewrite evidence. Entries are append-only.
+rewrite_approvals:
+  - id: <stable rewrite attempt ID>
+    state: active | consumed | cancelled | failed
+    approver: USER
+    session: <current orchestrating session identity>
+    timestamp: <ISO-8601 timestamp>
+    old_range: {base: <full Git object ID>, head: <full Git object ID>}
+    command: <exact rewrite command, no secrets>
+    target_base: <exact target base ref>
+rewrite_results:
+  - approval_id: <rewrite approval ID>
+    state: success | failed | cancelled
+    exit_status: <integer or null before command>
+    verification_command: <exact command or null before command>
+    old_range: {base: <full Git object ID>, head: <full Git object ID>}
+    new_range: {base: <full Git object ID>, head: <full Git object ID>}
 ---
 
 ## Log
@@ -127,6 +153,14 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - A pre-wrapper source may be adopted once through `review-legacy-source-adoption/v1`. The immutable adoption binds source event, exact result path and SHA-256, reviewed head, outcome, and full severity inventory. Preserve the legacy result bytes. Persist the adoption path and SHA-256 on the source event.
 - Re-review resolves an adopted source only after validating both immutable digests and every adoption field. A mismatched path, result digest, head, outcome, inventory, or source event blocks.
 - Phase-gate reuse requires sealed outcome `clean` and a successful exact inventory/disposition clean gate. `actionable` and `blocked` events never reuse.
+- `current_commit_range.base` is `git merge-base <base_branch> HEAD`. Its `head` is the full `git rev-parse HEAD` object ID. Validate both on resume, Retro entry, and each shipping rebase.
+- A descendant head refreshes `current_commit_range`. Any head change clears `review_gate`, even when the new head descends from the old head.
+- `review_gate` names only a clean complete `final` or `standalone` event. Its event `reviewed_head`, gate `head`, and the current full `HEAD` must be identical before phase-gate reuse.
+- A non-descendant head without one matching active pre-mutation approval blocks with `stale-commit-range`. Never infer authorization from a post-mutation result.
+- Persist a current-session USER rewrite approval before mutation. Bind it to one old range, exact rewrite command, and exact target base. An approval from another session or with any mismatched field blocks before command execution.
+- After mutation, append one post-mutation result with the approval ID, exit status, exact verification command, old range, and observed new range. A successful result consumes its approval, refreshes `current_commit_range`, and clears `review_gate` without changing historical events or counts.
+- A failed rewrite runs its documented abort command, verifies the old range, retains that authoritative range, records the nonzero result, clears any gate invalidated while HEAD changed, and marks the approval failed.
+- Pre-command cancellation appends a cancelled result and marks that approval cancelled. Failed and cancelled approvals never authorize retry; a later attempt requires fresh current-session USER approval.
 - Persist reviewer output verbatim. Parsing may validate its shape, but no caller may rewrite the authoritative result bytes.
 - Each finding uses the reviewing contract's stable fingerprint. `finding_dispositions` contains at most one current row per fingerprint.
 - The generic disposition operation records only reasoned `deferred`. It rejects `fixed` from every caller, including the source review itself and fix events.

@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -165,6 +166,18 @@ REVIEW_CASES = (
     "source_review_self_fix",
 )
 
+HISTORY_CASES = (
+    "authorized_rewrite_refresh",
+    "descendant_head_invalidates",
+    "unapproved_rewrite",
+    "mismatched_approval",
+    "rewrite_conflict",
+    "cancelled_approval_rejected",
+    "fresh_review_after_rewrite",
+    "shipping_command_invariance",
+    "shipping_command_changed_axis",
+)
+
 
 INVOCATIONS = (
     ("skill-initialize", SKILL, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" initialize --repo . --feature <feature_slug>'),
@@ -239,6 +252,68 @@ def new_repo(tmp: Path, name: str = "repo") -> Path:
     git(repo, "add", ".gitignore", "README.md")
     git(repo, "commit", "-qm", "fixture")
     return repo.resolve(strict=True)
+
+
+def new_history_repo(tmp: Path, conflict: bool = False) -> Path:
+    repo = new_repo(tmp)
+    git(repo, "branch", "-M", "main")
+    git(repo, "checkout", "-qb", "origin-main-work")
+    if conflict:
+        (repo / "README.md").write_text("remote\n", encoding="utf-8")
+        git(repo, "add", "README.md")
+    else:
+        (repo / "remote.txt").write_text("remote\n", encoding="utf-8")
+        git(repo, "add", "remote.txt")
+    git(repo, "commit", "-qm", "remote base")
+    remote_head = git(repo, "rev-parse", "HEAD")
+    git(repo, "update-ref", "refs/remotes/origin/main", remote_head)
+    git(repo, "checkout", "-q", "main")
+    (repo / "local.txt").write_text("local\n", encoding="utf-8")
+    git(repo, "add", "local.txt")
+    git(repo, "commit", "-qm", "local base")
+    git(repo, "checkout", "-qb", "feat/fixture")
+    if conflict:
+        (repo / "README.md").write_text("feature\n", encoding="utf-8")
+        git(repo, "add", "README.md")
+    else:
+        (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+        git(repo, "add", "feature.txt")
+    git(repo, "commit", "-qm", "feature")
+    git(repo, "branch", "-D", "origin-main-work")
+    return repo
+
+
+def git_show(source_root: Path, revision: str, path: str) -> str:
+    result = subprocess.run(
+        ("git", "show", f"{revision}:{path}"),
+        cwd=source_root,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return result.stdout
+
+
+def shipping_command_blocks(text: str) -> dict[str, object]:
+    merge_section = text.split("## Step 7: Merge Gate", 1)[1].split("## Step 8: Cleanup", 1)[0]
+    cleanup_section = text.split("## Step 8: Cleanup", 1)[1].split("## Handoff", 1)[0]
+    merge = tuple(
+        line for line in merge_section.splitlines()
+        if line.startswith("gh pr merge ")
+    )
+    ordering = tuple(
+        line for line in cleanup_section.splitlines()
+        if line.startswith("Merge ordering invariant")
+    )
+    commands = tuple(
+        token for line in cleanup_section.splitlines()
+        for index, token in enumerate(line.split("`"))
+        if index % 2 == 1 and (token.startswith("git ") or token.startswith("gh "))
+    )
+    if len(merge) != 1 or len(ordering) != 1:
+        raise AssertionError("shipping command block extraction failed")
+    return {"merge": merge, "cleanup": (ordering, commands)}
 
 
 def progress(feature: str, artifact_root: str) -> str:
@@ -497,6 +572,25 @@ def require_review_contract() -> None:
     missing = [fragment for text, fragment in required if fragment not in text]
     if missing:
         raise AssertionError("missing sealed-review contract: " + " | ".join(missing))
+
+
+def require_history_contract() -> None:
+    shipping = PHASE_CONSUMERS["shipping"]
+    required = (
+        (SCHEMA, "current_commit_range:"),
+        (SCHEMA, "review_gate:"),
+        (SCHEMA, "stale-commit-range"),
+        (SKILL, "Any head change clears `review_gate`"),
+        (IMPLEMENTING, "equals the current full `HEAD`"),
+        (REVIEWING, "equals the current full `HEAD`"),
+        (shipping, "current-session USER rewrite approval"),
+        (shipping, "exact rewrite command"),
+        (shipping, "post-mutation result"),
+        (shipping, "stale-commit-range"),
+    )
+    missing = [fragment for text, fragment in required if fragment not in text]
+    if missing:
+        raise AssertionError("missing exact-head history contract: " + " | ".join(missing))
 
 
 def reviewer_output(
@@ -906,12 +1000,307 @@ class ReviewFixture:
         return event
 
 
+class HistoryFixture:
+    def __init__(self, repo: Path, progress_path: Path, base_branch: str, session: str) -> None:
+        self.repo = repo
+        self.progress_path = progress_path
+        self.base_branch = base_branch
+        self.session = session
+        self.current_commit_range = self.git_range()
+        head = self.current_commit_range["head"]
+        self.review_counts = {
+            "unit_passes": 2,
+            "fix_rounds": 1,
+            "final_passes": 1,
+            "standalone_passes": 0,
+            "findings_fixed": 1,
+            "findings_deferred": 0,
+        }
+        self.review_events: list[dict[str, object]] = [
+            {"id": "final:branch:1", "kind": "final", "outcome": "clean", "reviewed_head": head},
+        ]
+        self.review_gate: dict[str, str | None] = {"event_id": "final:branch:1", "head": head}
+        self.rewrite_approvals: list[dict[str, object]] = []
+        self.rewrite_results: list[dict[str, object]] = []
+        self.persisted_writes = 0
+        self._progress_prefix = progress_path.read_text(encoding="utf-8")
+        self._persist()
+
+    def git_range(self) -> dict[str, str]:
+        return {
+            "base": git(self.repo, "merge-base", self.base_branch, "HEAD"),
+            "head": git(self.repo, "rev-parse", "HEAD"),
+        }
+
+    def _persist(self) -> None:
+        state = {
+            "current_commit_range": self.current_commit_range,
+            "review_counts": self.review_counts,
+            "review_events": self.review_events,
+            "review_gate": self.review_gate,
+            "rewrite_approvals": self.rewrite_approvals,
+            "rewrite_results": self.rewrite_results,
+        }
+        rendered = json.dumps(state, sort_keys=True, separators=(",", ":"))
+        self.progress_path.write_text(
+            self._progress_prefix + "\n## History Fixture State\n\n```json\n" + rendered + "\n```\n",
+            encoding="utf-8",
+        )
+        self.persisted_writes += 1
+
+    def _is_ancestor(self, old: str, new: str) -> bool:
+        result = subprocess.run(
+            ("git", "merge-base", "--is-ancestor", old, new),
+            cwd=self.repo,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return result.returncode == 0
+
+    def refresh(self) -> None:
+        observed = self.git_range()
+        if observed == self.current_commit_range:
+            return
+        if not self._is_ancestor(str(self.current_commit_range["head"]), observed["head"]):
+            raise Blocked("stale-commit-range")
+        self.current_commit_range = observed
+        self.review_gate = {"event_id": None, "head": None}
+        self._persist()
+
+    def approve(self, command: str, target_base: str) -> dict[str, object]:
+        if self.git_range() != self.current_commit_range:
+            raise Blocked("stale-commit-range")
+        approval: dict[str, object] = {
+            "id": f"rewrite:{len(self.rewrite_approvals) + 1}",
+            "state": "active",
+            "approver": "USER",
+            "session": self.session,
+            "timestamp": "2026-08-24T00:00:00Z",
+            "old_range": dict(self.current_commit_range),
+            "command": command,
+            "target_base": target_base,
+        }
+        self.rewrite_approvals.append(approval)
+        self._persist()
+        return approval
+
+    def _active_approval(self, command: str, target_base: str) -> dict[str, object]:
+        matches = [
+            row for row in self.rewrite_approvals
+            if row["state"] == "active"
+            and row["approver"] == "USER"
+            and row["session"] == self.session
+            and row["command"] == command
+            and row["target_base"] == target_base
+            and row["old_range"] == self.current_commit_range
+        ]
+        if len(matches) != 1 or self.git_range() != self.current_commit_range:
+            raise Blocked("stale-commit-range")
+        return matches[0]
+
+    def run_fixture_rewrite(self, command: str) -> int:
+        args = shlex.split(command)
+        if args[:3] != ["git", "rebase", "--onto"]:
+            raise AssertionError(f"unexpected fixture rewrite command: {command}")
+        result = subprocess.run(
+            tuple(args),
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return result.returncode
+
+    def rewrite(self, command: str, target_base: str) -> dict[str, object]:
+        approval = self._active_approval(command, target_base)
+        old_range = dict(self.current_commit_range)
+        exit_status = self.run_fixture_rewrite(command)
+        verification_command = f"git merge-base {self.base_branch} HEAD && git rev-parse HEAD"
+        if exit_status == 0:
+            observed = self.git_range()
+            approval["state"] = "consumed"
+            result: dict[str, object] = {
+                "approval_id": approval["id"],
+                "state": "success",
+                "exit_status": 0,
+                "verification_command": verification_command,
+                "old_range": old_range,
+                "new_range": observed,
+            }
+            self.current_commit_range = observed
+        else:
+            git(self.repo, "rebase", "--abort")
+            observed = self.git_range()
+            if observed != old_range:
+                raise AssertionError(f"rebase abort did not restore range: {observed}")
+            approval["state"] = "failed"
+            result = {
+                "approval_id": approval["id"],
+                "state": "failed",
+                "exit_status": exit_status,
+                "verification_command": verification_command,
+                "old_range": old_range,
+                "new_range": observed,
+            }
+        self.review_gate = {"event_id": None, "head": None}
+        self.rewrite_results.append(result)
+        self._persist()
+        return result
+
+    def cancel(self, approval_id: str) -> dict[str, object]:
+        matches = [row for row in self.rewrite_approvals if row["id"] == approval_id and row["state"] == "active"]
+        if len(matches) != 1:
+            raise Blocked("stale-commit-range")
+        approval = matches[0]
+        approval["state"] = "cancelled"
+        result: dict[str, object] = {
+            "approval_id": approval_id,
+            "state": "cancelled",
+            "exit_status": None,
+            "verification_command": None,
+            "old_range": dict(self.current_commit_range),
+            "new_range": dict(self.current_commit_range),
+        }
+        self.rewrite_results.append(result)
+        self._persist()
+        return result
+
+    def complete_review(self, event_id: str, reviewed_head: str) -> dict[str, object]:
+        if reviewed_head != git(self.repo, "rev-parse", "HEAD"):
+            raise Blocked("review gate head mismatch")
+        kind = event_id.split(":", 1)[0]
+        if kind not in {"final", "standalone"}:
+            raise Blocked("review gate event kind mismatch")
+        event = {"id": event_id, "kind": kind, "outcome": "clean", "reviewed_head": reviewed_head}
+        self.review_events.append(event)
+        self.review_gate = {"event_id": event_id, "head": reviewed_head}
+        self._persist()
+        return event
+
+    def phase_gate(self, event_id: str) -> bool:
+        current_head = git(self.repo, "rev-parse", "HEAD")
+        matches = [row for row in self.review_events if row["id"] == event_id]
+        if len(matches) != 1:
+            raise Blocked("review gate event missing")
+        event = matches[0]
+        expected = {"event_id": event_id, "head": current_head}
+        if event["kind"] not in {"final", "standalone"} or event["outcome"] != "clean":
+            raise Blocked("review gate event invalid")
+        if event["reviewed_head"] != current_head or self.review_gate != expected:
+            raise Blocked("review gate head mismatch")
+        return True
+
+
 def run_case(name: str) -> None:
     require_contract(check_invocations=name == "operative_contract_mutation")
     with tempfile.TemporaryDirectory(prefix=f"run-artifact-{name}-") as tmp_name:
         tmp = Path(tmp_name)
-        repo = new_repo(tmp)
         sent, before = sentinel(tmp)
+        if name in HISTORY_CASES:
+            require_history_contract()
+            conflict = name == "rewrite_conflict"
+            repo = new_history_repo(tmp, conflict=conflict)
+            path = initialize(repo, "alpha")
+            history = HistoryFixture(repo, path, "main", "fixture-session")
+            command = 'git rebase --onto "origin/main" "main" "feat/fixture"'
+            counts_before = dict(history.review_counts)
+            old_range = dict(history.current_commit_range)
+
+            if name == "authorized_rewrite_refresh":
+                approval = history.approve(command, "origin/main")
+                approval_write = history.persisted_writes
+                result = history.rewrite(command, "origin/main")
+                assert approval_write < history.persisted_writes
+                assert approval["state"] == "consumed" and result["state"] == "success"
+                assert result["exit_status"] == 0
+                assert history.current_commit_range == history.git_range()
+                assert history.current_commit_range != old_range
+                assert history.review_counts == counts_before
+                assert history.review_gate == {"event_id": None, "head": None}
+            elif name == "descendant_head_invalidates":
+                (repo / "descendant.txt").write_text("descendant\n", encoding="utf-8")
+                git(repo, "add", "descendant.txt")
+                git(repo, "commit", "-qm", "descendant")
+                history.refresh()
+                assert history.current_commit_range == history.git_range()
+                assert history.current_commit_range["base"] == old_range["base"]
+                assert history.review_gate == {"event_id": None, "head": None}
+            elif name == "unapproved_rewrite":
+                history.run_fixture_rewrite(command)
+                try:
+                    history.refresh()
+                except Blocked as exc:
+                    assert str(exc) == "stale-commit-range"
+                else:
+                    raise AssertionError("unapproved non-descendant rewrite did not block")
+                assert history.current_commit_range == old_range
+                assert history.review_counts == counts_before
+            elif name == "mismatched_approval":
+                history.approve(command + " --empty=drop", "origin/main")
+                head_before = git(repo, "rev-parse", "HEAD")
+                try:
+                    history.rewrite(command, "origin/main")
+                except Blocked as exc:
+                    assert str(exc) == "stale-commit-range"
+                else:
+                    raise AssertionError("mismatched rewrite approval did not block")
+                assert git(repo, "rev-parse", "HEAD") == head_before
+                assert history.current_commit_range == old_range
+            elif name == "rewrite_conflict":
+                history.approve(command, "origin/main")
+                result = history.rewrite(command, "origin/main")
+                assert result["state"] == "failed" and int(result["exit_status"]) != 0
+                assert git(repo, "status", "--porcelain") == ""
+                assert history.current_commit_range == old_range == history.git_range()
+                assert history.review_gate == {"event_id": None, "head": None}
+            elif name == "cancelled_approval_rejected":
+                approval = history.approve(command, "origin/main")
+                cancelled = history.cancel(str(approval["id"]))
+                assert cancelled["state"] == "cancelled" and approval["state"] == "cancelled"
+                head_before = git(repo, "rev-parse", "HEAD")
+                try:
+                    history.rewrite(command, "origin/main")
+                except Blocked as exc:
+                    assert str(exc) == "stale-commit-range"
+                else:
+                    raise AssertionError("cancelled approval authorized retry")
+                assert git(repo, "rev-parse", "HEAD") == head_before
+                assert history.current_commit_range == old_range
+                fresh = history.approve(command, "origin/main")
+                assert fresh["id"] != approval["id"]
+            elif name == "fresh_review_after_rewrite":
+                assert history.phase_gate("final:branch:1")
+                history.approve(command, "origin/main")
+                history.rewrite(command, "origin/main")
+                try:
+                    history.phase_gate("final:branch:1")
+                except Blocked as exc:
+                    assert str(exc) == "review gate head mismatch"
+                else:
+                    raise AssertionError("old-head review gate survived rewrite")
+                event = history.complete_review("standalone:branch:1", git(repo, "rev-parse", "HEAD"))
+                assert history.phase_gate(str(event["id"]))
+            elif name in {"shipping_command_invariance", "shipping_command_changed_axis"}:
+                baseline = git_show(ROOT, "5f3036b767a5e951aa0ab711832daa24c64915d1", "skills/shipping/SKILL.md")
+                observed = PHASE_CONSUMERS["shipping"]
+                if name == "shipping_command_changed_axis":
+                    observed = observed.replace(
+                        "gh pr merge <number> --squash --delete-branch [--auto]",
+                        "gh pr merge <number> --merge --delete-branch [--auto]",
+                        1,
+                    )
+                baseline_commands = shipping_command_blocks(baseline)
+                observed_commands = shipping_command_blocks(observed)
+                if name == "shipping_command_invariance":
+                    assert observed_commands == baseline_commands
+                else:
+                    assert observed_commands != baseline_commands
+                    assert observed_commands["cleanup"] == baseline_commands["cleanup"]
+            assert sent.read_bytes() == before
+            return
+        repo = new_repo(tmp)
 
         if name == "new_scoped_run":
             path = initialize(repo, "alpha")
@@ -2135,15 +2524,17 @@ def run_case(name: str) -> None:
 if CASE == "scope":
     selected = CASES
 elif CASE == "all":
-    selected = CASES + REVIEW_CASES
+    selected = CASES + REVIEW_CASES + HISTORY_CASES
 elif CASE == "consumers":
     selected = CONSUMER_CASES
 elif CASE == "reviews":
     selected = REVIEW_CASES
-elif CASE in CASES + REVIEW_CASES:
+elif CASE == "history":
+    selected = HISTORY_CASES
+elif CASE in CASES + REVIEW_CASES + HISTORY_CASES:
     selected = (CASE,)
 else:
-    print("usage: bash scripts/test-run-artifact-integrity.sh <scope|all|consumers|reviews|case>", file=sys.stderr)
+    print("usage: bash scripts/test-run-artifact-integrity.sh <scope|all|consumers|reviews|history|case>", file=sys.stderr)
     raise SystemExit(2)
 
 failures = 0
