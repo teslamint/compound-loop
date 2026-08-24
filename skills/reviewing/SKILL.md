@@ -44,13 +44,13 @@ Parse tokens, stripping each before treating the remainder as a PR number/URL/br
 ## Two Caller Shapes
 
 - **Standalone**: direct invocation per the trigger taxonomy above.
-- **Phase-gate** (`release-loop`'s Review phase): deliberately redundant with `implementing`'s final task-level review -- it catches issues surviving all fix rounds and gives the user a clean checkpoint between "code complete" and "ready to ship." If `implementing`'s last review already came back clean, verify that event's immutable result and advance without a full re-dispatch. This phase-gate reuse does not allocate another event or increment a review count.
+- **Phase-gate** (`release-loop`'s Review phase): deliberately redundant with `implementing`'s final task-level review -- it catches issues surviving all fix rounds and gives the user a clean checkpoint between "code complete" and "ready to ship." Reuse requires sealed outcome `clean` plus a successful exact inventory/disposition clean gate. `actionable` and `blocked` never reuse. Successful phase-gate reuse does not allocate another event or increment a review count.
 
 ## Durable standalone event
 
 When a standalone dispatch receives a valid `progress_path`, derive its next sequential ordinal and allocate `standalone:<subject>:<ordinal>`. Persist `state: started`, `outcome: null`, the full reviewed head, and one round-specific result path before any lane dispatch. Only a matching started event resumes with the same ID and path. Duplicate, conflicting, or gapped ordinals block.
 
-Start the merged reviewer body with one canonical `review-body/v1` JSON manifest line. Derive outcome and the complete P0-P3 inventory only from that manifest. Frame `review-result/v1` as one JSON header line followed by the exact body bytes. The header binds body length and SHA-256, event ID, head, `re_review_of`, outcome, and inventory. Validate header-to-body equality, then publish the wrapper.
+Start the merged reviewer body with one canonical `review-body/v1` JSON manifest line. Accept only outcome `clean`, `actionable`, or `blocked`. Derive outcome and the complete P0-P3 inventory only from that manifest. Frame `review-result/v1` as one JSON header line followed by the exact body bytes. The header binds body length and SHA-256, event ID, head, `re_review_of`, outcome, and inventory. Validate header-to-body equality, then publish the wrapper.
 
 On resume, a started event without a final result re-dispatches. A matching journal-owned wrapper completes it only after metadata validation. A foreign or different result blocks with `review-event-conflict`. A complete event with a missing or mismatched result blocks with `review-event-integrity`; never allocate a replacement event.
 

@@ -32,7 +32,7 @@ Build one stable-fingerprint inventory before choosing the verdict. Include stru
 
 Use the existing fingerprint contract for every row. If an outside-diff item lacks a file, line anchor, or title, resolve that evidence gap before inventory. Do not invent a weaker identity.
 
-Require one `review-body/v1` manifest on the reviewer's first output line. Derive outcome and the P0-P3 inventory from that line. The wrapper may repeat them only after exact comparison with the manifest. A clean body with actionable wrapper metadata and an actionable body with clean wrapper metadata both block.
+Require one `review-body/v1` manifest on the reviewer's first output line. Accept only `clean`, `actionable`, or `blocked`. Derive outcome and the P0-P3 inventory from that line. The wrapper may repeat them only after exact comparison with the manifest. A clean body with actionable wrapper metadata and an actionable body with clean wrapper metadata both block.
 
 Validate the wrapper's body byte length and SHA-256 before parsing the manifest. Read exactly one header line, then preserve all remaining bytes verbatim. Delimiter-like text inside the body has no framing meaning.
 
@@ -45,6 +45,8 @@ Only an explicit `re_review_of` relationship may author `fixed`. Validate the so
 If the source predates wrappers, require `review-legacy-source-adoption/v1`. Validate its immutable artifact digest, source event, exact legacy result path and SHA-256, reviewed head, outcome, and full severity inventory. Never rewrite the legacy result.
 
 The verdict cannot be `clean` while any actionable fingerprint lacks an allowed disposition. A complete control inventory may return `clean`; omitted, extra, wrong-source, still-present, and deferred P0-P2 mutants must block.
+
+Phase-gate reuse requires sealed outcome `clean` and this exact inventory/disposition gate to pass. `actionable`, `blocked`, and unknown outcomes never reuse.
 
 ## Validator protocol (interactive verification path)
 

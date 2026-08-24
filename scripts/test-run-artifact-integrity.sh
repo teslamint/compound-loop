@@ -159,6 +159,9 @@ REVIEW_CASES = (
     "delimiter_in_body",
     "legacy_source_adoption",
     "legacy_adoption_mismatch",
+    "invalid_review_outcome",
+    "actionable_phase_reuse",
+    "blocked_phase_reuse",
 )
 
 
@@ -614,6 +617,8 @@ class ReviewFixture:
             raise Blocked("reviewer body manifest invalid") from exc
         if set(manifest) != {"schema", "outcome", "finding_inventory"} or manifest["schema"] != "review-body/v1":
             raise Blocked("reviewer body manifest invalid")
+        if manifest["outcome"] not in {"clean", "actionable", "blocked"}:
+            raise Blocked(f"reviewer body outcome invalid: {manifest['outcome']}")
         return manifest
 
     def _wrapper(self, event: dict[str, object], reviewer_body: bytes) -> bytes:
@@ -883,7 +888,10 @@ class ReviewFixture:
 
     def reuse_phase_gate(self, event_id: str) -> dict[str, object]:
         event = self.event(event_id)
-        self.verify_result(event_id)
+        metadata, _ = self.verify_result(event_id)
+        if metadata["outcome"] != "clean":
+            raise Blocked(f"phase-gate reuse requires clean outcome: {metadata['outcome']}")
+        self.clean_gate(event_id)
         return event
 
 
@@ -1836,7 +1844,7 @@ def run_case(name: str) -> None:
                 first = reviews.allocate("unit", "U1", head)
                 reviews.complete(str(first["id"]), reviewer_output("actionable", review_body=("fp-review",)))
                 fix = reviews.allocate("fix", "U1", head, source_review_event="unit:U1:1")
-                reviews.complete(str(fix["id"]), reviewer_output("fixed"))
+                reviews.complete(str(fix["id"]), reviewer_output("clean"))
                 second = reviews.allocate("unit", "U1", head, re_review_of="unit:U1:1")
                 reviews.complete(str(second["id"]), output)
                 reviews.verify_re_review(str(second["id"]))
@@ -2079,6 +2087,27 @@ def run_case(name: str) -> None:
                     reviews.verify_re_review(str(second["id"]))
                     assert reviews.dispositions["fp-legacy"]["status"] == "fixed"
                     assert reviews._result_path(source).read_bytes() == legacy
+            elif name == "invalid_review_outcome":
+                event = reviews.allocate("final", "branch", head)
+                try:
+                    reviews.complete(str(event["id"]), reviewer_output("fixed"))
+                except Blocked as exc:
+                    assert "outcome" in str(exc), str(exc)
+                else:
+                    raise AssertionError("invalid review outcome did not block")
+            elif name in {"actionable_phase_reuse", "blocked_phase_reuse"}:
+                event = reviews.allocate("final", "branch", head)
+                if name == "actionable_phase_reuse":
+                    reviews.complete(str(event["id"]), reviewer_output("actionable", review_body=("fp-phase",), severity="P3"))
+                    reviews.set_disposition("fp-phase", "deferred", str(event["id"]), "minor residual")
+                else:
+                    reviews.complete(str(event["id"]), reviewer_output("blocked"))
+                try:
+                    reviews.reuse_phase_gate(str(event["id"]))
+                except Blocked as exc:
+                    assert "clean" in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"{name} reused a non-clean result")
         else:
             raise AssertionError(f"unknown case: {name}")
 
