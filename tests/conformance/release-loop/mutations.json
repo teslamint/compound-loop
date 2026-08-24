@@ -8,10 +8,147 @@
       "expected": "expected-reject"
     },
     {
+      "id": "missing-pending-gate",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "design",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": null,
+        "approvals": {},
+        "answer_count": 0
+      }
+    },
+    {
+      "id": "unknown-pending-gate",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "design",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "publish-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "approve-spec-or-request-revision"},
+        "approvals": {},
+        "answer_count": 0
+      }
+    },
+    {
+      "id": "already-approved-pending-gate",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "design",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "design-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "approve-spec-or-request-revision"},
+        "approvals": {"design_approved": {"by": "user", "at": "2026-08-24T04:00:45Z"}},
+        "answer_count": 0
+      }
+    },
+    {
+      "id": "unknown-pending-answer",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "design",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "design-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "approve-spec-or-request-revision"},
+        "approvals": {},
+        "answer_count": 0,
+        "answer": "publish"
+      }
+    },
+    {
       "id": "replay-completed-phase",
       "case_id": "L2-mid-loop-resume",
       "grader": "no-phase-replay",
       "expected": "expected-reject"
+    },
+    {
+      "id": "mismatched-pending-gate",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "design",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "ship-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "merge-or-nonmerge-disposition"},
+        "approvals": {},
+        "answer_count": 0
+      }
+    },
+    {
+      "id": "mismatched-pending-answer-class",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "ship",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "ship-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "approve-spec-or-request-revision"},
+        "approvals": {},
+        "answer_count": 0
+      }
+    },
+    {
+      "id": "stale-pending-gate",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "ship",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "ship-approval", "issued_at": "2026-08-24T03:59:59Z", "expected_answer_class": "merge-or-nonmerge-disposition"},
+        "approvals": {},
+        "answer_count": 0
+      }
+    },
+    {
+      "id": "duplicate-pending-answer",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "ship",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "ship-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "merge-or-nonmerge-disposition"},
+        "approvals": {},
+        "answer_count": 2
+      }
+    },
+    {
+      "id": "duplicate-pending-gate-record",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "ship",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "ship-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "merge-or-nonmerge-disposition"},
+        "gate_record_count": 2,
+        "approvals": {},
+        "answer_count": 0
+      }
     },
     {
       "id": "reenter-premerge-shipping",

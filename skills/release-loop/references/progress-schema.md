@@ -24,6 +24,12 @@ retro: docs/retros/YYYY-MM-DD-<context>-retro.md
 design_approved: {by: user, at: <timestamp>}
 ship_approved: {by: user | auto, at: <timestamp>, conditions: "CI green, no open P0"}
 
+# Optional pending USER gate. It exists only while one release-loop question waits.
+pending_gate:
+  id: design-approval | ship-approval
+  issued_at: <ISO-8601 timestamp>
+  expected_answer_class: approve-spec-or-request-revision | merge-or-nonmerge-disposition
+
 # Final-action record (preparation evidence, never approval — see Rules)
 final_action:
   kind: merge-to-base                   # closed vocabulary; sole value
@@ -57,6 +63,9 @@ blocked_reason: null                    # set when phase_status: blocked
 
 - Write at the moment of the event, not batched (`enforces: P3` — the record is the evidence).
 - **Gate transitions record their evidence inline**: the proving command, its observed result, and the timestamp (see the `ship: verification gate` log line above). A transition line without command + result is a claim, not a record — resumed and headless runs inherit evidence only through these lines. `enforces: P3, P8`
+- `pending_gate` is optional and has exactly three fields. `design-approval` belongs only to `phase: design` and `approve-spec-or-request-revision`. `ship-approval` belongs only to `phase: ship` and `merge-or-nonmerge-disposition`.
+- A pending gate requires `phase_status: waiting-user` and no matching approval record. Issuing it atomically writes the gate, status, and Log evidence. Approving, revising, or choosing a non-merge disposition atomically removes the gate, changes the status, and logs the outcome.
+- Resume sends one answer only when the gate ID, phase, answer class, issue timestamp, and absent approval record match. Missing, duplicate, stale, mismatched, unknown, or already-approved gate state blocks without sending an answer.
 - Timestamps are ISO-8601 with timezone, **fetched fresh via command (`date -u +%Y-%m-%dT%H:%M:%SZ`) at each write — never estimated or interpolated** (pilot-proven: estimated timestamps produced a non-monotonic log).
 - **Status flips are atomic with their evidence**: changing `phase`/`phase_status` and writing the explaining Log line (plus `blocked_reason` when the status is blocked) happen in the same edit — a bare `blocked` with `blocked_reason: null` is a schema violation, not a placeholder.
 - Corrupt/unparsable file on resume → rebuild frontmatter from git evidence (branch, committed artifacts, PR state via `gh pr view`), keep the old file as `progress.md.corrupt-<timestamp>`, and note the rebuild in the Log. A stored `feature:` that fails the `feature_slug` invariant is the same class of corruption.

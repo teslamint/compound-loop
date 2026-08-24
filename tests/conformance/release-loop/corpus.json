@@ -1,6 +1,6 @@
 {
   "schema": "release-loop-conformance-corpus/v1",
-  "source_generation": "e49d0da64c57fbbb70ad58255f1a56a46ab092143d98cbd39594710d41054cdd",
+  "source_generation": "7d079fa48876ae484297efdc501d165e47b3a3384f2bc69c590d48b8d78bfd83",
   "harnesses": [
     "claude",
     "codex"
@@ -21,7 +21,8 @@
     "same-gates",
     "sc2-comparison",
     "sc2-guard",
-    "operative-section-parser"
+    "operative-section-parser",
+    "pending-gate-state"
   ],
   "result_classes": [
     "conformant",
@@ -72,14 +73,19 @@
       ],
       "expected_outcome": "conformant",
       "eligible_mutations": [
-        "delete-design-user-gate"
+        "delete-design-user-gate",
+        "missing-pending-gate",
+        "unknown-pending-gate",
+        "already-approved-pending-gate",
+        "unknown-pending-answer"
       ],
       "required_graders": [
         "design-user-gate",
         "phase-order",
         "final-action",
         "retro-required",
-        "archive-complete"
+        "archive-complete",
+        "pending-gate-state"
       ]
     },
     {
@@ -120,12 +126,18 @@
       ],
       "expected_outcome": "conformant",
       "eligible_mutations": [
-        "replay-completed-phase"
+        "replay-completed-phase",
+        "mismatched-pending-gate",
+        "mismatched-pending-answer-class",
+        "stale-pending-gate",
+        "duplicate-pending-answer",
+        "duplicate-pending-gate-record"
       ],
       "required_graders": [
         "resume-source-truth",
         "no-phase-replay",
-        "terminal-evidence"
+        "terminal-evidence",
+        "pending-gate-state"
       ]
     },
     {

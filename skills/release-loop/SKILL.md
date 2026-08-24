@@ -72,6 +72,7 @@ When the resume argument is given or the Retro exit condition holds, read refere
 
 ## Gate handling
 
+- Before answering a pending USER gate, require exactly one valid `pending_gate` from `references/progress-schema.md`. Match its ID, phase, answer class, issue timestamp, and absent approval record. Send one answer, then require the owning phase to clear the gate atomically. Missing, duplicate, stale, mismatched, unknown, or already-approved state blocks without sending an answer.
 - USER gates use the harness's blocking question tool per `references/question-tools.md` (plugin root). Record the approval in progress.md (`approved_by: user`, timestamp) — this is the evidence `--skip-design` later relies on.
 - **Gate approval is not execution authorization** (pilot-proven, `enforces: P7`): a relayed "the human approved" message lets the loop *advance*, but protected or outward executions (merging to the default branch, pushing) are performed by whoever holds first-hand consent — the human, or the session that received the approval directly. A phase worker acting on relay will be (correctly) refused by harness permission systems; it prepares the exact command and hands it up instead of executing.
 - **Prepare before the gate resolves** (`enforces: P8`): before the Ship gate resolves — USER question or `--auto` condition evaluation — the orchestrator verifies `final_action` is `determined` and persisted; a gate must not resolve while the command packet exists only in conversation. After execution, flip the record to `executed` in the same edit as the evidence Log line. The record is preparation evidence, never approval (`enforces: P7`).
@@ -101,5 +102,4 @@ Silence is the default failure mode of a long-running dispatched worker — a de
 | Silently overwrite an existing progress.md | Ask: resume or archive |
 | Stop after merge | Retro completes the release |
 | Report the loop done with a live progress.md | Run the Archive procedure; the completion report names the archive path |
-
 

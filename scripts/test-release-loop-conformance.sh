@@ -6,15 +6,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-}"
 
 case "$MODE" in
-  static-inventory|static|fixture) ;;
+  static-inventory|static|fixture|gate) ;;
   *)
-    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture>" >&2
+    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture|gate>" >&2
     exit 2
     ;;
 esac
 
 python3 - "$ROOT" "$MODE" <<'PY'
 import copy
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -48,6 +49,7 @@ expected_graders = [
     "sc2-comparison",
     "sc2-guard",
     "operative-section-parser",
+    "pending-gate-state",
 ]
 expected_results = ["conformant", "pass", "expected-reject"]
 expected_case_contracts = {
@@ -55,15 +57,15 @@ expected_case_contracts = {
         "live",
         ["design", "plan", "implement", "review", "ship", "retro", "archive"],
         "conformant",
-        ["delete-design-user-gate"],
-        ["design-user-gate", "phase-order", "final-action", "retro-required", "archive-complete"],
+        ["delete-design-user-gate", "missing-pending-gate", "unknown-pending-gate", "already-approved-pending-gate", "unknown-pending-answer"],
+        ["design-user-gate", "phase-order", "final-action", "retro-required", "archive-complete", "pending-gate-state"],
     ),
     "L2-mid-loop-resume": (
         "live",
         ["resume", "implement", "review", "ship", "retro", "archive"],
         "conformant",
-        ["replay-completed-phase"],
-        ["resume-source-truth", "no-phase-replay", "terminal-evidence"],
+        ["replay-completed-phase", "mismatched-pending-gate", "mismatched-pending-answer-class", "stale-pending-gate", "duplicate-pending-answer", "duplicate-pending-gate-record"],
+        ["resume-source-truth", "no-phase-replay", "terminal-evidence", "pending-gate-state"],
     ),
     "L3-post-merge-resume": (
         "live",
@@ -1171,6 +1173,134 @@ def validate_fixture():
     return summary
 
 
+gate_contracts = {
+    "design-approval": ("design", "approve-spec-or-request-revision", "design_approved", {"approve", "revise"}),
+    "ship-approval": ("ship", "merge-or-nonmerge-disposition", "ship_approved", {"merge", "nonmerge"}),
+}
+
+
+def pending_gate_invariant(state):
+    pending = state.get("pending_gate")
+    if pending is None:
+        return "pending-gate-missing" if state.get("phase_status") == "waiting-user" else None
+    gate_record_count = state.get("gate_record_count", 1)
+    if not isinstance(gate_record_count, int) or gate_record_count < 1:
+        return "pending-gate-record-count"
+    if gate_record_count > 1:
+        return "pending-gate-duplicate-record"
+    if not isinstance(pending, dict) or set(pending) != {"id", "issued_at", "expected_answer_class"}:
+        return "pending-gate-shape"
+    gate_id = pending.get("id")
+    if gate_id not in gate_contracts:
+        return "pending-gate-unknown"
+    phase, answer_class, approval_field, _ = gate_contracts[gate_id]
+    if state.get("phase") != phase:
+        return "pending-gate-phase"
+    if pending.get("expected_answer_class") != answer_class:
+        return "pending-gate-answer-class"
+    if state.get("phase_status") != "waiting-user":
+        return "pending-gate-status"
+    timestamp = pending.get("issued_at")
+    phase_entered = state.get("phase_entered_at")
+    observed = state.get("observed_at")
+    try:
+        times = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in (timestamp, phase_entered, observed)]
+    except (AttributeError, TypeError, ValueError):
+        return "pending-gate-timestamp"
+    if any(value.tzinfo is None for value in times):
+        return "pending-gate-timestamp"
+    issued_time, entered_time, observed_time = times
+    if not entered_time <= issued_time <= observed_time:
+        return "pending-gate-stale"
+    approvals = state.get("approvals")
+    if not isinstance(approvals, dict):
+        return "pending-gate-approvals"
+    if approval_field in approvals:
+        return "pending-gate-already-approved"
+    answer_count = state.get("answer_count")
+    if not isinstance(answer_count, int) or answer_count < 0:
+        return "pending-gate-answer-count"
+    if answer_count > 1:
+        return "pending-gate-duplicate-answer"
+    return None
+
+
+def issue_pending_gate(phase, issued_at):
+    gate_id = "design-approval" if phase == "design" else "ship-approval"
+    expected_phase, answer_class, _, _ = gate_contracts[gate_id]
+    if phase != expected_phase:
+        fail("gate issue phase mismatch")
+    return {
+        "phase": phase,
+        "phase_status": "waiting-user",
+        "phase_entered_at": issued_at,
+        "observed_at": issued_at,
+        "pending_gate": {"id": gate_id, "issued_at": issued_at, "expected_answer_class": answer_class},
+        "gate_record_count": 1,
+        "approvals": {},
+        "answer_count": 0,
+    }
+
+
+def resolve_pending_gate(state, answer, answered_at):
+    invariant = pending_gate_invariant(state)
+    if invariant is not None:
+        return None, invariant
+    gate_id = state["pending_gate"]["id"]
+    _, _, approval_field, answers = gate_contracts[gate_id]
+    if answer not in answers:
+        return None, "pending-gate-answer"
+    resolved = copy.deepcopy(state)
+    resolved["pending_gate"] = None
+    resolved["gate_record_count"] = 0
+    resolved["phase_status"] = "in-progress"
+    resolved["answer_count"] = 1
+    if answer in {"approve", "merge"}:
+        resolved["approvals"][approval_field] = {"by": "user", "at": answered_at}
+    return resolved, None
+
+
+def validate_gate_group(mutation_rows):
+    gate_rows = [row for row in mutation_rows if row.get("grader") == "pending-gate-state"]
+    expected = {
+        "missing-pending-gate": "pending-gate-missing",
+        "unknown-pending-gate": "pending-gate-unknown",
+        "already-approved-pending-gate": "pending-gate-already-approved",
+        "unknown-pending-answer": "pending-gate-answer",
+        "mismatched-pending-gate": "pending-gate-phase",
+        "mismatched-pending-answer-class": "pending-gate-answer-class",
+        "stale-pending-gate": "pending-gate-stale",
+        "duplicate-pending-answer": "pending-gate-duplicate-answer",
+        "duplicate-pending-gate-record": "pending-gate-duplicate-record",
+    }
+    if {row["id"] for row in gate_rows} != set(expected):
+        fail("pending gate mutation inventory mismatch")
+    for row in gate_rows:
+        if row["id"] == "unknown-pending-answer":
+            _, actual = resolve_pending_gate(row["fixture"], row["fixture"]["answer"], "2026-08-24T04:01:01Z")
+        else:
+            actual = pending_gate_invariant(row["fixture"])
+        if actual != expected[row["id"]]:
+            fail(f"pending gate mutation diagnostic mismatch: {row['id']}")
+    controls = 0
+    for phase, answers in (("design", ("approve", "revise")), ("ship", ("merge", "nonmerge"))):
+        issued = issue_pending_gate(phase, "2026-08-24T04:00:00Z")
+        if pending_gate_invariant(issued) is not None:
+            fail(f"pending gate issue control failed: {phase}")
+        controls += 1
+        for answer in answers:
+            resolved, invariant = resolve_pending_gate(issued, answer, "2026-08-24T04:00:01Z")
+            if invariant is not None or resolved["pending_gate"] is not None or resolved["phase_status"] != "in-progress":
+                fail(f"pending gate resolution control failed: {phase}/{answer}")
+            controls += 1
+    resume = issue_pending_gate("ship", "2026-08-24T04:00:00Z")
+    resume["observed_at"] = "2026-08-24T04:01:00Z"
+    if pending_gate_invariant(resume) is not None:
+        fail("pending gate resume control failed")
+    controls += 1
+    return len(gate_rows), controls
+
+
 def grade_mutation(mutation, cases_by_id, clauses_by_id, disabled_graders=frozenset()):
     mutation_id = mutation["id"]
     case = cases_by_id[mutation["case_id"]]
@@ -1199,6 +1329,12 @@ def grade_mutation(mutation, cases_by_id, clauses_by_id, disabled_graders=frozen
         rejected = set(values) - set(mutated) == {"implement-degraded"}
         return ("expected-reject", "no-coverage-drop", "no-coverage-drop") if rejected else ("unexpected-pass", "no-coverage-drop", "none")
     fixture = mutation.get("fixture", {})
+    if mutation["grader"] == "pending-gate-state":
+        if mutation_id == "unknown-pending-answer":
+            _, invariant = resolve_pending_gate(fixture, fixture.get("answer"), fixture.get("observed_at"))
+        else:
+            invariant = pending_gate_invariant(fixture)
+        return ("expected-reject", "pending-gate-state", invariant) if invariant else ("unexpected-pass", "pending-gate-state", "none")
     if mutation["grader"] == "sc2-comparison":
         invariant = sc2_invariant(fixture)
         if mutation_id == "controlled-same-kind-pairs":
@@ -1282,6 +1418,15 @@ def validate_static(cases):
         "replay-completed-phase": "no-phase-replay",
         "reenter-premerge-shipping": "resume-after-merge",
         "drop-work-without-subagents": "no-coverage-drop",
+        "missing-pending-gate": "pending-gate-missing",
+        "unknown-pending-gate": "pending-gate-unknown",
+        "already-approved-pending-gate": "pending-gate-already-approved",
+        "unknown-pending-answer": "pending-gate-answer",
+        "mismatched-pending-gate": "pending-gate-phase",
+        "mismatched-pending-answer-class": "pending-gate-answer-class",
+        "stale-pending-gate": "pending-gate-stale",
+        "duplicate-pending-answer": "pending-gate-duplicate-answer",
+        "duplicate-pending-gate-record": "pending-gate-duplicate-record",
         "different-artifact-kind": "sc2-same-kind",
         "unstable-invariance-output": "sc2-invariance",
         "irrelevant-changed-axis": "sc2-axis",
@@ -1317,7 +1462,7 @@ def validate_static(cases):
     validate_source_generation(generation, policy.get("source_generation"), corpus.get("source_generation"))
 
     static_negative_probes = []
-    unrelated = copy.deepcopy(mutation_rows[4])
+    unrelated = copy.deepcopy(next(row for row in mutation_rows if row["id"] == "different-artifact-kind"))
     for pair in unrelated["fixture"].values():
         if isinstance(pair, dict) and set(pair) == {"left", "right"}:
             pair["right"]["kind"] = pair["left"]["kind"]
@@ -1389,6 +1534,20 @@ validate_golden()
 
 if mode == "fixture":
     fixture_gh_calls, fixture_forbidden, fixture_policies, fixture_audit_rows = validate_fixture()
+if mode == "gate":
+    progress_contract = (root / "skills/release-loop/references/progress-schema.md").read_text(encoding="utf-8")
+    if "pending_gate:" not in progress_contract:
+        fail("pending_gate is undefined")
+    gate_source_literals = {
+        "skills/release-loop/SKILL.md": "Before answering a pending USER gate, require exactly one valid `pending_gate`",
+        "skills/release-loop/references/progress-schema.md": "Missing, duplicate, stale, mismatched, unknown, or already-approved gate state blocks",
+        "skills/designing/SKILL.md": "pending_gate.id: design-approval",
+        "skills/shipping/SKILL.md": "pending_gate.id: ship-approval",
+    }
+    for relative_path, literal in gate_source_literals.items():
+        if (root / relative_path).read_text(encoding="utf-8").count(literal) != 1:
+            fail(f"pending gate source contract mismatch: {relative_path}")
+    gate_mutations, gate_controls = validate_gate_group(load_json(data_root / "mutations.json")["mutations"])
 
 if mode == "static":
     mutation_count, static_grader_count, source_generation, static_negative_count = validate_static(cases)
@@ -1480,5 +1639,10 @@ if mode == "fixture":
         "ok:   release-loop hermetic fixture "
         f"gh_calls={fixture_gh_calls} forbidden={fixture_forbidden} "
         f"policies={fixture_policies} audit_rows={fixture_audit_rows}"
+    )
+if mode == "gate":
+    print(
+        "ok:   release-loop pending gates "
+        f"mutations={gate_mutations} controls={gate_controls}"
     )
 PY

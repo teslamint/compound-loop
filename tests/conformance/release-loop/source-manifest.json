@@ -7,7 +7,7 @@
       "path": "skills/release-loop/SKILL.md",
       "heading": "# Release Loop",
       "text": "| 1 | Design | `designing` | **USER** — always human, never auto-skip |",
-      "sha256": "f11ebdb7ed89591540998cd780506df96f187e29648b853db0bcf069c8ffe65c"
+      "sha256": "947494d102152fdb4c6db0c077062bf14a84a573c084453566d0c8f7f0ca94c3"
     },
     {
       "id": "resume-after-merge",
@@ -29,6 +29,34 @@
       "heading": "## 14. Self-review",
       "text": "- **Discrimination check** — for every step that compares two things, run the step's own comparison on two controlled fixture pairs.",
       "sha256": "1673a875cde4b2b361083b9cc0e2da35ef6480490bdda653946750f502f75799"
+    },
+    {
+      "id": "release-loop-pending-gate",
+      "path": "skills/release-loop/SKILL.md",
+      "heading": "## Gate handling",
+      "text": "- Before answering a pending USER gate, require exactly one valid `pending_gate` from `references/progress-schema.md`.",
+      "sha256": "1fb0af7c1199ec0afc208dab15f49592bc34c721b490f200dbabd810513e6e56"
+    },
+    {
+      "id": "pending-gate-schema",
+      "path": "skills/release-loop/references/progress-schema.md",
+      "heading": "## Rules",
+      "text": "- Resume sends one answer only when the gate ID, phase, answer class, issue timestamp, and absent approval record match.",
+      "sha256": "9bffbd9b55a68503d1f527b43e25c3083613de1d9a167846b3172824d5b2a731"
+    },
+    {
+      "id": "design-pending-gate",
+      "path": "skills/designing/SKILL.md",
+      "heading": "## Step 12: Human Approval Gate",
+      "text": "When `release-loop` invoked this skill, atomically set `phase_status: waiting-user` and issue `pending_gate.id: design-approval` before asking.",
+      "sha256": "fcd271074f736b9532d4b3c0e7a7b3bbe02758e30862ea8c65311cc93dc6f8cd"
+    },
+    {
+      "id": "shipping-pending-gate",
+      "path": "skills/shipping/SKILL.md",
+      "heading": "### Release-loop pending disposition",
+      "text": "For an interactive final disposition invoked by `release-loop`, atomically set `phase_status: waiting-user` and issue `pending_gate.id: ship-approval` before asking.",
+      "sha256": "bb156a071012b2f4a5c19a6db92d2b7f50a76fe0418d4e1a3ddc6ac0fe0c2e20"
     }
   ]
 }

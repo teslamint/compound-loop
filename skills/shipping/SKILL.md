@@ -198,6 +198,10 @@ This list is not exhaustive. An unrecognized integration produces no false posit
 
 Default: present the PR (CI status, comments fixed/deferred, any deferred items) and ask for merge approval via the blocking question tool. `--auto`: merge only when CI is green and no P0 findings are open (P1s addressed or explicitly deferred with rationale) -- this is the sole auto-merge condition, never relaxed. Squash is the default merge strategy; honor a repo-documented alternative (e.g. CONTRIBUTING.md) when one exists. `enforces: P7`
 
+### Release-loop pending disposition
+
+For an interactive final disposition invoked by `release-loop`, atomically set `phase_status: waiting-user` and issue `pending_gate.id: ship-approval` before asking. Record a fresh `issued_at` and `expected_answer_class: merge-or-nonmerge-disposition`. Merge or non-merge disposition atomically removes `pending_gate`, changes `phase_status`, and logs the outcome. Standalone and `--auto` paths do not issue this record.
+
 ```bash
 gh pr merge <number> --squash --delete-branch [--auto]
 ```
@@ -226,4 +230,3 @@ Report the merged PR (or the terminal state reached) and stop. Do not invoke `re
 ## Out of Scope
 
 Dropped by design: post-merge release ceremony (version bump / tag / changelog -- a future standalone `release` skill, not core); a hardcoded retro handoff (documented as a hook point above instead); a second residual-to-tracker mechanism (the PR-body append in Steps 5 and 6 is the single sink -- no duplicate filing path).
-
