@@ -3264,12 +3264,11 @@ def publish_baseline_transition(base_root, handoff_root, archive_source, baselin
 
 
 def progress_frontmatter_scalar(text_value, key):
-    if not text_value.startswith("---\n"):
+    lines = text_value.splitlines()
+    fence_indices = [index for index, line in enumerate(lines) if line == "---"]
+    if not lines or lines[0] != "---" or len(fence_indices) != 2 or fence_indices[0] != 0:
         fail("archive progress frontmatter missing")
-    end = text_value.find("\n---", 4)
-    if end < 0:
-        fail("archive progress frontmatter missing")
-    frontmatter = text_value[4:end]
+    frontmatter = "\n".join(lines[1:fence_indices[1]])
     matches = re.findall(rf"(?m)^{re.escape(key)}: ([^\n]+)$", frontmatter)
     if len(matches) != 1:
         fail(f"archive progress duplicate or missing field: {key}")
@@ -3843,6 +3842,20 @@ def validate_transition_group():
             fail("transition duplicate terminal phase accepted")
         archived_progress.write_text(terminal_progress_text, encoding="utf-8")
         negatives += 1
+        for malformed_fence in ("---evil", "----"):
+            malformed_progress = terminal_progress_text.replace("\n---\n\n## Log", f"\n{malformed_fence}\n\n## Log", 1)
+            archived_progress.write_text(malformed_progress, encoding="utf-8")
+            try:
+                verify_archive_transition(
+                    base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:04Z"
+                )
+            except ValueError as exc:
+                if "archive progress frontmatter missing" not in str(exc):
+                    fail(f"transition malformed fence diagnostic mismatch: {exc}")
+            else:
+                fail("transition malformed frontmatter fence accepted")
+            negatives += 1
+        archived_progress.write_text(terminal_progress_text, encoding="utf-8")
         if verify_archive_transition(
             base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:04Z"
         ) != handoff_digest:
