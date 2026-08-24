@@ -1273,7 +1273,9 @@ def read_bounded_file(path, allowed_root, size_cap=65536, after_open=None):
         path.parent.resolve(strict=True).relative_to(allowed_root.resolve(strict=True))
     except (FileNotFoundError, ValueError):
         fail("bounded result outside fixture")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    if not hasattr(os, "O_NOFOLLOW"):
+        fail("bounded result no-follow unavailable")
+    flags = os.O_RDONLY | os.O_NOFOLLOW
     try:
         descriptor = os.open(str(path), flags)
     except (FileNotFoundError, OSError):
@@ -1282,6 +1284,8 @@ def read_bounded_file(path, allowed_root, size_cap=65536, after_open=None):
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             fail("bounded result is not regular")
+        if metadata.st_nlink != 1:
+            fail("bounded result has multiple links")
         if metadata.st_size > size_cap:
             fail("bounded result exceeded cap")
         if after_open is not None:
@@ -1577,6 +1581,20 @@ def validate_preflight():
                 fail(f"result symlink diagnostic mismatch: {exc}")
         else:
             fail("result symlink accepted")
+        finally:
+            codex_result.unlink()
+            codex_result.write_text("fake codex result\n", encoding="utf-8")
+        negatives += 1
+
+        codex_result.unlink()
+        os.link(external_result, codex_result)
+        try:
+            read_bounded_file(codex_result, result_dir)
+        except ValueError as exc:
+            if "bounded result has multiple links" not in str(exc):
+                fail(f"result hardlink diagnostic mismatch: {exc}")
+        else:
+            fail("result hardlink accepted")
         finally:
             codex_result.unlink()
             codex_result.write_text("fake codex result\n", encoding="utf-8")
