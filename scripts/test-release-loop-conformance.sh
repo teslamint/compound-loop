@@ -16,7 +16,9 @@ esac
 python3 - "$ROOT" "$MODE" "${@:2}" <<'PY'
 import copy
 from datetime import datetime
+from datetime import timezone
 from decimal import Decimal
+import fcntl
 import hashlib
 import json
 import os
@@ -31,6 +33,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 root = Path(sys.argv[1])
 mode = sys.argv[2]
@@ -1777,7 +1780,17 @@ def validate_resource_caps(caps):
     return None
 
 
-def validate_paid_receipt(receipt, command, gate_kind, session_marker, session_started, observed_at, used_nonces):
+def validate_paid_receipt(
+    receipt,
+    command,
+    gate_kind,
+    expected_models,
+    expected_caps,
+    session_marker,
+    session_started,
+    observed_at,
+    used_nonces,
+):
     required = {
         "schema", "gate_kind", "command_sha256", "models", "caps", "approved_at",
         "session_marker", "nonce", "status",
@@ -1796,9 +1809,13 @@ def validate_paid_receipt(receipt, command, gate_kind, session_marker, session_s
         return "paid-receipt-models"
     if not all(isinstance(value, str) and value for value in receipt["models"].values()):
         return "paid-receipt-models"
+    if receipt["models"] != expected_models:
+        return "paid-receipt-models"
     cap_invariant = validate_resource_caps(receipt["caps"])
     if cap_invariant is not None:
         return cap_invariant
+    if receipt["caps"] != expected_caps:
+        return "paid-receipt-caps"
     approved = parse_gate_timestamp(receipt["approved_at"])
     started = parse_gate_timestamp(session_started)
     observed = parse_gate_timestamp(observed_at)
@@ -1819,6 +1836,136 @@ def consume_paid_receipt(receipt, used_nonces):
     consumed["status"] = "consumed"
     used_nonces.add(consumed["nonce"])
     return consumed, None
+
+
+def parse_flag_pairs(arguments, required_flags):
+    if len(arguments) % 2:
+        fail("paid command flag missing value")
+    parsed = {}
+    for index in range(0, len(arguments), 2):
+        flag, value = arguments[index:index + 2]
+        if flag not in required_flags or flag in parsed or not value:
+            fail("paid command flag mismatch")
+        parsed[flag] = value
+    if set(parsed) != required_flags:
+        fail("paid command flag inventory mismatch")
+    return parsed
+
+
+def parse_paid_mode(mode_name, arguments):
+    if mode_name == "live-pilot":
+        required = {
+            "--harness", "--case", "--claude-model", "--codex-model", "--claude-total-budget-usd",
+            "--claude-max-invocation-usd", "--max-turns", "--per-turn-timeout",
+            "--codex-observed-token-cap", "--max-infrastructure-retries", "--session-timeout",
+        }
+    else:
+        required = {
+            "--cases", "--repetitions", "--claude-model", "--codex-model", "--max-turns-per-session",
+            "--per-turn-timeout", "--session-timeout", "--max-infrastructure-retries", "--max-concurrency",
+            "--codex-observed-token-cap", "--total-wall-time", "--claude-total-budget-usd",
+            "--claude-max-invocation-usd",
+        }
+    parsed = parse_flag_pairs(arguments, required)
+    if mode_name == "live-pilot":
+        if parsed["--harness"] != "all" or parsed["--case"] != "L1-full-lifecycle":
+            fail("pilot scope mismatch")
+        max_turns = parsed["--max-turns"]
+        max_concurrency = "1"
+        total_wall = str(int(parsed["--session-timeout"]) * 2)
+    else:
+        if parsed["--cases"] != "L1-full-lifecycle,L2-mid-loop-resume,L3-post-merge-resume,L4-degraded-dispatch":
+            fail("live case scope mismatch")
+        if parsed["--repetitions"] != "3":
+            fail("live repetition mismatch")
+        max_turns = parsed["--max-turns-per-session"]
+        max_concurrency = parsed["--max-concurrency"]
+        total_wall = parsed["--total-wall-time"]
+    try:
+        caps = {
+            "max_turns_per_session": int(max_turns),
+            "per_turn_timeout": int(parsed["--per-turn-timeout"]),
+            "session_timeout": int(parsed["--session-timeout"]),
+            "max_infrastructure_retries": int(parsed["--max-infrastructure-retries"]),
+            "max_concurrency": int(max_concurrency),
+            "codex_observed_token_cap": int(parsed["--codex-observed-token-cap"]),
+            "total_wall_time": int(total_wall),
+            "claude_total_budget_usd": parsed["--claude-total-budget-usd"],
+            "claude_max_invocation_usd": parsed["--claude-max-invocation-usd"],
+        }
+    except ValueError:
+        fail("paid command numeric flag invalid")
+    invariant = validate_resource_caps(caps)
+    if invariant is not None:
+        fail(invariant)
+    models = {"claude": parsed["--claude-model"], "codex": parsed["--codex-model"]}
+    command = ["bash", "scripts/test-release-loop-conformance.sh", mode_name, *arguments]
+    return command, models, caps
+
+
+def consume_paid_receipt_file(
+    receipt_path,
+    nonce_ledger_path,
+    command,
+    gate_kind,
+    models,
+    caps,
+    session_marker,
+    session_started,
+    observed_at,
+    allowed_root,
+):
+    lock_path = nonce_ledger_path.with_suffix(".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if lock_path.is_symlink():
+        fail("paid receipt lock is symlink")
+    if not hasattr(os, "O_NOFOLLOW"):
+        fail("paid receipt no-follow unavailable")
+    lock_descriptor = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        receipt_bytes = read_bounded_file(receipt_path, allowed_root, 65536).encode("utf-8")
+        try:
+            receipt = json.loads(receipt_bytes)
+        except json.JSONDecodeError:
+            fail("paid receipt JSON invalid")
+        if nonce_ledger_path.exists():
+            nonce_ledger = json.loads(read_bounded_file(nonce_ledger_path, allowed_root, 1048576))
+        else:
+            nonce_ledger = {"schema": "release-loop-paid-nonces/v1", "consumptions": []}
+        if (
+            not isinstance(nonce_ledger, dict)
+            or nonce_ledger.get("schema") != "release-loop-paid-nonces/v1"
+            or not isinstance(nonce_ledger.get("consumptions"), list)
+        ):
+            fail("paid nonce ledger invalid")
+        used_nonces = {row.get("nonce") for row in nonce_ledger["consumptions"] if isinstance(row, dict)}
+        invariant = validate_paid_receipt(
+            receipt,
+            command,
+            gate_kind,
+            models,
+            caps,
+            session_marker,
+            session_started,
+            observed_at,
+            used_nonces,
+        )
+        if invariant is not None:
+            fail(invariant)
+        consumption = {
+            "nonce": receipt["nonce"],
+            "receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+            "command_sha256": paid_command_digest(command),
+            "consumed_at": observed_at,
+            "session_marker": session_marker,
+        }
+        nonce_ledger["consumptions"].append(consumption)
+        write_json_atomic(nonce_ledger_path, nonce_ledger, allowed_root)
+        return receipt, consumption
+    finally:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        os.close(lock_descriptor)
 
 
 def new_resource_ledger(caps):
@@ -1901,7 +2048,45 @@ def invocation_start_invariant(
     return None
 
 
-def managed_process(command, timeout_seconds, term_grace=0.2):
+def process_table(_root_pid=None):
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,ppid=,pgid="],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    if result.returncode != 0:
+        fail("process-table-unavailable")
+    table = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 3 or not all(field.isdigit() for field in fields):
+            continue
+        pid, parent, group = map(int, fields)
+        table[pid] = {"parent": parent, "group": group}
+    return table
+
+
+def descendant_pids(root_pid, table):
+    descendants = set()
+    frontier = {root_pid}
+    while frontier:
+        children = {pid for pid, row in table.items() if row["parent"] in frontier and pid not in descendants}
+        descendants.update(children)
+        frontier = children
+    return descendants
+
+
+def signal_pids(pids, signal_value):
+    for pid in sorted(pids):
+        try:
+            os.kill(pid, signal_value)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def managed_process(command, timeout_seconds, term_grace=0.2, table_reader=process_table):
     process = subprocess.Popen(
         command,
         stdin=subprocess.DEVNULL,
@@ -1912,10 +2097,29 @@ def managed_process(command, timeout_seconds, term_grace=0.2):
     started = time.monotonic()
     term_sent = False
     kill_sent = False
+    observed_descendants = set()
+
+    def read_table():
+        try:
+            return table_reader(process.pid)
+        except Exception:
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=2)
+            raise
+
     while process.poll() is None and time.monotonic() - started < timeout_seconds:
-        time.sleep(0.01)
+        table = read_table()
+        observed_descendants.update(descendant_pids(process.pid, table))
+        time.sleep(0.05)
     if process.poll() is None:
+        table = read_table()
+        observed_descendants.update(descendant_pids(process.pid, table))
         os.killpg(process.pid, signal.SIGTERM)
+        signal_pids(observed_descendants, signal.SIGTERM)
         term_sent = True
         deadline = time.monotonic() + term_grace
         while process.poll() is None and time.monotonic() < deadline:
@@ -1925,7 +2129,17 @@ def managed_process(command, timeout_seconds, term_grace=0.2):
             kill_sent = True
         except ProcessLookupError:
             pass
+        signal_pids(observed_descendants, signal.SIGKILL)
     returncode = process.wait(timeout=2)
+    absence_deadline = time.monotonic() + 1
+    remaining_descendants = set(observed_descendants)
+    while remaining_descendants and time.monotonic() < absence_deadline:
+        current = read_table()
+        remaining_descendants &= current.keys()
+        if remaining_descendants:
+            time.sleep(0.05)
+    current = read_table()
+    group_absent = not any(row["group"] == process.pid for row in current.values())
     return {
         "pid": process.pid,
         "returncode": returncode,
@@ -1933,7 +2147,9 @@ def managed_process(command, timeout_seconds, term_grace=0.2):
         "term_sent": term_sent,
         "kill_sent": kill_sent,
         "reaped": process.poll() is not None,
-        "process_group_reaped": term_sent or process.poll() is not None,
+        "process_group_reaped": group_absent,
+        "descendants_absent": not remaining_descendants,
+        "observed_descendants": sorted(observed_descendants),
     }
 
 
@@ -1989,14 +2205,63 @@ def validate_strata(results):
     return None
 
 
-def generation_manifest(models, results, full_command):
+def object_digest(value):
+    return hashlib.sha256((json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()).hexdigest()
+
+
+def write_json_atomic(path, value, allowed_root):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.resolve(strict=True).relative_to(allowed_root.resolve(strict=True))
+    except (FileNotFoundError, ValueError):
+        fail("atomic JSON path outside allowed root")
+    if path.is_symlink():
+        fail("atomic JSON target is symlink")
+    payload = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    temporary_path = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        written = 0
+        while written < len(payload):
+            written += os.write(descriptor, payload[written:])
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(str(temporary_path), str(path))
+        directory_descriptor = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
+def artifact_has_secret(value):
+    serialized = json.dumps(value, sort_keys=True)
+    return bool(re.search(r"(api[_-]?key|access[_-]?token|refresh[_-]?token|password|credential|ghp_[A-Za-z0-9])", serialized, re.IGNORECASE))
+
+
+def generation_manifest(models, results, full_command, receipt, ledger, process_proof):
     source_snapshot = adapter_source_snapshot(root)
     plugin_digest = hashlib.sha256(
         (json.dumps(source_snapshot, sort_keys=True, separators=(",", ":")) + "\n").encode()
     ).hexdigest()
-    result_digest = hashlib.sha256(
-        (json.dumps(results, sort_keys=True, separators=(",", ":")) + "\n").encode()
-    ).hexdigest()
+    result_digest = object_digest(results)
+    command_audit = [{"harness": row["harness"], "call_id": row["call_id"]} for row in ledger["calls"]]
+    settlement = {
+        "claude_remaining": str(ledger["claude_remaining"]),
+        "claude_spent": str(ledger["claude_spent"]),
+        "claude_active": ledger["claude_active"],
+        "codex_tokens": ledger["codex_tokens"],
+    }
+    for artifact in (results, command_audit, settlement, process_proof):
+        if artifact_has_secret(artifact):
+            fail("generation artifact contains secret material")
     return {
         "schema": "release-loop-generation/v1",
         "plugin_sha256": plugin_digest,
@@ -2009,6 +2274,11 @@ def generation_manifest(models, results, full_command):
         "cli_versions": {"claude": "fake-2.1.241", "codex": "fake-0.149.1"},
         "results_sha256": result_digest,
         "command_sha256": paid_command_digest(full_command),
+        "command_audit_sha256": object_digest(command_audit),
+        "receipt_sha256": object_digest(receipt),
+        "caps_settlement_sha256": object_digest(settlement),
+        "process_proof_sha256": object_digest(process_proof),
+        "codex_hard_dollar_cap": "unavailable-observed-token-cap-enforced",
     }
 
 
@@ -2016,7 +2286,8 @@ def validate_generation_manifest(manifest):
     required = {
         "schema", "plugin_sha256", "source_manifest_sha256", "corpus_sha256", "mutations_sha256",
         "claude_settings_sha256", "codex_rules_sha256", "models", "cli_versions", "results_sha256",
-        "command_sha256",
+        "command_sha256", "command_audit_sha256", "receipt_sha256", "caps_settlement_sha256",
+        "process_proof_sha256", "codex_hard_dollar_cap",
     }
     if not isinstance(manifest, dict) or set(manifest) != required:
         return "generation-manifest-shape"
@@ -2025,10 +2296,661 @@ def validate_generation_manifest(manifest):
     digest_keys = {key for key in required if key.endswith("sha256")}
     if any(not re.fullmatch(r"[0-9a-f]{64}", str(manifest[key])) for key in digest_keys):
         return "generation-manifest-digest"
-    serialized = json.dumps(manifest, sort_keys=True)
-    if re.search(r"(token|secret|password|credential)", serialized, re.IGNORECASE):
+    if manifest["codex_hard_dollar_cap"] != "unavailable-observed-token-cap-enforced":
+        return "generation-manifest-codex-cap"
+    if artifact_has_secret(manifest):
         return "generation-manifest-secret"
     return None
+
+
+def normalized_resource_ledger(ledger):
+    active = ledger["claude_active"]
+    if active is not None:
+        active = {**active, "reserved": str(active["reserved"])}
+    return {
+        "claude_remaining": str(ledger["claude_remaining"]),
+        "claude_spent": str(ledger["claude_spent"]),
+        "claude_active": active,
+        "codex_tokens": ledger["codex_tokens"],
+        "active_process": ledger["active_process"],
+        "calls": ledger["calls"],
+    }
+
+
+def process_proof_complete(proof):
+    required = {"leader_waited", "pgid_absent", "descendants_absent", "escaped_descendants_absent"}
+    return isinstance(proof, dict) and required <= proof.keys() and all(proof[key] is True for key in required)
+
+
+def empty_process_table(_root_pid):
+    return {}
+
+
+def fake_paid_launcher(call_spec):
+    turn_id = f"{call_spec['call_id']}:turn-1"
+    call_spec["before_invocation"](turn_id)
+    proof = managed_process([sys.executable, "-c", "raise SystemExit(0)"], 2, table_reader=empty_process_table)
+    complete_proof = {
+        "invocation_id": call_spec["call_id"],
+        "leader_waited": proof["reaped"],
+        "pgid_absent": proof["process_group_reaped"],
+        "descendants_absent": proof["descendants_absent"],
+        "escaped_descendants_absent": proof["descendants_absent"],
+        "timed_out": proof["timed_out"],
+        "term_sent": proof["term_sent"],
+        "kill_sent": proof["kill_sent"],
+    }
+    call_spec["after_invocation"](
+        turn_id,
+        complete_proof,
+        "0.05" if call_spec["harness"] == "claude" else None,
+        100 if call_spec["harness"] == "codex" else None,
+    )
+    return {
+        "infrastructure_status": "pass",
+        "verdict": "conformant",
+        "observed_cost": "0.05" if call_spec["harness"] == "claude" else None,
+        "observed_tokens": 100 if call_spec["harness"] == "codex" else None,
+        "process_proof": complete_proof,
+        "command_audit": {
+            "invocation_id": call_spec["call_id"],
+            "harness": call_spec["harness"],
+            "case_id": call_spec["case_id"],
+            "repetition": call_spec["repetition"],
+        },
+    }
+
+
+def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, state_root=None):
+    cases = ["L1-full-lifecycle"] if mode_name == "live-pilot" else [
+        "L1-full-lifecycle", "L2-mid-loop-resume", "L3-post-merge-resume", "L4-degraded-dispatch"
+    ]
+    repetitions = 1 if mode_name == "live-pilot" else 3
+    ledger = new_resource_ledger(caps)
+    results = []
+    process_proofs = []
+    command_audit = []
+    started = time.monotonic()
+
+    def persist_state(status, generation_sha256=None):
+        if state_path is None:
+            return
+        state = {
+            "schema": "release-loop-paid-state/v1",
+            "mode": mode_name,
+            "status": status,
+            "resource_ledger": normalized_resource_ledger(ledger),
+            "result_count": len(results),
+            "process_proof_count": len(process_proofs),
+            "command_audit_count": len(command_audit),
+            "generation_sha256": generation_sha256,
+        }
+        write_json_atomic(state_path, state, state_root)
+
+    if state_path is not None and state_path.exists():
+        existing = json.loads(read_bounded_file(state_path, state_root, 1048576))
+        if existing.get("status") != "complete" or existing.get("resource_ledger", {}).get("active_process") is not None:
+            fail("orphan-process-state")
+    persist_state("running")
+    for harness in ("claude", "codex"):
+        for case_id in cases:
+            for repetition in range(1, repetitions + 1):
+                call_id = f"{harness}:{case_id}:{repetition}"
+                invariant = invocation_start_invariant(
+                    ledger,
+                    caps,
+                    harness,
+                    1,
+                    0,
+                    int(time.monotonic() - started),
+                )
+                if invariant is not None:
+                    fail(invariant)
+                session_proofs = []
+
+                def before_invocation(turn_id):
+                    start_invariant = invocation_start_invariant(
+                        ledger,
+                        caps,
+                        harness,
+                        1,
+                        0,
+                        int(time.monotonic() - started),
+                    )
+                    if start_invariant is not None:
+                        fail(start_invariant)
+                    if harness == "claude":
+                        reservation_invariant = reserve_claude(ledger, caps, turn_id)
+                        if reservation_invariant is not None:
+                            fail(reservation_invariant)
+                    ledger["active_process"] = {"invocation_id": turn_id, "status": "launch-intent"}
+                    persist_state("running")
+
+                def after_invocation(turn_id, proof, observed_cost, observed_tokens):
+                    if not process_proof_complete(proof):
+                        fail("process-exit-proof-incomplete")
+                    session_proofs.append(proof)
+                    process_proofs.append(proof)
+                    ledger["active_process"] = None
+                    if harness == "claude":
+                        settlement_invariant = settle_claude(ledger, turn_id, observed_cost)
+                    else:
+                        settlement_invariant = record_codex_usage(ledger, caps, turn_id, observed_tokens)
+                    if settlement_invariant is not None:
+                        fail(settlement_invariant)
+                    persist_state("running")
+
+                try:
+                    outcome = launcher(
+                        {
+                            "call_id": call_id,
+                            "harness": harness,
+                            "case_id": case_id,
+                            "repetition": repetition,
+                            "models": models,
+                            "caps": caps,
+                            "before_invocation": before_invocation,
+                            "after_invocation": after_invocation,
+                        }
+                    )
+                except Exception:
+                    if harness == "claude" and ledger["claude_active"] is not None:
+                        active_id = ledger["claude_active"]["call_id"]
+                        settle_claude(ledger, active_id, None)
+                    raise
+                if not session_proofs:
+                    fail("process-exit-proof-missing")
+                command_audit.append(outcome["command_audit"])
+                results.append(
+                    {
+                        "harness": harness,
+                        "case_id": case_id,
+                        "repetition": repetition,
+                        "infrastructure_status": outcome["infrastructure_status"],
+                        "verdict": outcome["verdict"],
+                    }
+                )
+    if ledger["active_process"] is not None or ledger["claude_active"] is not None:
+        fail("paid schedule unsettled")
+    if mode_name == "live" and validate_strata(results) is not None:
+        fail(validate_strata(results))
+    persist_state("sessions-complete")
+    return results, ledger, process_proofs, command_audit
+
+
+def finalize_generation_directory(
+    target,
+    mode_name,
+    models,
+    exact_command,
+    receipt,
+    consumption,
+    results,
+    ledger,
+    process_proofs,
+    command_audit,
+):
+    target.mkdir(parents=True, exist_ok=False)
+    artifacts = {
+        "results.json": results,
+        "resource-ledger.json": normalized_resource_ledger(ledger),
+        "process-proofs.json": process_proofs,
+        "command-audit.json": command_audit,
+        "receipt-consumption.json": consumption,
+    }
+    for name, value in artifacts.items():
+        if artifact_has_secret(value):
+            fail(f"generation artifact rejected: {name}")
+        write_json_atomic(target / name, value, target)
+    source_snapshot = adapter_source_snapshot(root)
+    manifest = {
+        "schema": "release-loop-generation/v1",
+        "mode": mode_name,
+        "plugin_sha256": object_digest(source_snapshot),
+        "source_manifest_sha256": hashlib.sha256((data_root / "source-manifest.json").read_bytes()).hexdigest(),
+        "corpus_sha256": hashlib.sha256((data_root / "corpus.json").read_bytes()).hexdigest(),
+        "mutations_sha256": hashlib.sha256((data_root / "mutations.json").read_bytes()).hexdigest(),
+        "claude_settings_sha256": hashlib.sha256((data_root / "policies/claude-settings.json").read_bytes()).hexdigest(),
+        "codex_rules_sha256": hashlib.sha256((data_root / "policies/codex.rules").read_bytes()).hexdigest(),
+        "models": models,
+        "cli_versions": {"claude": "2.1.241", "codex": "0.149.1"},
+        "command_sha256": paid_command_digest(exact_command),
+        "receipt_sha256": object_digest(receipt),
+        "receipt_consumption_sha256": hashlib.sha256((target / "receipt-consumption.json").read_bytes()).hexdigest(),
+        "results_sha256": hashlib.sha256((target / "results.json").read_bytes()).hexdigest(),
+        "caps_settlement_sha256": hashlib.sha256((target / "resource-ledger.json").read_bytes()).hexdigest(),
+        "process_proof_sha256": hashlib.sha256((target / "process-proofs.json").read_bytes()).hexdigest(),
+        "command_audit_sha256": hashlib.sha256((target / "command-audit.json").read_bytes()).hexdigest(),
+        "codex_hard_dollar_cap": "unavailable-observed-token-cap-enforced",
+    }
+    write_json_atomic(target / "manifest.json", manifest, target)
+    manifest_digest = hashlib.sha256((target / "manifest.json").read_bytes()).hexdigest()
+    complete = {"schema": "release-loop-generation-complete/v1", "manifest_sha256": manifest_digest}
+    write_json_atomic(target / "complete.json", complete, target)
+    return manifest_digest
+
+
+def verify_complete_generation(target):
+    if not (target / "complete.json").is_file():
+        return "generation-complete-missing"
+    complete = json.loads(read_bounded_file(target / "complete.json", target, 65536))
+    if complete.get("schema") != "release-loop-generation-complete/v1":
+        return "generation-complete-shape"
+    manifest_path = target / "manifest.json"
+    if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != complete.get("manifest_sha256"):
+        return "generation-complete-manifest"
+    manifest = json.loads(read_bounded_file(manifest_path, target, 1048576))
+    artifact_map = {
+        "results_sha256": "results.json",
+        "caps_settlement_sha256": "resource-ledger.json",
+        "process_proof_sha256": "process-proofs.json",
+        "command_audit_sha256": "command-audit.json",
+        "receipt_consumption_sha256": "receipt-consumption.json",
+    }
+    for key, name in artifact_map.items():
+        if hashlib.sha256((target / name).read_bytes()).hexdigest() != manifest.get(key):
+            return "generation-complete-artifact"
+    results = json.loads(read_bounded_file(target / "results.json", target, 1048576))
+    if manifest.get("mode") == "live" and validate_strata(results) is not None:
+        return validate_strata(results)
+    proofs = json.loads(read_bounded_file(target / "process-proofs.json", target, 1048576))
+    if not proofs or not all(process_proof_complete(proof) for proof in proofs):
+        return "generation-complete-process-proof"
+    ledger = json.loads(read_bounded_file(target / "resource-ledger.json", target, 1048576))
+    if ledger.get("active_process") is not None or ledger.get("claude_active") is not None:
+        return "generation-complete-unsettled"
+    return None
+
+
+def run_paid_mode_entry(
+    mode_name,
+    arguments,
+    launcher,
+    evidence_root,
+    session_marker,
+    session_started,
+    observed_at,
+):
+    exact_command, models, caps = parse_paid_mode(mode_name, arguments)
+    receipt_path = evidence_root / f"{mode_name}-receipt.json"
+    nonce_path = evidence_root / "paid-nonces.json"
+    receipt, consumption = consume_paid_receipt_file(
+        receipt_path,
+        nonce_path,
+        exact_command,
+        mode_name,
+        models,
+        caps,
+        session_marker,
+        session_started,
+        observed_at,
+        evidence_root,
+    )
+    state_path = evidence_root / f"{mode_name}-state-{receipt['nonce']}.json"
+    results, ledger, process_proofs, command_audit = execute_paid_schedule(
+        mode_name, caps, models, launcher, state_path=state_path, state_root=evidence_root
+    )
+    generation_root = evidence_root / f"{mode_name}-generation-{receipt['nonce']}"
+    generation_digest = finalize_generation_directory(
+        generation_root,
+        mode_name,
+        models,
+        exact_command,
+        receipt,
+        consumption,
+        results,
+        ledger,
+        process_proofs,
+        command_audit,
+    )
+    if verify_complete_generation(generation_root) is not None:
+        fail("paid generation verification failed")
+    completed_state = json.loads(read_bounded_file(state_path, evidence_root, 1048576))
+    completed_state["status"] = "complete"
+    completed_state["generation_sha256"] = generation_digest
+    write_json_atomic(state_path, completed_state, evidence_root)
+    return {
+        "results": results,
+        "generation_path": str(generation_root),
+        "generation_sha256": generation_digest,
+        "full_command": shlex.join(full_run_command(caps, models)) if mode_name == "live-pilot" else None,
+    }
+
+
+def write_adapter_supervisor(path):
+    source = f'''#!{sys.executable}
+import base64
+import json
+import os
+from pathlib import Path
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+spec = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+summary_path = Path(sys.argv[2])
+stdin_bytes = base64.b64decode(spec["stdin_base64"])
+process = subprocess.Popen(
+    spec["argv"], cwd=spec["cwd"], env=spec["env"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+)
+process.stdin.write(stdin_bytes)
+process.stdin.close()
+selector = selectors.DefaultSelector()
+selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+buffers = {{"stdout": bytearray(), "stderr": bytearray()}}
+started = time.monotonic()
+overflow = False
+timed_out = False
+while selector.get_map():
+    if time.monotonic() - started > spec["timeout"]:
+        process.kill()
+        timed_out = True
+    for key, _ in selector.select(0.1):
+        chunk = os.read(key.fileobj.fileno(), 8192)
+        if not chunk:
+            selector.unregister(key.fileobj)
+            continue
+        buffers[key.data].extend(chunk)
+        if len(buffers["stdout"]) + len(buffers["stderr"]) > spec["output_cap"]:
+            process.kill()
+            overflow = True
+    if (overflow or timed_out) and process.poll() is not None:
+        continue
+returncode = process.wait()
+summary = {{
+    "returncode": returncode,
+    "stdout_base64": base64.b64encode(bytes(buffers["stdout"][:spec["output_cap"]])).decode(),
+    "stderr_base64": base64.b64encode(bytes(buffers["stderr"][:spec["output_cap"]])).decode(),
+    "overflow": overflow,
+    "timed_out": timed_out,
+}}
+summary_path.write_text(json.dumps(summary, sort_keys=True) + "\\n", encoding="utf-8")
+'''
+    path.write_text(source, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def managed_adapter_call(command, cwd, env, stdin_bytes, timeout_seconds, work_root):
+    import base64
+    supervisor = work_root / "adapter-supervisor.py"
+    spec_path = work_root / f"adapter-spec-{uuid.uuid4().hex}.json"
+    summary_path = work_root / f"adapter-summary-{uuid.uuid4().hex}.json"
+    write_adapter_supervisor(supervisor)
+    spec = {
+        "argv": command,
+        "cwd": str(cwd),
+        "env": env,
+        "stdin_base64": base64.b64encode(stdin_bytes).decode(),
+        "timeout": timeout_seconds,
+        "output_cap": 65536,
+    }
+    write_json_atomic(spec_path, spec, work_root)
+    proof = managed_process(
+        [sys.executable, str(supervisor), str(spec_path), str(summary_path)],
+        timeout_seconds + 2,
+        table_reader=process_table,
+    )
+    if not proof["reaped"] or not proof["process_group_reaped"] or not proof["descendants_absent"]:
+        fail("adapter process proof incomplete")
+    summary = json.loads(read_bounded_file(summary_path, work_root, 200000))
+    if summary.get("overflow"):
+        fail("adapter output exceeded cap")
+    if summary.get("timed_out") or proof["timed_out"]:
+        fail("adapter session timeout")
+    stdout = base64.b64decode(summary["stdout_base64"]).decode("utf-8", errors="replace")
+    stderr = base64.b64decode(summary["stderr_base64"]).decode("utf-8", errors="replace")
+    normalized_proof = {
+        "leader_waited": proof["reaped"],
+        "pgid_absent": proof["process_group_reaped"],
+        "descendants_absent": proof["descendants_absent"],
+        "escaped_descendants_absent": proof["descendants_absent"],
+        "timed_out": proof["timed_out"],
+        "term_sent": proof["term_sent"],
+        "kill_sent": proof["kill_sent"],
+    }
+    return subprocess.CompletedProcess(command, summary["returncode"], stdout, stderr), normalized_proof
+
+
+def git_fixture_command(git_path, env, cwd, *arguments):
+    result = run_bounded([git_path, *arguments], cwd, env, output_cap=65536, timeout=20)
+    if result.returncode != 0:
+        fail(f"live fixture Git failed: {arguments}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def progress_pending_gate(progress_path, expected_answer):
+    if not progress_path.is_file():
+        return None, "pending-gate-missing"
+    text_value = progress_path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r"(?m)^pending_gate:\n  id: (?P<id>[^\n]+)\n  issued_at: (?P<issued>[^\n]+)\n"
+        r"  expected_answer_class: (?P<class>[^\n]+)$"
+    )
+    matches = list(pattern.finditer(text_value))
+    if len(matches) != 1:
+        return None, "pending-gate-missing-or-duplicate"
+    match = matches[0]
+    if "gate_answer_receipt:" in text_value:
+        return None, "pending-gate-answer-reserved"
+    if match.group("id") != expected_answer["gate_id"] or match.group("class") != expected_answer["expected_answer_class"]:
+        return None, "pending-gate-mismatch"
+    phase_match = re.search(r"(?m)^phase: ([^\n]+)$", text_value)
+    if not phase_match or phase_match.group(1) != expected_answer["phase"]:
+        return None, "pending-gate-phase"
+    approval_field = "design_approved:" if expected_answer["gate_id"] == "design-approval" else "ship_approved:"
+    if re.search(rf"(?m)^{approval_field}", text_value):
+        return None, "pending-gate-already-approved"
+    return {"issued_at": match.group("issued"), "text": text_value}, None
+
+
+def reserve_progress_answer(progress_path, expected_answer, reserved_at):
+    gate_state, invariant = progress_pending_gate(progress_path, expected_answer)
+    if invariant is not None:
+        fail(invariant)
+    receipt_block = (
+        "gate_answer_receipt:\n"
+        f"  gate_id: {expected_answer['gate_id']}\n"
+        f"  gate_issued_at: {gate_state['issued_at']}\n"
+        f"  answer: {expected_answer['answer']}\n"
+        f"  reserved_at: {reserved_at}\n\n"
+    )
+    text_value = gate_state["text"]
+    marker = "final_action:"
+    if marker in text_value:
+        text_value = text_value.replace(marker, receipt_block + marker, 1)
+    else:
+        frontmatter_end = text_value.find("\n---", 4)
+        if frontmatter_end < 0:
+            fail("pending gate frontmatter missing")
+        text_value = text_value[:frontmatter_end] + "\n" + receipt_block.rstrip() + text_value[frontmatter_end:]
+    text_value = text_value.rstrip() + (
+        f"\n- {reserved_at} gate: answer-reserved id={expected_answer['gate_id']} "
+        f"answer={expected_answer['answer']}\n"
+    )
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".progress-answer-", dir=str(progress_path.parent))
+    temporary_path = Path(temporary_name)
+    try:
+        payload = text_value.encode("utf-8")
+        written = 0
+        while written < len(payload):
+            written += os.write(descriptor, payload[written:])
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(str(temporary_path), str(progress_path))
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
+def extract_usage(output, harness):
+    cost = Decimal("0")
+    tokens = 0
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if harness == "claude" and isinstance(event.get("total_cost_usd"), (int, float, str)):
+            cost = max(cost, Decimal(str(event["total_cost_usd"])))
+        usage = event.get("usage")
+        if isinstance(usage, dict):
+            tokens += sum(value for key, value in usage.items() if key.endswith("tokens") and isinstance(value, int))
+    return (str(cost) if cost else None), tokens
+
+
+def actual_paid_launcher(call_spec):
+    run_root = root / ".release-loop/evidence/live-runs" / uuid.uuid4().hex
+    run_root.mkdir(parents=True)
+    origin_path = run_root / "origin.git"
+    repo_path = run_root / "repo"
+    home_path = run_root / "home"
+    temp_path = run_root / "tmp"
+    bin_path = run_root / "bin"
+    for path in (home_path, temp_path, bin_path):
+        path.mkdir()
+    git_path = shutil.which("git")
+    claude_path = shutil.which("claude")
+    codex_path = shutil.which("codex")
+    if not git_path or not claude_path or not codex_path:
+        fail("live adapter executable unavailable")
+    env = {
+        "PATH": f"{bin_path}:{Path(git_path).parent}:{Path(claude_path).parent}:{Path(codex_path).parent}:/usr/bin:/bin",
+        "HOME": str(home_path),
+        "TMPDIR": str(temp_path),
+        "LC_ALL": "C",
+        "LANG": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    git_fixture_command(git_path, env, run_root, "clone", "--bare", str(root), str(origin_path))
+    git_fixture_command(git_path, env, run_root, "clone", str(origin_path), str(repo_path))
+    for key, value in (
+        ("user.name", "Conformance Fixture"), ("user.email", "fixture@example.invalid"),
+        ("core.autocrlf", "false"), ("core.safecrlf", "false"), ("commit.gpgsign", "false"),
+    ):
+        git_fixture_command(git_path, env, repo_path, "config", key, value)
+    validate_policy_files(repo_path)
+    gh_path = bin_path / "gh"
+    write_gh_simulator(gh_path)
+    validate_gh_simulator(gh_path)
+    (run_root / "gh-state.json").write_text("{}\n", encoding="utf-8")
+    wrapper_path = repo_path / ".conformance/bin/fixture-exec"
+    write_fixture_wrapper(wrapper_path)
+    env.update(
+        CONFORMANCE_FIXTURE_ROOT=str(run_root),
+        CONFORMANCE_FIXTURE_REPO=str(repo_path),
+        CONFORMANCE_FIXTURE_ORIGIN=str(origin_path),
+        CONFORMANCE_GIT=git_path,
+        CONFORMANCE_GH=str(gh_path),
+        CONFORMANCE_GH_SHA256=hashlib.sha256(gh_path.read_bytes()).hexdigest(),
+        CONFORMANCE_PYTHON=sys.executable,
+        CONFORMANCE_WRAPPER_SHA256=hashlib.sha256(wrapper_path.read_bytes()).hexdigest(),
+    )
+    for harness in ("claude", "codex"):
+        auth_command = [claude_path, "auth", "status"] if harness == "claude" else [codex_path, "login", "status"]
+        auth = run_bounded(auth_command, repo_path, env, output_cap=8192, timeout=10)
+        if auth.returncode != 0 or ("false" in auth.stdout.lower()) or ("not logged" in auth.stdout.lower()):
+            fail("auth-isolation-unavailable")
+    harness = call_spec["harness"]
+    case_id = call_spec["case_id"]
+    golden = load_json(data_root / f"golden/{harness}/{case_id}.json")
+    settings_path = repo_path / ".claude/settings.json"
+    mcp_path = repo_path / "empty-mcp.json"
+    result_path = run_root / "codex-last.txt"
+    session_id = str(uuid.uuid4()) if harness == "claude" else None
+    if harness == "claude":
+        command = build_claude_initial(
+            root, call_spec["models"]["claude"], settings_path, mcp_path,
+            call_spec["caps"]["claude_max_invocation_usd"], golden["prompt"], session_id,
+        )
+        command[0] = claude_path
+        stdin_bytes = b""
+    else:
+        command = build_codex_initial(repo_path, call_spec["models"]["codex"], result_path)
+        command[0] = codex_path
+        stdin_bytes = adapter_packet(golden, root)
+    outputs = []
+    proofs = []
+    initial_turn_id = f"{call_spec['call_id']}:turn-1"
+    call_spec["before_invocation"](initial_turn_id)
+    result, proof = managed_adapter_call(
+        command, repo_path, env, stdin_bytes, call_spec["caps"]["session_timeout"], run_root
+    )
+    outputs.append(result.stdout)
+    proofs.append(proof)
+    initial_cost, initial_tokens = extract_usage(result.stdout, harness)
+    call_spec["after_invocation"](initial_turn_id, proof, initial_cost, initial_tokens)
+    if result.returncode != 0:
+        return {
+            "infrastructure_status": "failed", "verdict": "unknown", "observed_cost": None,
+            "observed_tokens": 0, "process_proof": proof,
+            "command_audit": {"invocation_id": call_spec["call_id"], "harness": harness, "turns": 1},
+        }
+    parsed_id = parse_session_id(result.stdout, harness)
+    progress_path = repo_path / ".release-loop/progress.md"
+    turns = 1
+    for answer in golden["scripted_answers"]:
+        turns += 1
+        if turns > call_spec["caps"]["max_turns_per_session"]:
+            fail("turn-cap-exhausted")
+        reserved_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        reserve_progress_answer(progress_path, answer, reserved_at)
+        if harness == "claude":
+            resume = build_claude_resume(
+                root, call_spec["models"]["claude"], settings_path, mcp_path,
+                call_spec["caps"]["claude_max_invocation_usd"], answer["answer"], parsed_id,
+            )
+            resume[0] = claude_path
+            resume_input = b""
+        else:
+            resume = build_codex_resume(call_spec["models"]["codex"], parsed_id)
+            resume[0] = codex_path
+            resume_input = (answer["answer"] + "\n").encode()
+        resume_turn_id = f"{call_spec['call_id']}:turn-{turns}"
+        call_spec["before_invocation"](resume_turn_id)
+        resumed, resume_proof = managed_adapter_call(
+            resume, repo_path, env, resume_input, call_spec["caps"]["session_timeout"], run_root
+        )
+        outputs.append(resumed.stdout)
+        proofs.append(resume_proof)
+        resume_cost, resume_tokens = extract_usage(resumed.stdout, harness)
+        call_spec["after_invocation"](resume_turn_id, resume_proof, resume_cost, resume_tokens)
+        if resumed.returncode != 0:
+            break
+    terminal_archive = list((repo_path / ".release-loop/archive").glob("*/progress.md")) if (repo_path / ".release-loop/archive").is_dir() else []
+    verdict = "conformant" if terminal_archive else "nonconformant"
+    observed_cost, observed_tokens = extract_usage("\n".join(outputs), harness)
+    aggregate_proof = {
+        "leader_waited": all(proof["leader_waited"] for proof in proofs),
+        "pgid_absent": all(proof["pgid_absent"] for proof in proofs),
+        "descendants_absent": all(proof["descendants_absent"] for proof in proofs),
+        "escaped_descendants_absent": all(proof["escaped_descendants_absent"] for proof in proofs),
+    }
+    wrapper_audit_path = run_root / "wrapper-audit.jsonl"
+    gh_audit_path = run_root / "gh-audit.jsonl"
+    return {
+        "infrastructure_status": "pass",
+        "verdict": verdict,
+        "observed_cost": observed_cost,
+        "observed_tokens": observed_tokens,
+        "process_proof": aggregate_proof,
+        "command_audit": {
+            "invocation_id": call_spec["call_id"],
+            "harness": harness,
+            "turns": turns,
+            "wrapper_audit_sha256": hashlib.sha256(wrapper_audit_path.read_bytes()).hexdigest()
+            if wrapper_audit_path.is_file() else None,
+            "gh_audit_sha256": hashlib.sha256(gh_audit_path.read_bytes()).hexdigest()
+            if gh_audit_path.is_file() else None,
+        },
+    }
 
 
 def validate_resource_group():
@@ -2049,30 +2971,109 @@ def validate_resource_group():
     observed_at = "2026-08-24T06:01:00Z"
     used_nonces = set()
     pilot = pilot_command(caps, models)
+    pilot_caps = {**caps, "max_concurrency": 1, "total_wall_time": caps["session_timeout"] * 2}
+    parsed_pilot, parsed_models, parsed_caps = parse_paid_mode("live-pilot", pilot[3:])
+    if parsed_pilot != pilot or parsed_models != models or parsed_caps != pilot_caps:
+        fail("resource pilot command parser mismatch")
     receipt = {
         "schema": "release-loop-paid-receipt/v1",
         "gate_kind": "live-pilot",
         "command_sha256": paid_command_digest(pilot),
         "models": models,
-        "caps": caps,
+        "caps": pilot_caps,
         "approved_at": "2026-08-24T06:00:30Z",
         "session_marker": session_marker,
         "nonce": "a" * 32,
         "status": "approved",
     }
-    if validate_paid_receipt(receipt, pilot, "live-pilot", session_marker, session_started, observed_at, used_nonces) is not None:
+    if validate_paid_receipt(
+        receipt, pilot, "live-pilot", models, pilot_caps, session_marker, session_started, observed_at, used_nonces
+    ) is not None:
         fail("resource pilot receipt control failed")
     consumed, invariant = consume_paid_receipt(receipt, used_nonces)
     if invariant is not None or consumed["status"] != "consumed":
         fail("resource pilot receipt consumption failed")
-    ledger = new_resource_ledger(caps)
-    if reserve_claude(ledger, caps, "pilot-claude") is not None:
+    receipt_test_root = root / ".release-loop/evidence/U6"
+    receipt_test_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="receipt-test-", dir=str(receipt_test_root)) as receipt_temp:
+        receipt_temp_root = Path(receipt_temp)
+        receipt_path = receipt_temp_root / "receipt.json"
+        nonce_path = receipt_temp_root / "nonces.json"
+        write_json_atomic(receipt_path, receipt, receipt_temp_root)
+        durable_receipt, durable_consumption = consume_paid_receipt_file(
+            receipt_path,
+            nonce_path,
+            pilot,
+            "live-pilot",
+            models,
+            pilot_caps,
+            session_marker,
+            session_started,
+            observed_at,
+            receipt_temp_root,
+        )
+        if durable_receipt != receipt or durable_consumption["nonce"] != receipt["nonce"]:
+            fail("resource durable receipt consumption failed")
+        try:
+            consume_paid_receipt_file(
+                receipt_path,
+                nonce_path,
+                pilot,
+                "live-pilot",
+                models,
+                pilot_caps,
+                session_marker,
+                session_started,
+                observed_at,
+                receipt_temp_root,
+            )
+        except ValueError as exc:
+            if "paid-receipt-reused" not in str(exc):
+                fail(f"resource durable receipt reuse diagnostic mismatch: {exc}")
+        else:
+            fail("resource durable receipt reused")
+        concurrent_receipt = {**receipt, "nonce": "4" * 32}
+        concurrent_receipt_path = receipt_temp_root / "concurrent-receipt.json"
+        concurrent_nonce_path = receipt_temp_root / "concurrent-nonces.json"
+        write_json_atomic(concurrent_receipt_path, concurrent_receipt, receipt_temp_root)
+        children = []
+        for _ in range(2):
+            child_pid = os.fork()
+            if child_pid == 0:
+                try:
+                    consume_paid_receipt_file(
+                        concurrent_receipt_path,
+                        concurrent_nonce_path,
+                        pilot,
+                        "live-pilot",
+                        models,
+                        pilot_caps,
+                        session_marker,
+                        session_started,
+                        observed_at,
+                        receipt_temp_root,
+                    )
+                except ValueError as exc:
+                    os._exit(2 if "paid-receipt-reused" in str(exc) else 3)
+                os._exit(0)
+            children.append(child_pid)
+        statuses = []
+        for child_pid in children:
+            _, status = os.waitpid(child_pid, 0)
+            statuses.append(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 255)
+        if sorted(statuses) != [0, 2]:
+            fail(f"resource concurrent receipt consumption mismatch: {statuses}")
+    ledger = new_resource_ledger(pilot_caps)
+    if reserve_claude(ledger, pilot_caps, "pilot-claude") is not None:
         fail("resource Claude pilot reservation failed")
     if settle_claude(ledger, "pilot-claude", "0.10") is not None:
         fail("resource Claude pilot settlement failed")
-    if record_codex_usage(ledger, caps, "pilot-codex", 100) is not None:
+    if record_codex_usage(ledger, pilot_caps, "pilot-codex", 100) is not None:
         fail("resource Codex pilot settlement failed")
     full_command = full_run_command(caps, models)
+    parsed_full, parsed_full_models, parsed_full_caps = parse_paid_mode("live", full_command[3:])
+    if parsed_full != full_command or parsed_full_models != models or parsed_full_caps != caps:
+        fail("resource full command parser mismatch")
     expected_flags = {
         "--cases", "--repetitions", "--claude-model", "--codex-model", "--max-turns-per-session",
         "--per-turn-timeout", "--session-timeout", "--max-infrastructure-retries", "--max-concurrency",
@@ -2086,10 +3087,11 @@ def validate_resource_group():
     full_receipt.update(
         gate_kind="live",
         command_sha256=paid_command_digest(full_command),
+        caps=caps,
         nonce="b" * 32,
     )
     if validate_paid_receipt(
-        full_receipt, full_command, "live", session_marker, session_started, observed_at, used_nonces
+        full_receipt, full_command, "live", models, caps, session_marker, session_started, observed_at, used_nonces
     ) is not None:
         fail("resource full receipt control failed")
     consume_paid_receipt(full_receipt, used_nonces)
@@ -2117,16 +3119,15 @@ def validate_resource_group():
                 )
     if validate_strata(results) is not None:
         fail("resource full strata control failed")
-    manifest = generation_manifest(models, results, full_command)
-    if validate_generation_manifest(manifest) is not None:
-        fail("resource generation manifest control failed")
 
     process_controls = 0
-    normal = managed_process([sys.executable, "-c", "raise SystemExit(0)"], 1)
+    normal = managed_process([sys.executable, "-c", "raise SystemExit(0)"], 1, table_reader=empty_process_table)
     if normal["returncode"] != 0 or not normal["reaped"] or normal["timed_out"] or not normal["process_group_reaped"]:
         fail("resource normal process control failed")
     process_controls += 1
-    timeout = managed_process([sys.executable, "-c", "import time; time.sleep(5)"], 0.05)
+    timeout = managed_process(
+        [sys.executable, "-c", "import time; time.sleep(5)"], 0.05, table_reader=empty_process_table
+    )
     if not timeout["timed_out"] or not timeout["reaped"] or not timeout["process_group_reaped"]:
         fail("resource timeout process control failed")
     process_controls += 1
@@ -2134,21 +3135,166 @@ def validate_resource_group():
         [sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(5)"],
         0.05,
         0.05,
+        table_reader=empty_process_table,
     )
     if not resistant["kill_sent"] or not resistant["reaped"] or not resistant["process_group_reaped"]:
         fail("resource resistant process control failed")
     process_controls += 1
+    escaped_pid_file = receipt_test_root / "escaped-child.pid"
+    escaped_code = (
+        "import pathlib,subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(5)'],start_new_session=True); "
+        f"pathlib.Path({str(escaped_pid_file)!r}).write_text(str(child.pid)); time.sleep(5)"
+    )
+
+    def scripted_process_table(root_pid):
+        table = {}
+        try:
+            os.kill(root_pid, 0)
+            table[root_pid] = {"parent": os.getpid(), "group": root_pid}
+        except ProcessLookupError:
+            pass
+        if escaped_pid_file.is_file():
+            child_pid = int(escaped_pid_file.read_text())
+            try:
+                os.kill(child_pid, 0)
+                table[child_pid] = {"parent": root_pid, "group": child_pid}
+            except ProcessLookupError:
+                pass
+        return table
+
+    escaped = managed_process(
+        [sys.executable, "-c", escaped_code],
+        0.2,
+        0.05,
+        table_reader=scripted_process_table,
+    )
+    if not escaped["timed_out"] or not escaped["descendants_absent"] or not escaped["observed_descendants"]:
+        fail("resource escaped descendant control failed")
+    if escaped_pid_file.exists():
+        escaped_pid_file.unlink()
+    process_controls += 1
+    process_proof = [normal, timeout, resistant, escaped]
+    manifest = generation_manifest(models, results, full_command, full_receipt, full_ledger, process_proof)
+    if validate_generation_manifest(manifest) is not None:
+        fail("resource generation manifest control failed")
+    manifest_path = root / ".release-loop/evidence/U6/fake-generation.json"
+    write_json_atomic(manifest_path, manifest, root / ".release-loop")
+    persisted_manifest = json.loads(read_bounded_file(manifest_path, manifest_path.parent, 1048576))
+    if persisted_manifest != manifest or validate_generation_manifest(persisted_manifest) is not None:
+        fail("resource persisted generation manifest mismatch")
+
+    scheduled_results, scheduled_ledger, scheduled_proofs, scheduled_audit = execute_paid_schedule(
+        "live", caps, models, fake_paid_launcher
+    )
+    if validate_strata(scheduled_results) is not None or len(scheduled_proofs) != 24 or len(scheduled_audit) != 24:
+        fail("resource scheduler integration failed")
+    with tempfile.TemporaryDirectory(prefix="generation-test-", dir=str(receipt_test_root)) as generation_temp:
+        generation_target = Path(generation_temp) / "generation"
+        generation_digest = finalize_generation_directory(
+            generation_target,
+            "live",
+            models,
+            full_command,
+            full_receipt,
+            {"nonce": full_receipt["nonce"], "consumed_at": observed_at},
+            scheduled_results,
+            scheduled_ledger,
+            scheduled_proofs,
+            scheduled_audit,
+        )
+        if not re.fullmatch(r"[0-9a-f]{64}", generation_digest):
+            fail("resource generation digest missing")
+        if verify_complete_generation(generation_target) is not None:
+            fail("resource complete generation verification failed")
+        if verify_complete_generation(generation_target) is not None:
+            fail("resource generation restart verification failed")
+        results_bytes = (generation_target / "results.json").read_bytes()
+        (generation_target / "results.json").write_bytes(results_bytes + b"\n")
+        if verify_complete_generation(generation_target) != "generation-complete-artifact":
+            fail("resource generation artifact drift accepted")
+        (generation_target / "results.json").write_bytes(results_bytes)
+        partial_target = Path(generation_temp) / "partial-generation"
+        partial_target.mkdir()
+        write_json_atomic(partial_target / "manifest.json", {"schema": "partial"}, partial_target)
+        if verify_complete_generation(partial_target) != "generation-complete-missing":
+            fail("resource incomplete generation accepted")
+
+    with tempfile.TemporaryDirectory(prefix="paid-entry-test-", dir=str(receipt_test_root)) as paid_temp:
+        paid_root = Path(paid_temp)
+        pilot_entry_receipt = {**receipt, "nonce": "2" * 32}
+        write_json_atomic(paid_root / "live-pilot-receipt.json", pilot_entry_receipt, paid_root)
+        pilot_entry = run_paid_mode_entry(
+            "live-pilot",
+            pilot[3:],
+            fake_paid_launcher,
+            paid_root,
+            session_marker,
+            session_started,
+            observed_at,
+        )
+        if len(pilot_entry["results"]) != 2 or not pilot_entry["full_command"]:
+            fail("resource paid pilot entry integration failed")
+        try:
+            run_paid_mode_entry(
+                "live-pilot",
+                pilot[3:],
+                fake_paid_launcher,
+                paid_root,
+                session_marker,
+                session_started,
+                observed_at,
+            )
+        except ValueError as exc:
+            if "paid-receipt-reused" not in str(exc):
+                fail(f"resource paid entry reuse diagnostic mismatch: {exc}")
+        else:
+            fail("resource paid pilot entry reused receipt")
+        full_entry_receipt = {**full_receipt, "nonce": "3" * 32}
+        write_json_atomic(paid_root / "live-receipt.json", full_entry_receipt, paid_root)
+        full_entry = run_paid_mode_entry(
+            "live",
+            full_command[3:],
+            fake_paid_launcher,
+            paid_root,
+            session_marker,
+            session_started,
+            observed_at,
+        )
+        if len(full_entry["results"]) != 24 or full_entry["full_command"] is not None:
+            fail("resource paid full entry integration failed")
 
     negatives = 0
-    if validate_paid_receipt(None, pilot, "live-pilot", session_marker, session_started, observed_at, used_nonces) != "paid-receipt-shape":
+    def unavailable_process_table(_root_pid):
+        fail("process-table-unavailable")
+
+    try:
+        managed_process(
+            [sys.executable, "-c", "import time; time.sleep(5)"],
+            1,
+            table_reader=unavailable_process_table,
+        )
+    except ValueError as exc:
+        if "process-table-unavailable" not in str(exc):
+            fail(f"resource process-table diagnostic mismatch: {exc}")
+    else:
+        fail("resource unavailable process table accepted")
+    negatives += 1
+    if validate_paid_receipt(
+        None, pilot, "live-pilot", models, pilot_caps, session_marker, session_started, observed_at, used_nonces
+    ) != "paid-receipt-shape":
         fail("resource missing receipt accepted")
     negatives += 1
     for label, mutant, expected in (
         ("stale", {**receipt, "approved_at": "2026-08-24T05:59:59Z", "nonce": "c" * 32}, "paid-receipt-stale"),
         ("command", {**receipt, "command_sha256": "0" * 64, "nonce": "d" * 32}, "paid-receipt-command"),
         ("session", {**receipt, "session_marker": "other", "nonce": "e" * 32}, "paid-receipt-session"),
+        ("models", {**receipt, "models": {"claude": "other", "codex": models["codex"]}, "nonce": "f" * 32}, "paid-receipt-models"),
+        ("caps", {**receipt, "caps": {**caps, "max_turns_per_session": 5}, "nonce": "1" * 32}, "paid-receipt-caps"),
     ):
-        actual = validate_paid_receipt(mutant, pilot, "live-pilot", session_marker, session_started, observed_at, used_nonces)
+        actual = validate_paid_receipt(
+            mutant, pilot, "live-pilot", models, pilot_caps, session_marker, session_started, observed_at, used_nonces
+        )
         if actual != expected:
             fail(f"resource receipt mutant mismatch: {label}")
         negatives += 1
@@ -2704,7 +3850,26 @@ if mode == "resource":
         resource_manifest,
     ) = validate_resource_group()
 if mode in {"live-pilot", "live"}:
-    fail("paid-call-receipt missing")
+    parse_paid_mode(mode, mode_args)
+    live_evidence_root = root / ".release-loop/evidence"
+    live_receipt_path = live_evidence_root / f"{mode}-receipt.json"
+    if not live_receipt_path.is_file():
+        fail("paid-call-receipt missing")
+    live_session_marker = os.environ.get("CONFORMANCE_RELEASE_SESSION_MARKER")
+    live_session_started = os.environ.get("CONFORMANCE_RELEASE_SESSION_STARTED")
+    if not live_session_marker or parse_gate_timestamp(live_session_started) is None:
+        fail("paid-call-session-identity missing")
+    process_table()
+    live_observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    live_result = run_paid_mode_entry(
+        mode,
+        mode_args,
+        actual_paid_launcher,
+        live_evidence_root,
+        live_session_marker,
+        live_session_started,
+        live_observed_at,
+    )
 
 if mode == "static":
     mutation_count, static_grader_count, source_generation, static_negative_count = validate_static(cases)
@@ -2816,4 +3981,12 @@ if mode == "resource":
     )
     print(f"full-run-command: {resource_full_command}")
     print("codex-hard-dollar-cap: unavailable; observed-token cap enforced")
+if mode in {"live-pilot", "live"}:
+    print(
+        f"ok:   release-loop {mode} results={len(live_result['results'])} "
+        f"generation={live_result['generation_sha256']} path={live_result['generation_path']}"
+    )
+    if live_result["full_command"]:
+        print(f"full-run-command: {live_result['full_command']}")
+        print("codex-hard-dollar-cap: unavailable; observed-token cap enforced")
 PY
