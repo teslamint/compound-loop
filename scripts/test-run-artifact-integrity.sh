@@ -72,6 +72,7 @@ CASES = (
     "archive_journal_resume_tamper",
     "archive_destination_foreign_entry",
     "archive_manifest_pending_recovery",
+    "archive_progress_commit_recovery",
     "archive_requires_persisted_destination",
     "archive_incomplete_run",
     "archive_incomplete_missing_phase",
@@ -2932,6 +2933,94 @@ def run_case(name: str) -> None:
                     archived_journal = json.loads((destination_path / ".phase-artifact-ownership.json").read_text(encoding="utf-8"))
                     assert archived_journal["pending"] is None
                     assert archived_journal["owned"][".archive-source-manifest.json"] == hashlib.sha256(final_manifest.read_bytes()).hexdigest()
+        elif name == "archive_progress_commit_recovery":
+            for mode in ("legacy", "scoped"):
+                candidate = new_repo(tmp, "progress-commit-" + mode)
+                if mode == "legacy":
+                    candidate_progress = candidate / ".release-loop/progress.md"
+                    candidate_progress.parent.mkdir()
+                    candidate_progress.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+                else:
+                    candidate_progress = initialize(candidate, "alpha")
+                publish_from_cli(candidate, candidate_progress, "reports/U1.md", b"owned\n", CLI)
+                destination = ".release-loop/archive/2026-08-24-progress-commit-" + mode
+                persist_archive_evidence(candidate_progress, destination, "completed")
+                progress_relative = candidate_progress.relative_to(candidate).as_posix()
+                source_root = candidate_progress.parent
+                assert archive_scope(
+                    candidate,
+                    progress_relative,
+                    destination,
+                    persist_authority=False,
+                )[-1] == "progress.md"
+                archived_progress = candidate / destination / "progress.md"
+                progress_bytes = archived_progress.read_bytes()
+                if mode == "scoped":
+                    source_root.mkdir(parents=True)
+                assert_blocked_preserves(
+                    lambda candidate=candidate, progress_relative=progress_relative: archive_scope(
+                        candidate,
+                        progress_relative,
+                        None,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    "invalid progress",
+                )
+                archived_progress.write_bytes(progress_bytes + b"\n# TAMPERED AFTER COMMIT\n")
+                assert_blocked_preserves(
+                    lambda candidate=candidate, progress_relative=progress_relative, destination=destination: archive_scope(
+                        candidate,
+                        progress_relative,
+                        destination,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    "archive destination conflict",
+                )
+                archived_progress.write_bytes(progress_bytes)
+                if mode == "scoped":
+                    foreign = source_root / "foreign.md"
+                    foreign.write_bytes(b"FOREIGN\n")
+                    assert_blocked_preserves(
+                        lambda candidate=candidate, progress_relative=progress_relative, destination=destination: archive_scope(
+                            candidate,
+                            progress_relative,
+                            destination,
+                            persist_authority=False,
+                        ),
+                        sent,
+                        before,
+                        "archive destination conflict",
+                    )
+                    foreign.unlink()
+                    source_root.rmdir()
+                    source_root.write_bytes(b"FOREIGN ROOT\n")
+                    assert_blocked_preserves(
+                        lambda candidate=candidate, progress_relative=progress_relative, destination=destination: archive_scope(
+                            candidate,
+                            progress_relative,
+                            destination,
+                            persist_authority=False,
+                        ),
+                        sent,
+                        before,
+                        "archive destination conflict",
+                    )
+                    source_root.unlink()
+                    source_root.mkdir()
+                assert archive_scope(
+                    candidate,
+                    progress_relative,
+                    destination,
+                    persist_authority=False,
+                ) == []
+                if mode == "scoped":
+                    assert not source_root.exists()
+                else:
+                    assert source_root.is_dir()
         elif name == "archive_requires_persisted_destination":
             path = initialize(repo, "alpha")
             before_progress = path.read_bytes()

@@ -118,10 +118,23 @@ def validate_progress(
     relative: str,
     expected_feature: str | None = None,
 ) -> tuple[Path, dict[str, str], str]:
+    path, expected_root, scope_feature = progress_location(repo, relative)
+    values, text = frontmatter(path)
+    if values.get("artifact_root") != expected_root:
+        reject("path boundary", f"artifact_root {values.get('artifact_root', '')}")
+    if scope_feature is not None and values.get("feature") != scope_feature:
+        reject("invalid progress", f"feature does not match scope {scope_feature}")
+    if expected_feature is not None and values.get("feature") != expected_feature:
+        reject("invalid progress", f"feature does not match {expected_feature}")
+    return path, values, text
+
+
+def progress_location(repo: Path, relative: str) -> tuple[Path, str, str | None]:
     rel = repo_relative(relative)
     if rel == PurePosixPath(".release-loop/progress.md"):
         path = guard(repo, relative, ".release-loop")
         expected_root = ".release-loop"
+        scope_feature = None
     elif (
         len(rel.parts) == 4
         and rel.parts[:2] == (".release-loop", "runs")
@@ -130,18 +143,10 @@ def validate_progress(
         scope = PurePosixPath(*rel.parts[:-1]).as_posix()
         path = guard(repo, relative, scope)
         expected_root = scope
+        scope_feature = rel.parts[2]
     else:
         reject("path boundary", f"invalid progress path {relative}")
-    values, text = frontmatter(path)
-    if values.get("artifact_root") != expected_root:
-        reject("path boundary", f"artifact_root {values.get('artifact_root', '')}")
-    if expected_root != ".release-loop":
-        scope_feature = rel.parts[2]
-        if values.get("feature") != scope_feature:
-            reject("invalid progress", f"feature does not match scope {scope_feature}")
-    if expected_feature is not None and values.get("feature") != expected_feature:
-        reject("invalid progress", f"feature does not match {expected_feature}")
-    return path, values, text
+    return path, expected_root, scope_feature
 
 
 def git_tracked(repo: Path, relative: str) -> list[str]:
@@ -268,6 +273,21 @@ def archive_manifest_entries(root: Path, children: list[Path]) -> list[dict[str,
     return sorted(entries, key=lambda row: str(row["path"]))
 
 
+def read_archive_manifest(path: Path) -> dict[str, object]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise Blocked("archive destination conflict: invalid source manifest") from exc
+    if (
+        not isinstance(manifest, dict)
+        or set(manifest) != {"schema", "entries"}
+        or manifest.get("schema") != ARCHIVE_MANIFEST_SCHEMA
+        or not isinstance(manifest.get("entries"), list)
+    ):
+        reject("archive destination conflict", "invalid source manifest")
+    return manifest
+
+
 def prepare_archive_manifest(
     source: Path,
     children: list[Path],
@@ -348,12 +368,7 @@ def prepare_archive_manifest(
         )
         publication["owned"] = owned
         publication["pending"] = None
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise Blocked("archive destination conflict: invalid source manifest") from exc
-    if set(manifest) != {"schema", "entries"} or manifest.get("schema") != ARCHIVE_MANIFEST_SCHEMA or not isinstance(manifest.get("entries"), list):
-        reject("archive destination conflict", "invalid source manifest")
+    manifest = read_archive_manifest(manifest_path)
     destination_children = [
         child
         for child in destination.iterdir()
@@ -426,18 +441,15 @@ def validate_archive_publication(
     return journal, temporary, state
 
 
-def archive(
+def validate_archive_contract(
     repo: Path,
-    progress_path: str,
-    destination: str | None = None,
-) -> tuple[str, list[str], str]:
-    repo = repo.resolve(strict=True)
-    inject_after_first = test_failure("archive-after-first")
-    inject_after_journal = test_failure("archive-after-journal")
-    progress_file, values, text = validate_progress(repo, progress_path)
+    values: dict[str, str],
+    text: str,
+    requested_destination: str | None,
+) -> tuple[str, str]:
     mode, stored = archive_evidence(text)
-    if destination is not None:
-        guard(repo, destination, ".release-loop/archive")
+    if requested_destination is not None:
+        guard(repo, requested_destination, ".release-loop/archive")
     if stored is None:
         reject("archive destination conflict", "missing persisted destination")
     if mode == "completed":
@@ -455,9 +467,68 @@ def archive(
             )
         if phase == "done" or phase_status == "complete":
             reject("archive destination conflict", "incomplete marker requires nonterminal phase")
-    if stored is not None and destination is not None and stored != destination:
-        reject("archive destination conflict", f"stored={stored} requested={destination}")
-    selected = stored
+    if requested_destination is not None and stored != requested_destination:
+        reject(
+            "archive destination conflict",
+            f"stored={stored} requested={requested_destination}",
+        )
+    if mode is None:
+        reject("archive destination conflict", "missing persisted archive mode")
+    return mode, stored
+
+
+def recover_terminal_archive(
+    repo: Path,
+    progress_path: str,
+    destination: str | None,
+) -> tuple[str, list[str], str]:
+    progress_file, source_rel, scope_feature = progress_location(repo, progress_path)
+    if destination is None:
+        reject("invalid progress", str(progress_file))
+    destination_path = guard(repo, destination, ".release-loop/archive")
+    archived_progress = guard(repo, f"{destination}/progress.md", destination)
+    values, text = frontmatter(archived_progress)
+    if values.get("artifact_root") != source_rel:
+        reject("path boundary", f"artifact_root {values.get('artifact_root', '')}")
+    if scope_feature is not None and values.get("feature") != scope_feature:
+        reject("invalid progress", f"feature does not match scope {scope_feature}")
+    mode, selected = validate_archive_contract(repo, values, text, destination)
+    _, _, publication = validate_archive_publication(repo, source_rel, selected)
+    if publication["pending"] is not None:
+        reject("archive destination conflict", "terminal archive has pending publication")
+    manifest = read_archive_manifest(destination_path / ARCHIVE_MANIFEST_NAME)
+    destination_children = [
+        child
+        for child in destination_path.iterdir()
+        if child.name not in {ARCHIVE_MANIFEST_NAME, JOURNAL_NAME}
+    ]
+    if archive_manifest_entries(destination_path, destination_children) != manifest["entries"]:
+        reject("archive destination conflict", "source manifest mismatch")
+    source = guard(repo, source_rel, source_rel, allow_root=True)
+    if source_rel != ".release-loop" and source.exists():
+        if not source.is_dir():
+            reject("archive destination conflict", source.as_posix())
+        remaining = list(source.iterdir())
+        if remaining:
+            reject("archive destination conflict", remaining[0].as_posix())
+        source.rmdir()
+    state = "archived" if mode == "completed" else "archived-incomplete"
+    return selected, [], state
+
+
+def archive(
+    repo: Path,
+    progress_path: str,
+    destination: str | None = None,
+) -> tuple[str, list[str], str]:
+    repo = repo.resolve(strict=True)
+    inject_after_first = test_failure("archive-after-first")
+    inject_after_journal = test_failure("archive-after-journal")
+    progress_file, _, _ = progress_location(repo, progress_path)
+    if not progress_file.exists():
+        return recover_terminal_archive(repo, progress_path, destination)
+    progress_file, values, text = validate_progress(repo, progress_path)
+    mode, selected = validate_archive_contract(repo, values, text, destination)
     destination_path = guard(repo, selected, ".release-loop/archive")
     source_rel = values["artifact_root"]
     journal, journal_temporary, publication = validate_archive_publication(repo, source_rel, selected)
