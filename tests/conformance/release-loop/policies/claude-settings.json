@@ -6,8 +6,6 @@
       "Read(/__FEATURE_ROOT__/**)",
       "Write(/__FIXTURE_ROOT__/**)",
       "Edit(/__FIXTURE_ROOT__/**)",
-      "Glob",
-      "Grep",
       "Bash(.conformance/bin/fixture-exec:*)"
     ],
     "deny": [
@@ -76,5 +74,18 @@
         {"name": "NPM_TOKEN", "mode": "deny"}
       ]
     }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|Write|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__PATH_GUARD__"
+          }
+        ]
+      }
+    ]
   }
 }

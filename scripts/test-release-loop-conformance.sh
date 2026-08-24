@@ -876,9 +876,10 @@ def claude_policy_paths(fixture_root, feature_root, template):
     return str(fixture_root.resolve(strict=True)), str(feature_root.resolve(strict=True))
 
 
-def validate_claude_policy_document(claude, fixture_root, feature_root, template=False):
+def validate_claude_policy_document(claude, fixture_root, feature_root, template=False, guard_path=None):
     fixture_value, feature_value = claude_policy_paths(fixture_root, feature_root, template)
-    if set(claude) != {"enableAllProjectMcpServers", "permissions", "sandbox"}:
+    guard_value = "__PATH_GUARD__" if template else shlex.quote(str(guard_path.resolve(strict=True)))
+    if set(claude) != {"enableAllProjectMcpServers", "permissions", "sandbox", "hooks"}:
         fail("Claude policy shape mismatch")
     if claude.get("enableAllProjectMcpServers") is not False:
         fail("Claude policy enables project MCP")
@@ -898,7 +899,7 @@ def validate_claude_policy_document(claude, fixture_root, feature_root, template
     required_allows = {
         f"Read(/{fixture_value}/**)", f"Read(/{feature_value}/**)",
         f"Write(/{fixture_value}/**)", f"Edit(/{fixture_value}/**)",
-        "Glob", "Grep", "Bash(.conformance/bin/fixture-exec:*)",
+        "Bash(.conformance/bin/fixture-exec:*)",
     }
     if allowed != required_allows or {"Read", "Write", "Edit"} & allowed:
         fail("Claude policy allow inventory mismatch")
@@ -948,13 +949,81 @@ def validate_claude_policy_document(claude, fixture_root, feature_root, template
         )
     ] or {row.get("name") for row in credentials.get("envVars", [])} != credential_env:
         fail("Claude policy credential environment inventory mismatch")
+    if claude.get("hooks") != {
+        "PreToolUse": [{
+            "matcher": "Read|Edit|Write|Glob|Grep",
+            "hooks": [{"type": "command", "command": guard_value}],
+        }]
+    }:
+        fail("Claude policy path guard mismatch")
 
 
-def materialize_claude_policy(claude, fixture_root, feature_root):
+def materialize_claude_policy(claude, fixture_root, feature_root, guard_path):
     fixture_value, feature_value = claude_policy_paths(fixture_root, feature_root, False)
     encoded = json.dumps(claude)
     encoded = encoded.replace("__FIXTURE_ROOT__", fixture_value).replace("__FEATURE_ROOT__", feature_value)
+    encoded = encoded.replace("__PATH_GUARD__", shlex.quote(str(guard_path.resolve(strict=True))))
     return json.loads(encoded)
+
+
+def write_claude_path_guard(path, fixture_root, feature_root):
+    fixture_value = str(fixture_root.resolve(strict=True))
+    feature_value = str(feature_root.resolve(strict=True))
+    source = f'''#!{sys.executable}
+import json
+from pathlib import Path
+import sys
+
+fixture_root = Path({fixture_value!r})
+feature_root = Path({feature_value!r})
+read_tools = {{"Read", "Glob", "Grep"}}
+write_tools = {{"Edit", "Write"}}
+
+try:
+    request = json.load(sys.stdin)
+    tool_name = request["tool_name"]
+    tool_input = request["tool_input"]
+    cwd = Path(request["cwd"]).resolve(strict=True)
+    if tool_name in {{"Read", "Edit", "Write"}}:
+        raw_path = tool_input["file_path"]
+    elif tool_name in {{"Glob", "Grep"}}:
+        raw_path = tool_input.get("path", str(cwd))
+    else:
+        raise ValueError("unknown tool")
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = cwd / candidate
+    resolved = candidate.resolve(strict=False)
+except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+    print("blocked: malformed conformance file-tool path", file=sys.stderr)
+    raise SystemExit(2)
+
+roots = (fixture_root,) if tool_name in write_tools else (fixture_root, feature_root)
+protected_write_paths = (
+    fixture_root / ".claude",
+    fixture_root / ".codex",
+    fixture_root / ".conformance" / "bin",
+    fixture_root / ".git",
+    fixture_root / "empty-mcp.json",
+)
+protected_write = tool_name in write_tools and any(
+    resolved == protected or protected in resolved.parents for protected in protected_write_paths
+)
+if (
+    tool_name not in read_tools | write_tools
+    or not any(resolved == root or root in resolved.parents for root in roots)
+    or protected_write
+):
+    print("blocked: path outside conformance boundary", file=sys.stderr)
+    raise SystemExit(2)
+raise SystemExit(0)
+'''
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source, encoding="utf-8")
+    path.chmod(0o500)
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_mode & 0o077:
+        fail("Claude policy path guard identity mismatch")
 
 
 def validate_policy_files(fixture_root, feature_root=root):
@@ -962,9 +1031,11 @@ def validate_policy_files(fixture_root, feature_root=root):
     claude_path = policy_root / "claude-settings.json"
     codex_path = policy_root / "codex.rules"
     claude = load_json(claude_path)
+    guard_path = fixture_root / ".claude" / "hooks" / "conformance-path-guard"
+    write_claude_path_guard(guard_path, fixture_root, feature_root)
     validate_claude_policy_document(claude, fixture_root, feature_root, template=True)
-    runtime_claude = materialize_claude_policy(claude, fixture_root, feature_root)
-    validate_claude_policy_document(runtime_claude, fixture_root, feature_root)
+    runtime_claude = materialize_claude_policy(claude, fixture_root, feature_root, guard_path)
+    validate_claude_policy_document(runtime_claude, fixture_root, feature_root, guard_path=guard_path)
     codex = codex_path.read_text(encoding="utf-8")
     for literal in (
         'prefix_rule(pattern=[".conformance/bin/fixture-exec"], decision="allow")',
@@ -978,7 +1049,7 @@ def validate_policy_files(fixture_root, feature_root=root):
             fail("Codex policy literal mismatch")
     settings_target = fixture_root / ".claude" / "settings.json"
     rules_target = fixture_root / ".codex" / "rules" / "conformance.rules"
-    settings_target.parent.mkdir(parents=True)
+    settings_target.parent.mkdir(parents=True, exist_ok=True)
     rules_target.parent.mkdir(parents=True)
     write_json_atomic(settings_target, runtime_claude, fixture_root)
     shutil.copyfile(codex_path, rules_target)
@@ -987,7 +1058,7 @@ def validate_policy_files(fixture_root, feature_root=root):
     for source, target in ((codex_path, rules_target),):
         if hashlib.sha256(source.read_bytes()).digest() != hashlib.sha256(target.read_bytes()).digest():
             fail("fixture policy copy digest mismatch")
-    return 3
+    return 4
 
 
 def validate_fixture():
@@ -1542,12 +1613,30 @@ def validate_preflight():
         write_fake_adapter(fake_bin / "codex", "codex")
         validate_policy_files(fixture_root)
         settings_path = fixture_root / ".claude" / "settings.json"
+        guard_path = fixture_root / ".claude" / "hooks" / "conformance-path-guard"
         rules_path = fixture_root / ".codex" / "rules" / "conformance.rules"
         mcp_path = fixture_root / "empty-mcp.json"
         policy_digests = {
             path: hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in (settings_path, rules_path, mcp_path)
+            for path in (settings_path, guard_path, rules_path, mcp_path)
         }
+        real_claude = shutil.which("claude")
+        if not real_claude:
+            fail("Claude policy doctor unavailable")
+        doctor_env = dict(os.environ)
+        doctor_env["HOME"] = str(isolated_home)
+        doctor_env["TMPDIR"] = str(temp_dir)
+        doctor_env.pop("CLAUDE_CONFIG_DIR", None)
+        doctor = run_bounded(
+            [real_claude, "--settings", str(settings_path), "--setting-sources", "project", "doctor"],
+            fixture_root,
+            doctor_env,
+            output_cap=65536,
+            timeout=30,
+        )
+        doctor_output = (doctor.stdout + doctor.stderr).lower()
+        if doctor.returncode != 0 or any(marker in doctor_output for marker in ("unknown setting", "invalid setting")):
+            fail("Claude policy doctor rejected runtime settings")
         source_path = root / "skills/release-loop/SKILL.md"
         source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
         source_snapshot = adapter_source_snapshot(root)
@@ -4385,6 +4474,7 @@ def actual_paid_launcher(call_spec):
         path: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in (
             repo_path / ".claude/settings.json",
+            repo_path / ".claude/hooks/conformance-path-guard",
             repo_path / ".codex/rules/conformance.rules",
             repo_path / "empty-mcp.json",
         )
@@ -4562,6 +4652,7 @@ def validate_resource_group():
         ("credential-file-readable", lambda value: value["sandbox"]["credentials"].__setitem__("files", [])),
         ("credential-env-readable", lambda value: value["sandbox"]["credentials"].__setitem__("envVars", [])),
         ("unscoped-edit", lambda value: value["permissions"]["allow"].append("Edit")),
+        ("path-guard-missing", lambda value: value.__setitem__("hooks", {})),
     )
     for label, mutate in policy_mutations:
         mutant = copy.deepcopy(claude_policy_template)
@@ -4573,6 +4664,37 @@ def validate_resource_group():
                 fail(f"resource Claude policy mutant diagnostic mismatch: {label}: {exc}")
         else:
             fail(f"resource Claude policy mutant accepted: {label}")
+    with tempfile.TemporaryDirectory(prefix="claude-path-guard-", dir=str(root / ".release-loop/evidence/U6")) as guard_temp:
+        guard_root = Path(guard_temp)
+        guard_fixture = guard_root / "fixture"
+        guard_feature = guard_root / "feature"
+        guard_outside = guard_root / "outside"
+        for path in (guard_fixture, guard_feature, guard_outside):
+            path.mkdir()
+        guard_path = guard_fixture / ".claude/hooks/conformance-path-guard"
+        write_claude_path_guard(guard_path, guard_fixture, guard_feature)
+        guard_cases = (
+            ("read-fixture", "Read", {"file_path": str(guard_fixture / "state.md")}, 0),
+            ("read-feature", "Read", {"file_path": str(guard_feature / "SKILL.md")}, 0),
+            ("write-fixture", "Write", {"file_path": str(guard_fixture / "result.md")}, 0),
+            ("write-feature", "Write", {"file_path": str(guard_feature / "SKILL.md")}, 2),
+            ("write-guard", "Write", {"file_path": str(guard_path)}, 2),
+            ("write-wrapper", "Edit", {"file_path": str(guard_fixture / ".conformance/bin/fixture-exec")}, 2),
+            ("write-git", "Write", {"file_path": str(guard_fixture / ".git/config")}, 2),
+            ("read-outside", "Read", {"file_path": str(guard_outside / "secret")}, 2),
+            ("glob-outside", "Glob", {"path": str(guard_outside), "pattern": "**/*"}, 2),
+            ("grep-outside", "Grep", {"path": str(guard_outside), "pattern": "token"}, 2),
+            ("missing-path", "Read", {}, 2),
+        )
+        for label, tool_name, tool_input, expected_code in guard_cases:
+            guard_input = json.dumps({
+                "cwd": str(guard_fixture),
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+            }).encode()
+            guarded = run_bounded([str(guard_path)], guard_fixture, {}, input_bytes=guard_input)
+            if guarded.returncode != expected_code:
+                fail(f"resource Claude path guard mismatch: {label}")
     caps = {
         "max_turns_per_session": 4,
         "per_turn_timeout": 30,
