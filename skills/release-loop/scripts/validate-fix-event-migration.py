@@ -132,10 +132,13 @@ def default_signature_checker(repo):
 
 
 def ordinal_value(event):
-    try:
-        value = int(event.get("ordinal"))
-    except (TypeError, ValueError) as exc:
-        raise Blocked("fix migration ledger ordinal invalid") from exc
+    raw = event.get("ordinal")
+    if type(raw) is int:
+        value = raw
+    elif isinstance(raw, str) and re.fullmatch(r"[1-9][0-9]*", raw):
+        value = int(raw)
+    else:
+        raise Blocked("fix migration ledger ordinal invalid")
     if value < 1:
         raise Blocked("fix migration ledger ordinal invalid")
     return value
@@ -205,8 +208,11 @@ def validate_migration(repo, progress_relative, adoption_relative, signature_che
     for row in rows:
         if set(row) != required:
             raise Blocked("fix migration row invalid")
+        row_ordinal = row["ordinal"]
+        if type(row_ordinal) is not int or row_ordinal < 1:
+            raise Blocked("fix migration row ordinal invalid")
         match = EVENT_ID.fullmatch(str(row["id"]))
-        if not match or row["subject"] != match.group(1) or row["ordinal"] != int(match.group(2)):
+        if not match or row["subject"] != match.group(1) or row_ordinal != int(match.group(2)):
             raise Blocked("fix migration row identity mismatch")
         source = by_id.get(row["source_review_event"])
         if source is None or source.get("state") != "complete":

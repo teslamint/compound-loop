@@ -3872,7 +3872,7 @@ def run_case(name: str) -> None:
             accepted = migration.validate_migration(repo, path.relative_to(repo).as_posix(), adoption_path, lambda _: "G")
             assert accepted["state"] == "new" and accepted["events"][0]["id"] == "fix:U3:1"
             assert accepted["review_counts"]["fix_rounds"] == 1
-            for invalid_ordinal in (None, "not-an-integer"):
+            for invalid_ordinal in (None, "not-an-integer", True, False, 1.0, 0, -1, "01", "+1", " 1"):
                 try:
                     migration.normalized_existing({"ordinal": invalid_ordinal})
                 except migration.Blocked as exc:
@@ -3892,6 +3892,17 @@ def run_case(name: str) -> None:
             else:
                 raise AssertionError("invalid reviewed head reached Git")
             path.write_text(valid_progress, encoding="utf-8")
+
+            for label, invalid_ordinal in (("true", True), ("false", False), ("float", 1.0), ("negative", -1), ("zero", 0)):
+                invalid_row = dict(base_row)
+                invalid_row["ordinal"] = invalid_ordinal
+                candidate = publish_adoption("fix-history-invalid-ordinal-" + label, [invalid_row])
+                try:
+                    migration.validate_migration(repo, path.relative_to(repo).as_posix(), candidate, lambda _: "G")
+                except migration.Blocked as exc:
+                    assert "row ordinal invalid" in str(exc), (label, str(exc))
+                else:
+                    raise AssertionError(label + " adoption ordinal passed")
 
             attacks = []
             wrong_source = dict(base_row)
