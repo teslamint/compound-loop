@@ -2185,6 +2185,29 @@ def full_run_command(caps, models):
     ]
 
 
+def derive_full_run_caps(pilot_caps, pilot_results, pilot_ledger):
+    if validate_pilot_results(pilot_results) is not None:
+        fail(validate_pilot_results(pilot_results))
+    max_turns = max(int(row.get("turns") or 0) for row in pilot_results)
+    max_elapsed = max(float(row.get("elapsed_seconds") or 0) for row in pilot_results)
+    codex_tokens = sum(int(row.get("observed_tokens") or 0) for row in pilot_results if row["harness"] == "codex")
+    claude_costs = [Decimal(str(row["observed_cost"])) for row in pilot_results if row["harness"] == "claude" and row.get("observed_cost") is not None]
+    observed_claude = max(claude_costs) if claude_costs else Decimal(pilot_caps["claude_max_invocation_usd"])
+    expected_per_harness = 12
+    full_total_budget = observed_claude * expected_per_harness * 2
+    return {
+        "max_turns_per_session": max(1, max_turns + 1),
+        "per_turn_timeout": max(1, int(max_elapsed * 2) + 1),
+        "session_timeout": max(1, int(max_elapsed * 3) + 1),
+        "max_infrastructure_retries": pilot_caps["max_infrastructure_retries"],
+        "max_concurrency": 1,
+        "codex_observed_token_cap": max(1, codex_tokens * expected_per_harness * 2),
+        "total_wall_time": max(1, int(max_elapsed * 24 * 2) + 1),
+        "claude_total_budget_usd": f"{full_total_budget:.2f}",
+        "claude_max_invocation_usd": pilot_caps["claude_max_invocation_usd"],
+    }
+
+
 def validate_strata(results):
     expected = {
         (harness, case_id, repetition)
@@ -2202,6 +2225,18 @@ def validate_strata(results):
             return "live-verdict-unknown"
         if row["verdict"] != "conformant":
             return "live-conformance-failure"
+    return None
+
+
+def validate_pilot_results(results):
+    if len(results) != 2 or {row.get("harness") for row in results} != {"claude", "codex"}:
+        return "pilot-incomplete"
+    if any(row.get("case_id") != "L1-full-lifecycle" or row.get("repetition") != 1 for row in results):
+        return "pilot-incomplete"
+    if any(row.get("infrastructure_status") != "pass" for row in results):
+        return "pilot-infrastructure-failure"
+    if any(row.get("verdict") != "conformant" for row in results):
+        return "pilot-conformance-failure"
     return None
 
 
@@ -2328,7 +2363,7 @@ def empty_process_table(_root_pid):
 
 def fake_paid_launcher(call_spec):
     turn_id = f"{call_spec['call_id']}:turn-1"
-    call_spec["before_invocation"](turn_id)
+    call_spec["before_invocation"](turn_id, 0)
     proof = managed_process([sys.executable, "-c", "raise SystemExit(0)"], 2, table_reader=empty_process_table)
     complete_proof = {
         "invocation_id": call_spec["call_id"],
@@ -2345,12 +2380,15 @@ def fake_paid_launcher(call_spec):
         complete_proof,
         "0.05" if call_spec["harness"] == "claude" else None,
         100 if call_spec["harness"] == "codex" else None,
+        0,
     )
     return {
         "infrastructure_status": "pass",
         "verdict": "conformant",
         "observed_cost": "0.05" if call_spec["harness"] == "claude" else None,
         "observed_tokens": 100 if call_spec["harness"] == "codex" else None,
+        "turns": 1,
+        "elapsed_seconds": 0.1,
         "process_proof": complete_proof,
         "command_audit": {
             "invocation_id": call_spec["call_id"],
@@ -2408,13 +2446,13 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                     fail(invariant)
                 session_proofs = []
 
-                def before_invocation(turn_id):
+                def before_invocation(turn_id, session_elapsed=0):
                     start_invariant = invocation_start_invariant(
                         ledger,
                         caps,
                         harness,
                         1,
-                        0,
+                        session_elapsed,
                         int(time.monotonic() - started),
                     )
                     if start_invariant is not None:
@@ -2426,7 +2464,7 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                     ledger["active_process"] = {"invocation_id": turn_id, "status": "launch-intent"}
                     persist_state("running")
 
-                def after_invocation(turn_id, proof, observed_cost, observed_tokens):
+                def after_invocation(turn_id, proof, observed_cost, observed_tokens, session_elapsed=0):
                     if not process_proof_complete(proof):
                         fail("process-exit-proof-incomplete")
                     session_proofs.append(proof)
@@ -2439,6 +2477,16 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                     if settlement_invariant is not None:
                         fail(settlement_invariant)
                     persist_state("running")
+                    elapsed_invariant = invocation_start_invariant(
+                        ledger,
+                        caps,
+                        harness,
+                        1,
+                        session_elapsed,
+                        int(time.monotonic() - started),
+                    )
+                    if elapsed_invariant in {"session-timeout-exhausted", "total-wall-time-exhausted"}:
+                        fail(elapsed_invariant)
 
                 try:
                     outcome = launcher(
@@ -2468,10 +2516,16 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                         "repetition": repetition,
                         "infrastructure_status": outcome["infrastructure_status"],
                         "verdict": outcome["verdict"],
+                        "turns": outcome.get("turns"),
+                        "elapsed_seconds": outcome.get("elapsed_seconds"),
+                        "observed_cost": outcome.get("observed_cost"),
+                        "observed_tokens": outcome.get("observed_tokens"),
                     }
                 )
     if ledger["active_process"] is not None or ledger["claude_active"] is not None:
         fail("paid schedule unsettled")
+    if mode_name == "live-pilot" and validate_pilot_results(results) is not None:
+        fail(validate_pilot_results(results))
     if mode_name == "live" and validate_strata(results) is not None:
         fail(validate_strata(results))
     persist_state("sessions-complete")
@@ -2489,6 +2543,7 @@ def finalize_generation_directory(
     ledger,
     process_proofs,
     command_audit,
+    approval_packet=None,
 ):
     target.mkdir(parents=True, exist_ok=False)
     artifacts = {
@@ -2498,6 +2553,8 @@ def finalize_generation_directory(
         "command-audit.json": command_audit,
         "receipt-consumption.json": consumption,
     }
+    if approval_packet is not None:
+        artifacts["full-run-approval.json"] = approval_packet
     for name, value in artifacts.items():
         if artifact_has_secret(value):
             fail(f"generation artifact rejected: {name}")
@@ -2523,6 +2580,10 @@ def finalize_generation_directory(
         "command_audit_sha256": hashlib.sha256((target / "command-audit.json").read_bytes()).hexdigest(),
         "codex_hard_dollar_cap": "unavailable-observed-token-cap-enforced",
     }
+    if approval_packet is not None:
+        manifest["full_run_approval_sha256"] = hashlib.sha256(
+            (target / "full-run-approval.json").read_bytes()
+        ).hexdigest()
     write_json_atomic(target / "manifest.json", manifest, target)
     manifest_digest = hashlib.sha256((target / "manifest.json").read_bytes()).hexdigest()
     complete = {"schema": "release-loop-generation-complete/v1", "manifest_sha256": manifest_digest}
@@ -2547,6 +2608,8 @@ def verify_complete_generation(target):
         "command_audit_sha256": "command-audit.json",
         "receipt_consumption_sha256": "receipt-consumption.json",
     }
+    if "full_run_approval_sha256" in manifest:
+        artifact_map["full_run_approval_sha256"] = "full-run-approval.json"
     for key, name in artifact_map.items():
         if hashlib.sha256((target / name).read_bytes()).hexdigest() != manifest.get(key):
             return "generation-complete-artifact"
@@ -2590,6 +2653,21 @@ def run_paid_mode_entry(
     results, ledger, process_proofs, command_audit = execute_paid_schedule(
         mode_name, caps, models, launcher, state_path=state_path, state_root=evidence_root
     )
+    approval_packet = None
+    derived_full_command = None
+    if mode_name == "live-pilot":
+        derived_caps = derive_full_run_caps(caps, results, ledger)
+        derived_full_command = full_run_command(derived_caps, models)
+        approval_packet = {
+            "schema": "release-loop-full-run-approval/v1",
+            "pilot_results_sha256": object_digest(results),
+            "pilot_settlement_sha256": object_digest(normalized_resource_ledger(ledger)),
+            "full_command": shlex.join(derived_full_command),
+            "full_command_sha256": paid_command_digest(derived_full_command),
+            "models": models,
+            "caps": derived_caps,
+            "codex_hard_dollar_cap": "unavailable-observed-token-cap-enforced",
+        }
     generation_root = evidence_root / f"{mode_name}-generation-{receipt['nonce']}"
     generation_digest = finalize_generation_directory(
         generation_root,
@@ -2602,6 +2680,7 @@ def run_paid_mode_entry(
         ledger,
         process_proofs,
         command_audit,
+        approval_packet,
     )
     if verify_complete_generation(generation_root) is not None:
         fail("paid generation verification failed")
@@ -2613,7 +2692,7 @@ def run_paid_mode_entry(
         "results": results,
         "generation_path": str(generation_root),
         "generation_sha256": generation_digest,
-        "full_command": shlex.join(full_run_command(caps, models)) if mode_name == "live-pilot" else None,
+        "full_command": shlex.join(derived_full_command) if derived_full_command is not None else None,
     }
 
 
@@ -2741,6 +2820,15 @@ def progress_pending_gate(progress_path, expected_answer):
     phase_match = re.search(r"(?m)^phase: ([^\n]+)$", text_value)
     if not phase_match or phase_match.group(1) != expected_answer["phase"]:
         return None, "pending-gate-phase"
+    status_match = re.search(r"(?m)^phase_status: ([^\n]+)$", text_value)
+    if not status_match or status_match.group(1) != "waiting-user":
+        return None, "pending-gate-status"
+    updated_match = re.search(r"(?m)^updated: ([^\n]+)$", text_value)
+    issued_time = parse_gate_timestamp(match.group("issued"))
+    updated_time = parse_gate_timestamp(updated_match.group(1)) if updated_match else None
+    observed_time = datetime.now(timezone.utc)
+    if issued_time is None or updated_time is None or issued_time != updated_time or issued_time > observed_time:
+        return None, "pending-gate-stale"
     approval_field = "design_approved:" if expected_answer["gate_id"] == "design-approval" else "ship_approved:"
     if re.search(rf"(?m)^{approval_field}", text_value):
         return None, "pending-gate-already-approved"
@@ -2837,6 +2925,15 @@ def actual_paid_launcher(call_spec):
     ):
         git_fixture_command(git_path, env, repo_path, "config", key, value)
     validate_policy_files(repo_path)
+    source_snapshot = adapter_source_snapshot(root)
+    policy_digests = {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (
+            repo_path / ".claude/settings.json",
+            repo_path / ".codex/rules/conformance.rules",
+            repo_path / "empty-mcp.json",
+        )
+    }
     gh_path = bin_path / "gh"
     write_gh_simulator(gh_path)
     validate_gh_simulator(gh_path)
@@ -2878,24 +2975,35 @@ def actual_paid_launcher(call_spec):
         stdin_bytes = adapter_packet(golden, root)
     outputs = []
     proofs = []
+    actual_session_started = time.monotonic()
     initial_turn_id = f"{call_spec['call_id']}:turn-1"
-    call_spec["before_invocation"](initial_turn_id)
-    result, proof = managed_adapter_call(
-        command, repo_path, env, stdin_bytes, call_spec["caps"]["session_timeout"], run_root
-    )
+    call_spec["before_invocation"](initial_turn_id, 0)
+    try:
+        verify_preflight_inputs(root, source_snapshot, policy_digests)
+        result, proof = managed_adapter_call(
+            command, repo_path, env, stdin_bytes, call_spec["caps"]["per_turn_timeout"], run_root
+        )
+    finally:
+        verify_preflight_inputs(root, source_snapshot, policy_digests)
     outputs.append(result.stdout)
     proofs.append(proof)
+    if harness == "codex" and result.returncode == 0:
+        read_bounded_file(result_path, run_root)
     initial_cost, initial_tokens = extract_usage(result.stdout, harness)
-    call_spec["after_invocation"](initial_turn_id, proof, initial_cost, initial_tokens)
+    call_spec["after_invocation"](
+        initial_turn_id, proof, initial_cost, initial_tokens, time.monotonic() - actual_session_started
+    )
     if result.returncode != 0:
         return {
             "infrastructure_status": "failed", "verdict": "unknown", "observed_cost": None,
-            "observed_tokens": 0, "process_proof": proof,
+            "observed_tokens": 0, "turns": 1, "elapsed_seconds": time.monotonic() - actual_session_started,
+            "process_proof": proof,
             "command_audit": {"invocation_id": call_spec["call_id"], "harness": harness, "turns": 1},
         }
     parsed_id = parse_session_id(result.stdout, harness)
     progress_path = repo_path / ".release-loop/progress.md"
     turns = 1
+    infrastructure_status = "pass"
     for answer in golden["scripted_answers"]:
         turns += 1
         if turns > call_spec["caps"]["max_turns_per_session"]:
@@ -2914,18 +3022,31 @@ def actual_paid_launcher(call_spec):
             resume[0] = codex_path
             resume_input = (answer["answer"] + "\n").encode()
         resume_turn_id = f"{call_spec['call_id']}:turn-{turns}"
-        call_spec["before_invocation"](resume_turn_id)
-        resumed, resume_proof = managed_adapter_call(
-            resume, repo_path, env, resume_input, call_spec["caps"]["session_timeout"], run_root
-        )
+        call_spec["before_invocation"](resume_turn_id, time.monotonic() - actual_session_started)
+        try:
+            verify_preflight_inputs(root, source_snapshot, policy_digests)
+            resumed, resume_proof = managed_adapter_call(
+                resume, repo_path, env, resume_input, call_spec["caps"]["per_turn_timeout"], run_root
+            )
+        finally:
+            verify_preflight_inputs(root, source_snapshot, policy_digests)
         outputs.append(resumed.stdout)
         proofs.append(resume_proof)
         resume_cost, resume_tokens = extract_usage(resumed.stdout, harness)
-        call_spec["after_invocation"](resume_turn_id, resume_proof, resume_cost, resume_tokens)
+        call_spec["after_invocation"](
+            resume_turn_id,
+            resume_proof,
+            resume_cost,
+            resume_tokens,
+            time.monotonic() - actual_session_started,
+        )
         if resumed.returncode != 0:
+            infrastructure_status = "failed"
             break
     terminal_archive = list((repo_path / ".release-loop/archive").glob("*/progress.md")) if (repo_path / ".release-loop/archive").is_dir() else []
-    verdict = "conformant" if terminal_archive else "nonconformant"
+    verdict = "conformant" if infrastructure_status == "pass" and terminal_archive else (
+        "unknown" if infrastructure_status != "pass" else "nonconformant"
+    )
     observed_cost, observed_tokens = extract_usage("\n".join(outputs), harness)
     aggregate_proof = {
         "leader_waited": all(proof["leader_waited"] for proof in proofs),
@@ -2936,10 +3057,12 @@ def actual_paid_launcher(call_spec):
     wrapper_audit_path = run_root / "wrapper-audit.jsonl"
     gh_audit_path = run_root / "gh-audit.jsonl"
     return {
-        "infrastructure_status": "pass",
+        "infrastructure_status": infrastructure_status,
         "verdict": verdict,
         "observed_cost": observed_cost,
         "observed_tokens": observed_tokens,
+        "turns": turns,
+        "elapsed_seconds": time.monotonic() - actual_session_started,
         "process_proof": aggregate_proof,
         "command_audit": {
             "invocation_id": call_spec["call_id"],
@@ -3235,6 +3358,12 @@ def validate_resource_group():
         )
         if len(pilot_entry["results"]) != 2 or not pilot_entry["full_command"]:
             fail("resource paid pilot entry integration failed")
+        if pilot_entry["full_command"] == shlex.join(full_run_command(pilot_caps, models)):
+            fail("resource pilot limits were not derived from evidence")
+        approval_packet_path = Path(pilot_entry["generation_path"]) / "full-run-approval.json"
+        approval_packet = json.loads(read_bounded_file(approval_packet_path, approval_packet_path.parent, 1048576))
+        if approval_packet.get("full_command") != pilot_entry["full_command"]:
+            fail("resource full-run approval packet mismatch")
         try:
             run_paid_mode_entry(
                 "live-pilot",
@@ -3361,7 +3490,54 @@ def validate_resource_group():
     if validate_generation_manifest(manifest_mutant) != "generation-manifest-shape":
         fail("resource manifest mutant accepted")
     negatives += 1
-    return 24, negatives, process_controls, len(full_ledger["calls"]), shlex.join(full_command), manifest
+
+    def failed_pilot_launcher(call_spec):
+        outcome = fake_paid_launcher(call_spec)
+        outcome["infrastructure_status"] = "failed"
+        outcome["verdict"] = "unknown"
+        return outcome
+
+    def nonconformant_pilot_launcher(call_spec):
+        outcome = fake_paid_launcher(call_spec)
+        outcome["verdict"] = "nonconformant"
+        return outcome
+
+    for launcher, diagnostic in (
+        (failed_pilot_launcher, "pilot-infrastructure-failure"),
+        (nonconformant_pilot_launcher, "pilot-conformance-failure"),
+    ):
+        try:
+            execute_paid_schedule("live-pilot", pilot_caps, models, launcher)
+        except ValueError as exc:
+            if diagnostic not in str(exc):
+                fail(f"resource pilot failure diagnostic mismatch: {exc}")
+        else:
+            fail(f"resource pilot failure accepted: {diagnostic}")
+        negatives += 1
+    with tempfile.TemporaryDirectory(prefix="live-gate-test-", dir=str(receipt_test_root)) as gate_temp:
+        gate_path = Path(gate_temp) / "progress.md"
+        expected_answer = {
+            "gate_id": "design-approval",
+            "phase": "design",
+            "expected_answer_class": "approve-spec-or-request-revision",
+            "answer": "approve",
+        }
+        valid_gate = (
+            "---\nphase: design\nphase_status: waiting-user\nupdated: 2026-08-24T06:00:00Z\n"
+            "pending_gate:\n  id: design-approval\n  issued_at: 2026-08-24T06:00:00Z\n"
+            "  expected_answer_class: approve-spec-or-request-revision\n---\n\n## Log\n"
+        )
+        gate_path.write_text(valid_gate, encoding="utf-8")
+        if progress_pending_gate(gate_path, expected_answer)[1] is not None:
+            fail("resource valid live gate rejected")
+        gate_path.write_text(valid_gate.replace("issued_at: 2026-08-24T06:00:00Z", "issued_at: malformed"), encoding="utf-8")
+        if progress_pending_gate(gate_path, expected_answer)[1] != "pending-gate-stale":
+            fail("resource malformed live gate accepted")
+        gate_path.write_text(valid_gate.replace("issued_at: 2026-08-24T06:00:00Z", "issued_at: 2026-08-24T05:59:59Z"), encoding="utf-8")
+        if progress_pending_gate(gate_path, expected_answer)[1] != "pending-gate-stale":
+            fail("resource stale live gate accepted")
+        negatives += 2
+    return 24, negatives, process_controls, len(full_ledger["calls"]), pilot_entry["full_command"], manifest
 
 
 gate_contracts = {
