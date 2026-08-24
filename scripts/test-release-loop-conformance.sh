@@ -1423,16 +1423,16 @@ def build_claude_resume(feature_root, model, settings_path, mcp_path, budget, pr
 
 def build_codex_initial(fixture_root, model, result_path):
     return [
-        "codex", "exec", "--json", "--ignore-user-config",
-        "--model", model, "--profile", "conformance",
+        "codex", "--profile", "conformance", "exec", "--json", "--ignore-user-config",
+        "--model", model,
         "--cd", str(fixture_root), "--output-last-message", str(result_path), "-",
     ]
 
 
 def build_codex_resume(model, session_id):
     return [
-        "codex", "exec", "resume", "--json", "--ignore-user-config", "--model", model,
-        "--profile", "conformance", session_id, "-",
+        "codex", "--profile", "conformance", "exec", "resume", "--json", "--ignore-user-config",
+        "--model", model, session_id, "-",
     ]
 
 
@@ -1727,13 +1727,13 @@ def validate_preflight():
             "--permission-mode", "dontAsk", "--max-budget-usd", "1.00", "approve",
         ]
         expected_codex_initial = [
-            "codex", "exec", "--json", "--ignore-user-config", "--model", codex_model,
-            "--profile", "conformance", "--cd", str(fixture_root),
+            "codex", "--profile", "conformance", "exec", "--json", "--ignore-user-config",
+            "--model", codex_model, "--cd", str(fixture_root),
             "--output-last-message", str(codex_result), "-",
         ]
         expected_codex_resume = [
-            "codex", "exec", "resume", "--json", "--ignore-user-config", "--model", codex_model,
-            "--profile", "conformance", codex_id, "-",
+            "codex", "--profile", "conformance", "exec", "resume", "--json", "--ignore-user-config",
+            "--model", codex_model, codex_id, "-",
         ]
         for label, actual, expected in (
             ("Claude initial", claude_initial, expected_claude_initial),
