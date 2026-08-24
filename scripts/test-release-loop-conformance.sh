@@ -870,15 +870,23 @@ def validate_gh_simulator(path):
         fail("fixture gh simulator missing")
 
 
-def validate_policy_files(fixture_root):
-    policy_root = data_root / "policies"
-    claude_path = policy_root / "claude-settings.json"
-    codex_path = policy_root / "codex.rules"
-    claude = load_json(claude_path)
+def claude_policy_paths(fixture_root, feature_root, template):
+    if template:
+        return "__FIXTURE_ROOT__", "__FEATURE_ROOT__"
+    return str(fixture_root.resolve(strict=True)), str(feature_root.resolve(strict=True))
+
+
+def validate_claude_policy_document(claude, fixture_root, feature_root, template=False):
+    fixture_value, feature_value = claude_policy_paths(fixture_root, feature_root, template)
+    if set(claude) != {"enableAllProjectMcpServers", "permissions", "sandbox"}:
+        fail("Claude policy shape mismatch")
     if claude.get("enableAllProjectMcpServers") is not False:
         fail("Claude policy enables project MCP")
-    denied = set(claude.get("permissions", {}).get("deny", []))
-    allowed = set(claude.get("permissions", {}).get("allow", []))
+    permissions = claude.get("permissions", {})
+    if set(permissions) != {"allow", "deny"}:
+        fail("Claude policy permission shape mismatch")
+    denied = set(permissions.get("deny", []))
+    allowed = set(permissions.get("allow", []))
     required_denials = {
         "WebFetch", "WebSearch", "Bash(curl:*)", "Bash(ssh:*)", "Bash(npm publish:*)",
         "Read(~/.claude.json)", "Read(~/.claude/**)", "Read(~/.codex/**)", "Read(~/.ssh/**)",
@@ -887,10 +895,76 @@ def validate_policy_files(fixture_root):
     }
     if not required_denials <= denied:
         fail("Claude policy denial inventory mismatch")
-    if allowed != {"Read", "Write", "Edit", "Glob", "Grep", "Bash(.conformance/bin/fixture-exec:*)"}:
+    required_allows = {
+        f"Read(/{fixture_value}/**)", f"Read(/{feature_value}/**)",
+        f"Write(/{fixture_value}/**)", f"Edit(/{fixture_value}/**)",
+        "Glob", "Grep", "Bash(.conformance/bin/fixture-exec:*)",
+    }
+    if allowed != required_allows or {"Read", "Write", "Edit"} & allowed:
         fail("Claude policy allow inventory mismatch")
     if not {"Bash(git:*)", "Bash(gh:*)"} <= denied:
         fail("Claude policy raw command denial mismatch")
+    sandbox = claude.get("sandbox", {})
+    if set(sandbox) != {
+        "enabled", "failIfUnavailable", "allowUnsandboxedCommands", "filesystem", "credentials"
+    }:
+        fail("Claude policy sandbox shape mismatch")
+    if sandbox.get("enabled") is not True or sandbox.get("failIfUnavailable") is not True:
+        fail("Claude policy sandbox enforcement mismatch")
+    if sandbox.get("allowUnsandboxedCommands") is not False:
+        fail("Claude policy unsandboxed escape enabled")
+    filesystem = sandbox.get("filesystem", {})
+    if filesystem != {
+        "denyRead": ["~/"],
+        "allowRead": [fixture_value, feature_value],
+        "denyWrite": ["~/"],
+        "allowWrite": [fixture_value],
+    }:
+        fail("Claude policy filesystem boundary mismatch")
+    credentials = sandbox.get("credentials", {})
+    credential_files = {
+        "~/.claude.json", "~/.claude", "~/.codex", "~/.ssh", "~/.config/gh",
+        "~/.netrc", "~/.aws", "~/.config/gcloud", "~/.kube",
+    }
+    credential_env = {
+        "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY",
+        "GH_TOKEN", "GITHUB_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "NPM_TOKEN",
+    }
+    if set(credentials) != {"files", "envVars"}:
+        fail("Claude policy credential shape mismatch")
+    if credentials.get("files") != [
+        {"path": path, "mode": "deny"} for path in (
+            "~/.claude.json", "~/.claude", "~/.codex", "~/.ssh", "~/.config/gh",
+            "~/.netrc", "~/.aws", "~/.config/gcloud", "~/.kube",
+        )
+    ] or {row.get("path") for row in credentials.get("files", [])} != credential_files:
+        fail("Claude policy credential file inventory mismatch")
+    if credentials.get("envVars") != [
+        {"name": name, "mode": "deny"} for name in (
+            "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY",
+            "GH_TOKEN", "GITHUB_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "NPM_TOKEN",
+        )
+    ] or {row.get("name") for row in credentials.get("envVars", [])} != credential_env:
+        fail("Claude policy credential environment inventory mismatch")
+
+
+def materialize_claude_policy(claude, fixture_root, feature_root):
+    fixture_value, feature_value = claude_policy_paths(fixture_root, feature_root, False)
+    encoded = json.dumps(claude)
+    encoded = encoded.replace("__FIXTURE_ROOT__", fixture_value).replace("__FEATURE_ROOT__", feature_value)
+    return json.loads(encoded)
+
+
+def validate_policy_files(fixture_root, feature_root=root):
+    policy_root = data_root / "policies"
+    claude_path = policy_root / "claude-settings.json"
+    codex_path = policy_root / "codex.rules"
+    claude = load_json(claude_path)
+    validate_claude_policy_document(claude, fixture_root, feature_root, template=True)
+    runtime_claude = materialize_claude_policy(claude, fixture_root, feature_root)
+    validate_claude_policy_document(runtime_claude, fixture_root, feature_root)
     codex = codex_path.read_text(encoding="utf-8")
     for literal in (
         'prefix_rule(pattern=[".conformance/bin/fixture-exec"], decision="allow")',
@@ -906,11 +980,11 @@ def validate_policy_files(fixture_root):
     rules_target = fixture_root / ".codex" / "rules" / "conformance.rules"
     settings_target.parent.mkdir(parents=True)
     rules_target.parent.mkdir(parents=True)
-    shutil.copyfile(claude_path, settings_target)
+    write_json_atomic(settings_target, runtime_claude, fixture_root)
     shutil.copyfile(codex_path, rules_target)
     empty_mcp = fixture_root / "empty-mcp.json"
     empty_mcp.write_text("{}\n", encoding="utf-8")
-    for source, target in ((claude_path, settings_target), (codex_path, rules_target)):
+    for source, target in ((codex_path, rules_target),):
         if hashlib.sha256(source.read_bytes()).digest() != hashlib.sha256(target.read_bytes()).digest():
             fail("fixture policy copy digest mismatch")
     return 3
@@ -4295,6 +4369,7 @@ def actual_paid_launcher(call_spec):
         "LANG": "C",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
+        "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
     }
     git_fixture_command(git_path, env, run_root, "clone", "--bare", str(root), str(origin_path))
     git_fixture_command(git_path, env, run_root, "clone", str(origin_path), str(repo_path))
@@ -4473,6 +4548,31 @@ def actual_paid_launcher(call_spec):
 
 
 def validate_resource_group():
+    claude_policy_template = load_json(data_root / "policies/claude-settings.json")
+    policy_fixture_root = Path("/private/tmp/conformance-policy-fixture")
+    policy_feature_root = Path("/private/tmp/conformance-policy-feature")
+    policy_control = copy.deepcopy(claude_policy_template)
+    validate_claude_policy_document(policy_control, policy_fixture_root, policy_feature_root, template=True)
+    policy_mutations = (
+        ("sandbox-disabled", lambda value: value["sandbox"].__setitem__("enabled", False)),
+        ("sandbox-fallback", lambda value: value["sandbox"].__setitem__("failIfUnavailable", False)),
+        ("unsandboxed-escape", lambda value: value["sandbox"].__setitem__("allowUnsandboxedCommands", True)),
+        ("home-readable", lambda value: value["sandbox"]["filesystem"].__setitem__("denyRead", [])),
+        ("home-writable", lambda value: value["sandbox"]["filesystem"].__setitem__("denyWrite", [])),
+        ("credential-file-readable", lambda value: value["sandbox"]["credentials"].__setitem__("files", [])),
+        ("credential-env-readable", lambda value: value["sandbox"]["credentials"].__setitem__("envVars", [])),
+        ("unscoped-edit", lambda value: value["permissions"]["allow"].append("Edit")),
+    )
+    for label, mutate in policy_mutations:
+        mutant = copy.deepcopy(claude_policy_template)
+        mutate(mutant)
+        try:
+            validate_claude_policy_document(mutant, policy_fixture_root, policy_feature_root, template=True)
+        except ValueError as exc:
+            if "Claude policy" not in str(exc):
+                fail(f"resource Claude policy mutant diagnostic mismatch: {label}: {exc}")
+        else:
+            fail(f"resource Claude policy mutant accepted: {label}")
     caps = {
         "max_turns_per_session": 4,
         "per_turn_timeout": 30,

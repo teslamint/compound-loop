@@ -2,9 +2,10 @@
   "enableAllProjectMcpServers": false,
   "permissions": {
     "allow": [
-      "Read",
-      "Write",
-      "Edit",
+      "Read(/__FIXTURE_ROOT__/**)",
+      "Read(/__FEATURE_ROOT__/**)",
+      "Write(/__FIXTURE_ROOT__/**)",
+      "Edit(/__FIXTURE_ROOT__/**)",
       "Glob",
       "Grep",
       "Bash(.conformance/bin/fixture-exec:*)"
@@ -29,5 +30,51 @@
       "Read(~/.config/gcloud/**)",
       "Read(~/.kube/**)"
     ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "denyRead": [
+        "~/"
+      ],
+      "allowRead": [
+        "__FIXTURE_ROOT__",
+        "__FEATURE_ROOT__"
+      ],
+      "denyWrite": [
+        "~/"
+      ],
+      "allowWrite": [
+        "__FIXTURE_ROOT__"
+      ]
+    },
+    "credentials": {
+      "files": [
+        {"path": "~/.claude.json", "mode": "deny"},
+        {"path": "~/.claude", "mode": "deny"},
+        {"path": "~/.codex", "mode": "deny"},
+        {"path": "~/.ssh", "mode": "deny"},
+        {"path": "~/.config/gh", "mode": "deny"},
+        {"path": "~/.netrc", "mode": "deny"},
+        {"path": "~/.aws", "mode": "deny"},
+        {"path": "~/.config/gcloud", "mode": "deny"},
+        {"path": "~/.kube", "mode": "deny"}
+      ],
+      "envVars": [
+        {"name": "ANTHROPIC_API_KEY", "mode": "deny"},
+        {"name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny"},
+        {"name": "OPENAI_API_KEY", "mode": "deny"},
+        {"name": "CODEX_API_KEY", "mode": "deny"},
+        {"name": "GH_TOKEN", "mode": "deny"},
+        {"name": "GITHUB_TOKEN", "mode": "deny"},
+        {"name": "AWS_ACCESS_KEY_ID", "mode": "deny"},
+        {"name": "AWS_SECRET_ACCESS_KEY", "mode": "deny"},
+        {"name": "AWS_SESSION_TOKEN", "mode": "deny"},
+        {"name": "GOOGLE_APPLICATION_CREDENTIALS", "mode": "deny"},
+        {"name": "NPM_TOKEN", "mode": "deny"}
+      ]
+    }
   }
 }
