@@ -34,6 +34,20 @@ copy_consumers() {
   printf '%s\n' "$d"
 }
 
+copy_phase_consumers() {
+  local d
+  d="$(mktemp -d)" || return 1
+  mkdir -p "$d/skills/planning/schemas" "$d/skills/implementing/scripts"
+  for consumer in planning implementing reviewing shipping retrospective; do
+    mkdir -p "$d/skills/$consumer"
+    cp "$ROOT/skills/$consumer/SKILL.md" "$d/skills/$consumer/SKILL.md"
+  done
+  cp "$ROOT/skills/planning/schemas/plan-schema.md" "$d/skills/planning/schemas/plan-schema.md"
+  cp "$ROOT/skills/implementing/scripts/phase-artifact-integrity.py" "$d/skills/implementing/scripts/phase-artifact-integrity.py"
+  cp "$ROOT/skills/implementing/scripts/phase_artifact_core.py" "$d/skills/implementing/scripts/phase_artifact_core.py"
+  printf '%s\n' "$d"
+}
+
 record_results() {
   local result_file="$1" state consumer name detail
   while IFS='|' read -r state consumer name detail; do
@@ -2606,6 +2620,150 @@ else
   fi
 fi
 rm -rf "$fixture"
+
+# --- Fixture D: exact progress paths remain portable outside the plugin root ---
+echo "Fixture D: exact progress-path phase consumers"
+fixture="$(copy_phase_consumers)"
+consumer_repo="$(mktemp -d)"
+if python3 - "$fixture" "$consumer_repo" <<'PY'
+from pathlib import Path
+import json
+import re
+import subprocess
+import sys
+
+plugin_root = Path(sys.argv[1])
+repo = Path(sys.argv[2])
+subprocess.run(("git", "init", "-q"), cwd=repo, check=True)
+for key, value in (("user.name", "Fixture"), ("user.email", "fixture@example.invalid"), ("core.autocrlf", "false"), ("core.safecrlf", "false"), ("commit.gpgsign", "false")):
+    subprocess.run(("git", "config", key, value), cwd=repo, check=True)
+(repo / "README.md").write_text("fixture\n", encoding="utf-8")
+subprocess.run(("git", "add", "README.md"), cwd=repo, check=True)
+subprocess.run(("git", "commit", "-qm", "fixture"), cwd=repo, check=True)
+shared = ("exact repo-relative `progress_path`", "`artifact_root = dirname(progress_path)`")
+for name in ("planning", "implementing", "reviewing", "shipping", "retrospective"):
+    text = (plugin_root / f"skills/{name}/SKILL.md").read_text(encoding="utf-8")
+    for fragment in shared:
+        assert fragment in text, f"{name}: {fragment}"
+
+implementing = (plugin_root / "skills/implementing/SKILL.md").read_text(encoding="utf-8")
+for fragment in (
+    "validated approved-plan filename stem",
+    ".release-loop/runs/<plan_filename_stem>/progress.md",
+    "<artifact_root>/briefs/U<N>-brief.md",
+    "<artifact_root>/reports/U<N>-report.md",
+    "<artifact_root>/reviews/U<N>-diff.txt",
+):
+    assert fragment in implementing, fragment
+
+schema = (plugin_root / "skills/planning/schemas/plan-schema.md").read_text(encoding="utf-8")
+for fragment in ("<artifact_root>/evidence/U<N>/", "executable probe", "exact partial durable state", "compensation owner"):
+    assert fragment in schema, fragment
+
+plan_filename_stem = "2026-08-23-001-fix-portable-plan"
+assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", plan_filename_stem)
+plan = repo / (plan_filename_stem + ".md")
+plan.write_text("---\nschema: plan/v1\ntitle: Portable\ntype: fix\nstatus: approved\ndate: 2026-08-24\nexecution: code\n---\n\n# Portable\n", encoding="utf-8")
+cli = plugin_root / "skills/implementing/scripts/phase-artifact-integrity.py"
+created = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert created.returncode == 0, created.stderr
+payload = json.loads(created.stdout)
+assert payload["state"] == "new"
+progress_path = repo / payload["progress_path"]
+real_plans = repo / "real-plans"
+real_plans.mkdir()
+linked_plan = real_plans / "linked-approved-plan.md"
+linked_plan.write_text(plan.read_text(encoding="utf-8"), encoding="utf-8")
+(repo / "linked-plans").symlink_to(real_plans, target_is_directory=True)
+linked = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(repo / "linked-plans/linked-approved-plan.md")), text=True, capture_output=True)
+assert linked.returncode != 0 and "symlink component" in linked.stderr, linked.stderr
+progress_text = progress_path.read_text(encoding="utf-8")
+branch = subprocess.run(("git", "symbolic-ref", "--short", "HEAD"), cwd=repo, check=True, text=True, capture_output=True).stdout.strip()
+head = subprocess.run(("git", "rev-parse", "HEAD"), cwd=repo, check=True, text=True, capture_output=True).stdout.strip()
+base = subprocess.run(("git", "merge-base", "main", "HEAD"), cwd=repo, check=True, text=True, capture_output=True).stdout.strip()
+for fragment in (
+    "started: 20",
+    "updated: 20",
+    "branch: " + branch,
+    "base_branch: main",
+    "spec: null",
+    "plan: " + plan.name,
+    "retro: null",
+    "design_approved: null",
+    "ship_approved: null",
+    "current_unit: null",
+    "ci_attempts: 0",
+    "review_rounds: 0",
+    "feedback_rounds: 0",
+    "comments_fixed: 0",
+    "comments_deferred: 0",
+    "pr: null",
+    "merged: false",
+    "blocked_reason: null",
+    "review_counts:\n  completeness: exact\n  counting_started_at: 20",
+    "unit_passes: 0\n  fix_rounds: 0\n  final_passes: 0\n  standalone_passes: 0\n  findings_fixed: 0\n  findings_deferred: 0",
+    "review_events: []",
+    "finding_dispositions: []",
+    "current_commit_range:\n  base: " + base + "\n  head: " + head,
+    "review_gate:\n  event_id: null\n  head: null",
+    "rewrite_approvals: []",
+    "rewrite_results: []",
+):
+    assert fragment in progress_text, fragment
+assert re.search(r"started: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", progress_text)
+assert re.search(r"updated: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", progress_text)
+for relative in ("briefs/U1-brief.md", "reports/U1-report.md", "reviews/U1-diff.txt"):
+    source = progress_path.parent / ".tmp" / (relative.replace("/", "-") + ".tmp")
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(relative + "\n", encoding="utf-8")
+    published = subprocess.run((sys.executable, str(cli), "publish", "--repo", str(repo), "--progress-path", payload["progress_path"], "--source", source.relative_to(repo).as_posix(), "--target", (progress_path.parent / relative).relative_to(repo).as_posix()), check=True, text=True, capture_output=True)
+    assert json.loads(published.stdout)["state"] == "published"
+owned_report = progress_path.parent / "reports/U1-report.md"
+owned_bytes = owned_report.read_bytes()
+owned_report.unlink()
+missing_owned = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert missing_owned.returncode != 0 and "owned final" in missing_owned.stderr, missing_owned.stderr
+owned_report.write_bytes(owned_bytes)
+owned_report.write_bytes(b"modified\n")
+modified_owned = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert modified_owned.returncode != 0 and "owned final" in modified_owned.stderr, modified_owned.stderr
+owned_report.write_bytes(owned_bytes)
+outside_owned = repo.parent / (repo.name + "-owned-sentinel")
+outside_owned.write_bytes(b"OWNED_SENTINEL\n")
+owned_report.unlink()
+owned_report.symlink_to(outside_owned)
+symlink_owned = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert symlink_owned.returncode != 0, symlink_owned.stderr
+assert outside_owned.read_bytes() == b"OWNED_SENTINEL\n"
+owned_report.unlink()
+owned_report.write_bytes(owned_bytes)
+other = repo / "other" / plan.name
+other.parent.mkdir()
+other.write_text(plan.read_text(encoding="utf-8"), encoding="utf-8")
+same_stem = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(other)), text=True, capture_output=True)
+assert same_stem.returncode != 0 and "plan" in same_stem.stderr, same_stem.stderr
+original_plan = plan.read_text(encoding="utf-8")
+plan.write_text(original_plan.replace("status: approved", "status: draft"), encoding="utf-8")
+tampered = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert tampered.returncode != 0 and "approved plan/v1 required" in tampered.stderr, tampered.stderr
+plan.write_text(original_plan, encoding="utf-8")
+foreign = progress_path.parent / "foreign.txt"
+foreign.write_text("foreign\n", encoding="utf-8")
+foreign_resume = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert foreign_resume.returncode != 0 and "artifact scope collision" in foreign_resume.stderr, foreign_resume.stderr
+foreign.unlink()
+subprocess.run(("git", "add", "-f", payload["progress_path"]), cwd=repo, check=True)
+tracked_resume = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(repo), "--plan", str(plan)), text=True, capture_output=True)
+assert tracked_resume.returncode != 0 and "artifact scope collision" in tracked_resume.stderr, tracked_resume.stderr
+assert not (plugin_root / ".release-loop").exists()
+assert not (repo / ".release-loop/progress.md").exists()
+PY
+then
+  pass "phase consumers derive one portable artifact root from the exact progress path"
+else
+  fail "phase consumers derive one portable artifact root from the exact progress path"
+fi
+rm -rf "$fixture" "$consumer_repo"
 
 echo "Summary: $PASS_COUNT passed, $FAIL_COUNT failed"
 if [ "$FAIL_COUNT" -ne 0 ]; then

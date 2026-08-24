@@ -16,11 +16,16 @@ Written by `retrospective` to `docs/retros/YYYY-MM-DD-<context>-retro.md`, where
 |---|---|
 | **Changed non-test lines** | N (added + removed) |
 | Commits | N |
-| Review rounds | N |
-| Comments (fixed / deferred) | N / N |
+| Review rounds (unit / final / standalone) | N (N / N / N) |
+| Fix rounds | N |
+| Internal findings (fixed / deferred) | N / N |
+| Pull request comments (fixed / deferred) | N / N |
+| Count completeness | exact / partial — lower bound since <persisted ISO-8601 UTC timestamp> |
 | CI failures | N |
 | Duration (first spec commit → merge) | N days |
 | Units planned / completed | N / N |
+
+For `partial`, copy the persisted `counting_started_at` value exactly. Never infer or repair a missing, empty, or invalid timestamp in the document.
 
 ## Success criteria: measured vs declared
 

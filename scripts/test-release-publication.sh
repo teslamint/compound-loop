@@ -273,6 +273,9 @@ setup_fixture() {
   git -C "$FIXTURE_REPO" init --initial-branch=main >/dev/null
   git -C "$FIXTURE_REPO" config user.name "Publication Fixture"
   git -C "$FIXTURE_REPO" config user.email "fixture@example.invalid"
+  git -C "$FIXTURE_REPO" config core.autocrlf false
+  git -C "$FIXTURE_REPO" config core.safecrlf false
+  git -C "$FIXTURE_REPO" config commit.gpgsign false
   printf '.release/\n' >>"$FIXTURE_REPO/.git/info/exclude"
 
   mkdir -p "$FIXTURE_REPO/.claude-plugin" "$FIXTURE_REPO/.codex-plugin"
@@ -1038,6 +1041,7 @@ case_github_url_suffix_secret_failure() {
 case_divergent_branch_failure() {
   local other="$CASE_ROOT/other"; git clone "file://$FIXTURE_REMOTE" "$other" >/dev/null 2>&1
   git -C "$other" config user.name fixture; git -C "$other" config user.email fixture@example.invalid
+  git -C "$other" config core.autocrlf false; git -C "$other" config core.safecrlf false; git -C "$other" config commit.gpgsign false
   printf divergent >"$other/divergent"; git -C "$other" add .; git -C "$other" commit -m divergent >/dev/null; git -C "$other" push origin main >/dev/null 2>&1
   local out code; set +e; out="$(invoke_prepare --headless 2>&1)"; code=$?; set -e
   [[ $code -ne 0 ]]; assert_contains "$out" 'conflicts with the release commit' divergent
