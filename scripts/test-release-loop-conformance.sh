@@ -629,8 +629,15 @@ if not expected_digest or hashlib.sha256(wrapper.read_bytes()).hexdigest() != ex
 root = Path(os.environ["CONFORMANCE_FIXTURE_ROOT"]).resolve(strict=True)
 repo = Path(os.environ["CONFORMANCE_FIXTURE_REPO"]).resolve(strict=True)
 origin = Path(os.environ["CONFORMANCE_FIXTURE_ORIGIN"]).resolve(strict=True)
-for target in (repo, origin, wrapper):
+gh_path = Path(os.environ["CONFORMANCE_GH"])
+if gh_path.is_symlink():
+    raise SystemExit("fixture gh simulator digest mismatch")
+gh_path = gh_path.resolve(strict=True)
+for target in (repo, origin, wrapper, gh_path):
     target.relative_to(root)
+gh_source = gh_path.read_bytes()
+if hashlib.sha256(gh_source).hexdigest() != os.environ.get("CONFORMANCE_GH_SHA256"):
+    raise SystemExit("fixture gh simulator digest mismatch")
 args = sys.argv[1:]
 
 blocked_env = {
@@ -734,8 +741,11 @@ if not args or (args[0] == "git" and not git_allowed()) or (args[0] == "gh" and 
     raise SystemExit("fixture command rejected")
 with (root / "wrapper-audit.jsonl").open("a", encoding="utf-8") as handle:
     handle.write(json.dumps({"argv": args}, sort_keys=True) + "\n")
-target = os.environ["CONFORMANCE_GIT"] if args[0] == "git" else os.environ["CONFORMANCE_GH"]
-os.execv(target, [target, *args[1:]])
+if args[0] == "git":
+    target = os.environ["CONFORMANCE_GIT"]
+    os.execv(target, [target, *args[1:]])
+python_target = os.environ["CONFORMANCE_PYTHON"]
+os.execv(python_target, [python_target, "-c", gh_source.decode("utf-8"), *args[1:]])
 '''
     path.parent.mkdir(parents=True)
     path.write_text(source, encoding="utf-8")
@@ -928,6 +938,8 @@ def validate_fixture():
         write_gh_simulator(gh_path)
         validate_gh_simulator(gh_path)
         env["CONFORMANCE_GH"] = str(gh_path)
+        env["CONFORMANCE_GH_SHA256"] = hashlib.sha256(gh_path.read_bytes()).hexdigest()
+        env["CONFORMANCE_PYTHON"] = sys.executable
         wrapper_path = repo_path / ".conformance" / "bin" / "fixture-exec"
         write_fixture_wrapper(wrapper_path)
         env["CONFORMANCE_WRAPPER_SHA256"] = hashlib.sha256(wrapper_path.read_bytes()).hexdigest()
@@ -1080,6 +1092,20 @@ def validate_fixture():
         result = run_bounded(wrapper_command + ["git", "status"], repo_path, injected_env)
         if result.returncode == 0 or "fixture runtime state rejected" not in result.stderr:
             fail("fixture Git environment injection was accepted")
+        original_gh = gh_path.read_bytes()
+        malicious_marker = fixture_root / "malicious-gh-executed"
+        gh_path.write_text(
+            "#!/usr/bin/env python3\nfrom pathlib import Path\nPath(%r).write_text('executed')\n" % str(malicious_marker),
+            encoding="utf-8",
+        )
+        gh_path.chmod(0o755)
+        result = run_bounded(wrapper_command + ["gh", "auth", "status"], repo_path, env)
+        if result.returncode == 0 or "fixture gh simulator digest mismatch" not in result.stderr:
+            fail("fixture gh simulator replacement was accepted")
+        if malicious_marker.exists():
+            fail("replacement gh simulator executed")
+        gh_path.write_bytes(original_gh)
+        gh_path.chmod(0o755)
 
         race_outside = fixture_root.parent / f"{fixture_root.name}-race-origin.git"
         race_outside.mkdir()
