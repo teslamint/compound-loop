@@ -6,9 +6,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-}"
 
 case "$MODE" in
-  static-inventory|static) ;;
+  static-inventory|static|fixture) ;;
   *)
-    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static>" >&2
+    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture>" >&2
     exit 2
     ;;
 esac
@@ -17,9 +17,13 @@ python3 - "$ROOT" "$MODE" <<'PY'
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
 root = Path(sys.argv[1])
 mode = sys.argv[2]
@@ -419,6 +423,409 @@ def validate_source_generation(generation, policy_generation, corpus_generation)
         fail("corpus source generation mismatch")
 
 
+def path_is_inside(root_path, candidate_path):
+    try:
+        candidate_path.resolve(strict=True).relative_to(root_path.resolve(strict=True))
+    except (FileNotFoundError, ValueError):
+        return False
+    return True
+
+
+def command_policy(argv, fixture_root, repo_path):
+    if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) for arg in argv):
+        return False, "invalid-command"
+    command = argv[0]
+    if command != Path(command).name:
+        return False, "absolute-command"
+    if command in {"curl", "ssh", "env", "sh", "bash", "python", "python3"}:
+        return False, "forbidden-command"
+    if command in {"npm", "pnpm", "yarn"} and "publish" in argv[1:]:
+        return False, "publish-command"
+    if command == "git":
+        if "-c" in argv[1:]:
+            return False, "git-config-override"
+        if any("credential" in arg.lower() or arg.startswith("ext::") for arg in argv[1:]):
+            return False, "git-indirect-access"
+        if argv[1:3] == ["remote", "add"]:
+            return False, "remote-add"
+        allowed_git = {"status", "diff", "log", "add", "commit", "push", "rev-parse", "ls-remote", "remote"}
+        if len(argv) < 2 or argv[1] not in allowed_git:
+            return False, "unknown-git-call"
+        if argv[1] == "remote" and argv[2:3] != ["get-url"]:
+            return False, "unknown-git-remote-call"
+        if len(argv) > 1 and argv[1] == "push":
+            positional = [arg for arg in argv[2:] if not arg.startswith("-")]
+            if not positional or positional[0] != "origin":
+                return False, "non-fixture-push"
+            origin = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=str(repo_path),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if origin.returncode != 0:
+                return False, "origin-missing"
+            remote_path = Path(origin.stdout.strip())
+            if not path_is_inside(fixture_root, remote_path):
+                return False, "origin-outside-fixture"
+        return True, "fixture-git"
+    if command == "gh":
+        allowed = (
+            ("auth", "status"),
+            ("repo", "view"),
+            ("pr", "create"),
+            ("pr", "checks"),
+            ("pr", "view"),
+            ("pr", "comment"),
+            ("pr", "merge"),
+            ("api",),
+            ("run", "view"),
+        )
+        if not any(tuple(argv[1:1 + len(prefix)]) == prefix for prefix in allowed):
+            return False, "unknown-gh-call"
+        return True, "fixture-gh"
+    return False, "unknown-command"
+
+
+def run_audited(argv, cwd, env, fixture_root, repo_path, audit, expect_success=True):
+    allowed, reason = command_policy(argv, fixture_root, repo_path)
+    row = {"argv": argv, "allowed": allowed, "executed": False, "reason": reason}
+    audit.append(row)
+    if not allowed:
+        if expect_success:
+            fail(f"command policy rejected required command: {reason}")
+        return None
+    row["executed"] = True
+    result = subprocess.run(
+        argv,
+        cwd=str(cwd),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if len(result.stdout.encode()) + len(result.stderr.encode()) > 65536:
+        fail("fixture subprocess output exceeded cap")
+    if expect_success and result.returncode != 0:
+        fail(f"fixture command failed: {argv}: {result.stderr.strip()}")
+    if not expect_success and result.returncode == 0:
+        fail(f"fixture command unexpectedly passed: {argv}")
+    return result
+
+
+def write_gh_simulator(path):
+    source = r'''#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+root = Path(os.environ["CONFORMANCE_FIXTURE_ROOT"]).resolve(strict=True)
+repo = Path(os.environ["CONFORMANCE_FIXTURE_REPO"]).resolve(strict=True)
+origin = Path(os.environ["CONFORMANCE_FIXTURE_ORIGIN"]).resolve(strict=True)
+for target in (repo, origin):
+    target.relative_to(root)
+state_path = root / "gh-state.json"
+log_path = root / "gh-audit.jsonl"
+args = sys.argv[1:]
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"argv": args}, sort_keys=True) + "\n")
+state = json.loads(state_path.read_text(encoding="utf-8"))
+
+def save():
+    state_path.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
+
+def git(*git_args, cwd=repo):
+    return subprocess.run(
+        [os.environ["CONFORMANCE_GIT"], *git_args],
+        cwd=str(cwd),
+        env=os.environ,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+if args[:2] == ["auth", "status"]:
+    print("fixture authentication active")
+elif args[:2] == ["repo", "view"]:
+    print(json.dumps({"viewerPermission": "ADMIN"}))
+elif args[:2] == ["pr", "create"]:
+    if state.get("pr"):
+        raise SystemExit("PR already exists")
+    state["pr"] = {"number": 1, "head": "feat/fuzz-fixture", "merged": False, "merge_sha": None}
+    save()
+    print("https://fixture.invalid/pull/1")
+elif args[:2] == ["pr", "checks"]:
+    if not state.get("pr"):
+        raise SystemExit("PR missing")
+    print("fixture-check pass")
+elif args[:2] == ["pr", "comment"]:
+    if not state.get("pr"):
+        raise SystemExit("PR missing")
+    print("commented")
+elif args[:2] == ["run", "view"]:
+    print("fixture run passed")
+elif args and args[0] == "api":
+    if len(args) > 1 and args[1] == "graphql":
+        print(json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}}))
+    elif "--jq" in args:
+        print("0")
+    else:
+        print("[]")
+elif args[:2] == ["pr", "view"]:
+    merge_sha = (state.get("pr") or {}).get("merge_sha")
+    if "--jq" in args:
+        print(merge_sha or "")
+    else:
+        print(json.dumps({"mergeCommit": {"oid": merge_sha} if merge_sha else None}))
+elif args[:2] == ["pr", "merge"]:
+    pr = state.get("pr")
+    if not pr or pr["merged"]:
+        raise SystemExit("PR unavailable")
+    merge_repo = root / "merge-work"
+    git("clone", str(origin), str(merge_repo), cwd=root)
+    git("config", "user.name", "Conformance Fixture", cwd=merge_repo)
+    git("config", "user.email", "fixture@example.invalid", cwd=merge_repo)
+    git("config", "commit.gpgsign", "false", cwd=merge_repo)
+    git("checkout", "main", cwd=merge_repo)
+    git("merge", "--squash", "origin/feat/fuzz-fixture", cwd=merge_repo)
+    git("commit", "-m", "fixture squash merge", cwd=merge_repo)
+    git("push", "origin", "main", cwd=merge_repo)
+    if "--delete-branch" in args:
+        git("push", "origin", "--delete", "feat/fuzz-fixture", cwd=merge_repo)
+    pr["merged"] = True
+    pr["merge_sha"] = git("rev-parse", "HEAD", cwd=merge_repo)
+    save()
+    print("merged")
+else:
+    raise SystemExit("unsupported fixture gh call")
+'''
+    path.write_text(source, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def validate_gh_simulator(path):
+    if path.is_symlink() or not path.is_file() or not os.access(str(path), os.X_OK):
+        fail("fixture gh simulator missing")
+
+
+def validate_policy_files(fixture_root):
+    policy_root = data_root / "policies"
+    claude_path = policy_root / "claude-settings.json"
+    codex_path = policy_root / "codex.rules"
+    claude = load_json(claude_path)
+    if claude.get("enableAllProjectMcpServers") is not False:
+        fail("Claude policy enables project MCP")
+    denied = set(claude.get("permissions", {}).get("deny", []))
+    allowed = set(claude.get("permissions", {}).get("allow", []))
+    required_denials = {"WebFetch", "WebSearch", "Bash(curl:*)", "Bash(ssh:*)", "Bash(npm publish:*)"}
+    if not required_denials <= denied:
+        fail("Claude policy denial inventory mismatch")
+    if "Bash(git:*)" in allowed or "Bash(gh:*)" in allowed:
+        fail("Claude policy contains broad command allowance")
+    codex = codex_path.read_text(encoding="utf-8")
+    for literal in (
+        'prefix_rule(pattern=["git", "push", "origin"], decision="allow")',
+        'prefix_rule(pattern=["git", "push", "https://example.invalid/repo.git"], decision="forbidden")',
+        'prefix_rule(pattern=["git", "remote", "add"], decision="forbidden")',
+        'prefix_rule(pattern=["gh", "pr", "merge"], decision="allow")',
+        'prefix_rule(pattern=["curl"], decision="forbidden")',
+        'prefix_rule(pattern=["ssh"], decision="forbidden")',
+        'prefix_rule(pattern=["npm", "publish"], decision="forbidden")',
+    ):
+        if codex.count(literal) != 1:
+            fail("Codex policy literal mismatch")
+    settings_target = fixture_root / ".claude" / "settings.json"
+    rules_target = fixture_root / ".codex" / "rules" / "conformance.rules"
+    settings_target.parent.mkdir(parents=True)
+    rules_target.parent.mkdir(parents=True)
+    shutil.copyfile(claude_path, settings_target)
+    shutil.copyfile(codex_path, rules_target)
+    empty_mcp = fixture_root / "empty-mcp.json"
+    empty_mcp.write_text("{}\n", encoding="utf-8")
+    for source, target in ((claude_path, settings_target), (codex_path, rules_target)):
+        if hashlib.sha256(source.read_bytes()).digest() != hashlib.sha256(target.read_bytes()).digest():
+            fail("fixture policy copy digest mismatch")
+    return 3
+
+
+def validate_fixture():
+    fixture_path = None
+    host_origin_result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=str(root),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    host_origin = host_origin_result.stdout.strip() if host_origin_result.returncode == 0 else ""
+    with tempfile.TemporaryDirectory(prefix="release-loop fixture ;[] ") as temp_path:
+        fixture_root = Path(temp_path)
+        fixture_path = fixture_root
+        if not any(character in fixture_root.name for character in " ;[]"):
+            fail("fixture root lacks path metacharacters")
+        home = fixture_root / "home"
+        temp_dir = fixture_root / "tmp"
+        bin_dir = fixture_root / "bin"
+        repo_path = fixture_root / "repo"
+        origin_path = fixture_root / "origin.git"
+        for path in (home, temp_dir, bin_dir, repo_path):
+            path.mkdir()
+        git_path = shutil.which("git")
+        if not git_path:
+            fail("git unavailable")
+        env = {
+            "PATH": f"{bin_dir}:{Path(git_path).parent}:/usr/bin:/bin",
+            "HOME": str(home),
+            "TMPDIR": str(temp_dir),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            "LC_ALL": "C",
+            "CONFORMANCE_FIXTURE_ROOT": str(fixture_root),
+            "CONFORMANCE_FIXTURE_REPO": str(repo_path),
+            "CONFORMANCE_FIXTURE_ORIGIN": str(origin_path),
+            "CONFORMANCE_GIT": git_path,
+        }
+        policy_count = validate_policy_files(fixture_root)
+        gh_path = bin_dir / "gh"
+        try:
+            validate_gh_simulator(gh_path)
+        except ValueError as exc:
+            if "fixture gh simulator missing" not in str(exc):
+                fail(f"fixture simulator diagnostic mismatch: {exc}")
+        else:
+            fail("missing fixture simulator was accepted")
+        write_gh_simulator(gh_path)
+        validate_gh_simulator(gh_path)
+        (fixture_root / "gh-state.json").write_text("{}\n", encoding="utf-8")
+        audit = []
+
+        def internal_git(*args, cwd=repo_path):
+            result = subprocess.run(
+                [git_path, *args], cwd=str(cwd), env=env, check=False, capture_output=True, text=True, timeout=10
+            )
+            audit.append({"argv": ["git", *args], "allowed": True, "executed": True, "reason": "fixture-setup"})
+            if result.returncode != 0:
+                fail(f"fixture setup failed: {args}: {result.stderr.strip()}")
+            return result.stdout.strip()
+
+        internal_git("init", "--bare", str(origin_path), cwd=fixture_root)
+        internal_git("init")
+        for key, value in (
+            ("user.name", "Conformance Fixture"),
+            ("user.email", "fixture@example.invalid"),
+            ("core.autocrlf", "false"),
+            ("core.safecrlf", "false"),
+            ("commit.gpgsign", "false"),
+        ):
+            internal_git("config", key, value)
+        (repo_path / "payload.txt").write_text("base\n", encoding="utf-8")
+        internal_git("add", "payload.txt")
+        internal_git("commit", "-m", "fixture base")
+        internal_git("branch", "-M", "main")
+        internal_git("remote", "add", "origin", str(origin_path))
+        internal_git("push", "-u", "origin", "main")
+        base_sha = internal_git("rev-parse", "HEAD")
+        internal_git("checkout", "-b", "feat/fuzz-fixture")
+        (repo_path / "payload.txt").write_text("feature\n", encoding="utf-8")
+        internal_git("add", "payload.txt")
+        internal_git("commit", "-m", "fixture feature")
+        feature_sha = internal_git("rev-parse", "HEAD")
+
+        config = dict(
+            line.split("=", 1)
+            for line in internal_git("config", "--local", "--list").splitlines()
+            if "=" in line
+        )
+        expected_config = {
+            "user.name": "Conformance Fixture",
+            "user.email": "fixture@example.invalid",
+            "core.autocrlf": "false",
+            "core.safecrlf": "false",
+            "commit.gpgsign": "false",
+        }
+        if any(config.get(key) != value for key, value in expected_config.items()):
+            fail("fixture Git config mismatch")
+        if any(key.startswith("credential.") for key in config):
+            fail("credential helper reached fixture")
+
+        run_audited(["git", "push", "-u", "origin", "feat/fuzz-fixture"], repo_path, env, fixture_root, repo_path, audit)
+        gh_calls = (
+            ["gh", "auth", "status"],
+            ["gh", "repo", "view", "--json", "viewerPermission"],
+            ["gh", "pr", "create", "--title", "fixture", "--body", "fixture"],
+            ["gh", "pr", "checks", "1"],
+            ["gh", "api", "repos/{owner}/{repo}/pulls/1/reviews", "--jq", "length"],
+            ["gh", "api", "repos/{owner}/{repo}/pulls/1/comments", "--jq", "length"],
+            ["gh", "api", "graphql", "-F", "number=1", "-f", "query=fixture"],
+            ["gh", "pr", "merge", "1", "--squash", "--delete-branch"],
+            ["gh", "pr", "view", "1", "--json", "mergeCommit", "--jq", ".mergeCommit.oid // empty"],
+        )
+        results = [run_audited(call, repo_path, env, fixture_root, repo_path, audit) for call in gh_calls]
+        merge_sha = results[-1].stdout.strip()
+        if not merge_sha or merge_sha in {base_sha, feature_sha}:
+            fail("fixture squash merge identity mismatch")
+        parent_line = internal_git("--git-dir", str(origin_path), "rev-list", "--parents", "-n", "1", merge_sha, cwd=fixture_root)
+        if len(parent_line.split()) != 2:
+            fail("fixture merge is not a squash commit")
+        feature_tree = internal_git("--git-dir", str(origin_path), "rev-parse", f"{feature_sha}^{{tree}}", cwd=fixture_root)
+        merge_tree = internal_git("--git-dir", str(origin_path), "rev-parse", f"{merge_sha}^{{tree}}", cwd=fixture_root)
+        if feature_tree != merge_tree:
+            fail("fixture squash merge tree mismatch")
+
+        forbidden = (
+            ["curl", "https://example.invalid"],
+            ["ssh", "example.invalid"],
+            ["npm", "publish"],
+            [str(gh_path), "pr", "view", "1"],
+            ["git", "remote", "add", "outside", "https://example.invalid/repo.git"],
+            ["git", "push", "https://example.invalid/repo.git", "main"],
+            ["sh", "-c", "git status"],
+            ["env", "git", "status"],
+            ["python3", "-c", "import socket"],
+            ["git", "-c", "credential.helper=x", "status"],
+            ["git", "credential", "fill"],
+            ["git", "clean", "-fdx"],
+            ["git", "push", "ext::ssh example.invalid", "main"],
+            ["gh", "release", "create", "v1"],
+        )
+        for command in forbidden:
+            run_audited(command, repo_path, env, fixture_root, repo_path, audit, expect_success=False)
+
+        inside_target = fixture_root / "inside-target"
+        inside_target.mkdir()
+        outside_target = fixture_root.parent / f"{fixture_root.name}-outside"
+        outside_target.mkdir()
+        if not path_is_inside(fixture_root, inside_target) or path_is_inside(fixture_root, outside_target):
+            fail("fixture containment controlled pair failed")
+        shutil.rmtree(inside_target)
+        inside_target.symlink_to(outside_target, target_is_directory=True)
+        if path_is_inside(fixture_root, inside_target):
+            fail("fixture target replacement was accepted")
+        outside_target.rmdir()
+
+        gh_log = [json.loads(line) for line in (fixture_root / "gh-audit.jsonl").read_text(encoding="utf-8").splitlines()]
+        executed_gh = [row for row in audit if row["executed"] and row["argv"][0] == "gh"]
+        if [row["argv"][1:] for row in executed_gh] != [row["argv"] for row in gh_log]:
+            fail("fixture gh audit reconciliation mismatch")
+        forbidden_rows = [row for row in audit if not row["allowed"]]
+        if len(forbidden_rows) != len(forbidden):
+            fail("fixture forbidden-command audit mismatch")
+        forbidden_bytes = tuple(
+            marker for marker in (host_origin, "https://github.com/real/repository.git", "ghp_fixture_secret") if marker
+        )
+        for path in fixture_root.rglob("*"):
+            if path.is_file() and any(marker.encode() in path.read_bytes() for marker in forbidden_bytes):
+                fail("host origin or credential marker entered fixture")
+        summary = (len(gh_log), len(forbidden_rows), policy_count, len(audit))
+    if fixture_path.exists():
+        fail("fixture cleanup failed")
+    return summary
+
+
 def grade_mutation(mutation, cases_by_id, clauses_by_id, disabled_graders=frozenset()):
     mutation_id = mutation["id"]
     case = cases_by_id[mutation["case_id"]]
@@ -635,6 +1042,9 @@ corpus = load_json(corpus_path)
 cases = validate_corpus(corpus)
 validate_golden()
 
+if mode == "fixture":
+    fixture_gh_calls, fixture_forbidden, fixture_policies, fixture_audit_rows = validate_fixture()
+
 if mode == "static":
     mutation_count, static_grader_count, source_generation, static_negative_count = validate_static(cases)
 
@@ -719,5 +1129,11 @@ if mode == "static":
         "ok:   release-loop static conformance "
         f"mutations={mutation_count} graders={static_grader_count} "
         f"negative={static_negative_count} source_generation={source_generation}"
+    )
+if mode == "fixture":
+    print(
+        "ok:   release-loop hermetic fixture "
+        f"gh_calls={fixture_gh_calls} forbidden={fixture_forbidden} "
+        f"policies={fixture_policies} audit_rows={fixture_audit_rows}"
     )
 PY
