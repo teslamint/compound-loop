@@ -568,6 +568,9 @@ if [ "$oracle_extract_rc" -eq 0 ]; then
   git -C "$migration_root" init -q
   git -C "$migration_root" config user.email fixture@example.invalid
   git -C "$migration_root" config user.name "Migration Fixture"
+  git -C "$migration_root" config core.autocrlf false
+  git -C "$migration_root" config core.safecrlf false
+  git -C "$migration_root" config commit.gpgsign false
   mkdir -p "$migration_root/docs/plans"
   write_plan "$migration_root" "migration.md" "schema: plan/v1
 title: Migration
@@ -827,6 +830,9 @@ def new_repo(outcome: str, line_ending: str = "\n") -> tuple[Path, str, str, str
     git(repo, "init", "-q")
     git(repo, "config", "user.email", "fixture@example.invalid")
     git(repo, "config", "user.name", "Adoption Fixture")
+    git(repo, "config", "core.autocrlf", "false")
+    git(repo, "config", "core.safecrlf", "false")
+    git(repo, "config", "commit.gpgsign", "false")
     body = line_ending + "## Goal" + line_ending + line_ending + "immutable baseline body" + line_ending
     old = "0" * 64
     plan_text = line_ending.join((
