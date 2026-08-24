@@ -2862,6 +2862,17 @@ def install_full_approval(arguments, evidence_root, auth_brokers, source_identit
         fail("full approval generation outside evidence")
     if verify_complete_generation(generation_path) is not None:
         fail("full approval generation incomplete")
+    generation_manifest_value = json.loads(
+        read_bounded_file(generation_path / "manifest.json", generation_path, 1048576)
+    )
+    if generation_manifest_value.get("mode") != "live-pilot":
+        fail("full approval requires pilot generation")
+    generation_results = json.loads(
+        read_bounded_file(generation_path / "results.json", generation_path, 1048576)
+    )
+    generation_ledger = json.loads(
+        read_bounded_file(generation_path / "resource-ledger.json", generation_path, 1048576)
+    )
     source_path = generation_path / "full-run-approval.json"
     payload = read_bounded_file(source_path, generation_path, 1048576).encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()
@@ -2877,6 +2888,12 @@ def install_full_approval(arguments, evidence_root, auth_brokers, source_identit
     )
     if invariant is not None:
         fail(invariant)
+    expected_pilot_evidence = {
+        "results_sha256": object_digest(generation_results),
+        "settlement_sha256": object_digest(generation_ledger),
+    }
+    if packet.get("pilot_evidence") != expected_pilot_evidence:
+        fail("full approval pilot evidence mismatch")
     target = evidence_root / "live-approval.json"
     write_bytes_atomic(target, payload, evidence_root)
     installed = read_bounded_file(target, evidence_root, 1048576).encode("utf-8")
@@ -3902,6 +3919,41 @@ def validate_resource_group():
             fail("resource paid pilot entry reused receipt")
         generated_approval = Path(pilot_entry["generation_path"]) / "full-run-approval.json"
         generated_approval_digest = hashlib.sha256(generated_approval.read_bytes()).hexdigest()
+        mutant_generation = paid_root / "mutant-pilot-generation"
+        shutil.copytree(Path(pilot_entry["generation_path"]), mutant_generation)
+        mutant_packet_path = mutant_generation / "full-run-approval.json"
+        mutant_packet = json.loads(mutant_packet_path.read_text(encoding="utf-8"))
+        mutant_packet["pilot_evidence"] = {"results_sha256": "0" * 64, "settlement_sha256": "0" * 64}
+        write_json_atomic(mutant_packet_path, mutant_packet, mutant_generation)
+        mutant_manifest_path = mutant_generation / "manifest.json"
+        mutant_manifest = json.loads(mutant_manifest_path.read_text(encoding="utf-8"))
+        mutant_manifest["full_run_approval_sha256"] = hashlib.sha256(mutant_packet_path.read_bytes()).hexdigest()
+        write_json_atomic(mutant_manifest_path, mutant_manifest, mutant_generation)
+        write_json_atomic(
+            mutant_generation / "complete.json",
+            {
+                "schema": "release-loop-generation-complete/v1",
+                "manifest_sha256": hashlib.sha256(mutant_manifest_path.read_bytes()).hexdigest(),
+            },
+            mutant_generation,
+        )
+        if verify_complete_generation(mutant_generation) is not None:
+            fail("resource rebuilt mutant generation setup failed")
+        try:
+            install_full_approval(
+                [
+                    "--generation", str(mutant_generation),
+                    "--approved-sha256", hashlib.sha256(mutant_packet_path.read_bytes()).hexdigest(),
+                ],
+                paid_root,
+                auth_brokers,
+                source_identity,
+            )
+        except ValueError as exc:
+            if "full approval pilot evidence mismatch" not in str(exc):
+                fail(f"resource pilot evidence diagnostic mismatch: {exc}")
+        else:
+            fail("resource arbitrary pilot evidence accepted")
         full_entry_approval, installed_digest, installed_command, installed_packet = install_full_approval(
             ["--generation", pilot_entry["generation_path"], "--approved-sha256", generated_approval_digest],
             paid_root,
