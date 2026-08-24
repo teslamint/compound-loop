@@ -249,9 +249,7 @@ def generate(repo, progress_path, test_root):
     plan_path = "docs/plans/2026-08-23-001-fix-run-artifact-integrity-plan.md"
     addendum_path = "docs/deviations/2026-08-24-final-review-integrity-migration-018.md"
     source_commit = run(test_root, "git", "rev-parse", "HEAD")
-    addendum_commit = os.environ.get("RUN_ARTIFACT_INTEGRITY_TEST_ADDENDUM_COMMIT")
-    if addendum_commit is None:
-        addendum_commit = run(test_root, "git", "log", "-1", "--format=%H", "--", addendum_path)
+    addendum_commit = run(test_root, "git", "log", "-1", "--format=%H", "--", addendum_path)
     if not COMMIT.fullmatch(addendum_commit):
         raise Blocked("matrix evidence addendum commit missing")
     if run(test_root, "git", "log", "-1", "--format=%G?", addendum_commit) != "G":
