@@ -3266,7 +3266,7 @@ def publish_baseline_transition(base_root, handoff_root, archive_source, baselin
 def progress_frontmatter_scalar(text_value, key):
     lines = text_value.splitlines()
     fence_indices = [index for index, line in enumerate(lines) if line == "---"]
-    if not lines or lines[0] != "---" or len(fence_indices) != 2 or fence_indices[0] != 0:
+    if not lines or lines[0] != "---" or len(fence_indices) < 2 or fence_indices[0] != 0:
         fail("archive progress frontmatter missing")
     frontmatter = "\n".join(lines[1:fence_indices[1]])
     matches = re.findall(rf"(?m)^{re.escape(key)}: ([^\n]+)$", frontmatter)
@@ -3855,6 +3855,20 @@ def validate_transition_group():
             else:
                 fail("transition malformed frontmatter fence accepted")
             negatives += 1
+        archived_progress.write_text(terminal_progress_text, encoding="utf-8")
+        body_rule_text = terminal_progress_text.rstrip() + "\n\n---\n\nbody separator\n"
+        archived_progress.write_text(body_rule_text, encoding="utf-8")
+        if verify_archive_transition(
+            base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:04Z"
+        ) != handoff_digest:
+            fail("transition LF body fence rejected")
+        controls += 1
+        archived_progress.write_bytes(body_rule_text.replace("\n", "\r\n").encode("utf-8"))
+        if verify_archive_transition(
+            base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:04Z"
+        ) != handoff_digest:
+            fail("transition CRLF body fence rejected")
+        controls += 1
         archived_progress.write_text(terminal_progress_text, encoding="utf-8")
         if verify_archive_transition(
             base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:04Z"
