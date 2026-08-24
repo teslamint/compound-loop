@@ -170,6 +170,7 @@ HISTORY_CASES = (
     "authorized_rewrite_refresh",
     "descendant_head_invalidates",
     "unapproved_rewrite",
+    "posthoc_divergence_detected",
     "mismatched_approval",
     "rewrite_conflict",
     "cancelled_approval_rejected",
@@ -1022,6 +1023,8 @@ class HistoryFixture:
         self.review_gate: dict[str, str | None] = {"event_id": "final:branch:1", "head": head}
         self.rewrite_approvals: list[dict[str, object]] = []
         self.rewrite_results: list[dict[str, object]] = []
+        self.command_calls = 0
+        self.last_command: dict[str, object] | None = None
         self.persisted_writes = 0
         self._progress_prefix = progress_path.read_text(encoding="utf-8")
         self._persist()
@@ -1103,6 +1106,7 @@ class HistoryFixture:
         args = shlex.split(command)
         if args[:3] != ["git", "rebase", "--onto"]:
             raise AssertionError(f"unexpected fixture rewrite command: {command}")
+        self.command_calls += 1
         result = subprocess.run(
             tuple(args),
             cwd=self.repo,
@@ -1111,6 +1115,12 @@ class HistoryFixture:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        self.last_command = {
+            "command": command,
+            "exit_status": result.returncode,
+            "stdout": result.stdout[-1000:],
+            "stderr": result.stderr[-1000:],
+        }
         return result.returncode
 
     def rewrite(self, command: str, target_base: str) -> dict[str, object]:
@@ -1193,6 +1203,71 @@ class HistoryFixture:
         return True
 
 
+def history_snapshot(repo: Path, history: HistoryFixture) -> dict[str, object]:
+    refs = git(repo, "for-each-ref", "--format=%(refname)=%(objectname)").splitlines()
+    return {
+        "head": git(repo, "rev-parse", "HEAD"),
+        "range": dict(history.current_commit_range),
+        "counts": dict(history.review_counts),
+        "gate": dict(history.review_gate),
+        "refs": refs,
+        "status": git(repo, "status", "--porcelain"),
+    }
+
+
+def write_history_evidence(
+    name: str,
+    repo: Path,
+    history: HistoryFixture,
+    pre_state: dict[str, object],
+    sentinel_path: Path,
+    sentinel_before: bytes,
+    command: str,
+) -> None:
+    evidence_dir = os.environ.get("RUN_ARTIFACT_EVIDENCE_DIR")
+    if evidence_dir is None:
+        return
+    label = os.environ.get("RUN_ARTIFACT_EVIDENCE_LABEL", name)
+    outcome = os.environ.get("RUN_ARTIFACT_EVIDENCE_OUTCOME", label)
+    diagnostics = {
+        "unapproved_rewrite": (1, "stale-commit-range", "approval guard rejected before command; command_calls=0", "fresh approval is required"),
+        "posthoc_divergence_detected": (1, "stale-commit-range", "non-descendant refresh guard detected the changed HEAD", "authorized recovery is required"),
+        "mismatched_approval": (1, "stale-commit-range", "exact-command approval comparison rejected before command", "fresh exact approval is required"),
+        "cancelled_approval_rejected": (1, "stale-commit-range", "cancelled approval rejected before retry command", "fresh approval allocated a distinct ID"),
+        "fresh_review_after_rewrite": (0, "fresh exact-head standalone review accepted", "old gate rejected, new exact-head gate accepted", "phase gate passes"),
+    }
+    if history.last_command is None:
+        inner_exit, output, mechanism, next_result = diagnostics.get(name, (0, "", "local transition completed", "not applicable"))
+        command_record = command
+    else:
+        inner_exit = int(history.last_command["exit_status"])
+        output = (str(history.last_command["stdout"]) + str(history.last_command["stderr"])).strip()[-1000:]
+        mechanism = "real git rebase boundary returned the recorded status"
+        next_result = "fresh exact-head review required" if inner_exit == 0 else "git rebase --abort restored the old range; fresh approval required"
+        command_record = str(history.last_command["command"])
+    post_state = history_snapshot(repo, history)
+    source_commit = git(ROOT, "rev-parse", "HEAD")
+    sentinel_after = sentinel_path.read_bytes()
+    content = (
+        f"# T3 {outcome}\n\n"
+        f"- Approved artifact: `docs/plans/2026-08-23-001-fix-run-artifact-integrity-plan.md`, T3 `authorized-history-rewrite`, outcome `{outcome}`.\n"
+        f"- Source commit and timestamp: `{source_commit}`; `{subprocess.run(('date', '-u', '+%Y-%m-%dT%H:%M:%SZ'), check=True, text=True, stdout=subprocess.PIPE).stdout.strip()}`.\n"
+        f"- Fixture identity: case `{name}`; disposable root `{repo}`.\n"
+        f"- Complete configured target inventory: repository `{repo}`; base `main`; target base `origin/main`; feature `feat/fixture`; pre refs `{json.dumps(pre_state['refs'], separators=(',', ':'))}`; post refs `{json.dumps(post_state['refs'], separators=(',', ':'))}`; remotes `[]`.\n"
+        "- Stub identity: not applicable because T3 invokes only local Git and configures no API, process stub, bare remote, or network target.\n"
+        f"- Boundary sentinel: `{sentinel_path}`; pre SHA-256 `{hashlib.sha256(sentinel_before).hexdigest()}`; post SHA-256 `{hashlib.sha256(sentinel_after).hexdigest()}`; unchanged `{sentinel_after == sentinel_before}`.\n"
+        f"- Pre-state: `{json.dumps(pre_state, sort_keys=True, separators=(',', ':'))}`.\n"
+        f"- Exact command or injection: `{command_record}`; case injection `{name}`.\n"
+        f"- Numeric inner exit: `{inner_exit}`. Bounded output (last 1000 characters): `{output}`.\n"
+        f"- Post-state: `{json.dumps(post_state, sort_keys=True, separators=(',', ':'))}`.\n"
+        f"- Relevant next invocation: {next_result}.\n"
+        f"- Mechanism check: {mechanism}; external sentinel remained byte-identical.\n"
+    )
+    target = Path(evidence_dir) / f"{label}.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+
+
 def run_case(name: str) -> None:
     require_contract(check_invocations=name == "operative_contract_mutation")
     with tempfile.TemporaryDirectory(prefix=f"run-artifact-{name}-") as tmp_name:
@@ -1207,6 +1282,7 @@ def run_case(name: str) -> None:
             command = 'git rebase --onto "origin/main" "main" "feat/fixture"'
             counts_before = dict(history.review_counts)
             old_range = dict(history.current_commit_range)
+            pre_observation = history_snapshot(repo, history)
 
             if name == "authorized_rewrite_refresh":
                 approval = history.approve(command, "origin/main")
@@ -1228,6 +1304,22 @@ def run_case(name: str) -> None:
                 assert history.current_commit_range["base"] == old_range["base"]
                 assert history.review_gate == {"event_id": None, "head": None}
             elif name == "unapproved_rewrite":
+                head_before = git(repo, "rev-parse", "HEAD").encode()
+                range_before = json.dumps(history.current_commit_range, sort_keys=True, separators=(",", ":")).encode()
+                counts_bytes_before = json.dumps(history.review_counts, sort_keys=True, separators=(",", ":")).encode()
+                gate_before = json.dumps(history.review_gate, sort_keys=True, separators=(",", ":")).encode()
+                try:
+                    history.rewrite(command, "origin/main")
+                except Blocked as exc:
+                    assert str(exc) == "stale-commit-range"
+                else:
+                    raise AssertionError("missing approval did not block before rewrite")
+                assert history.command_calls == 0
+                assert git(repo, "rev-parse", "HEAD").encode() == head_before
+                assert json.dumps(history.current_commit_range, sort_keys=True, separators=(",", ":")).encode() == range_before
+                assert json.dumps(history.review_counts, sort_keys=True, separators=(",", ":")).encode() == counts_bytes_before
+                assert json.dumps(history.review_gate, sort_keys=True, separators=(",", ":")).encode() == gate_before
+            elif name == "posthoc_divergence_detected":
                 history.run_fixture_rewrite(command)
                 try:
                     history.refresh()
@@ -1299,6 +1391,7 @@ def run_case(name: str) -> None:
                     assert observed_commands != baseline_commands
                     assert observed_commands["cleanup"] == baseline_commands["cleanup"]
             assert sent.read_bytes() == before
+            write_history_evidence(name, repo, history, pre_observation, sent, before, command)
             return
         repo = new_repo(tmp)
 
