@@ -48,11 +48,11 @@ Parse tokens, stripping each before treating the remainder as a PR number/URL/br
 
 ## Durable standalone event
 
-When a standalone dispatch receives a valid `progress_path`, allocate `<kind>:<subject>:<ordinal>` with `kind: standalone`. Persist `state: started`, the full reviewed head, and one round-specific result path before any lane dispatch. A matching started event resumes with the same ID and path. A complete event never dispatches again.
+When a standalone dispatch receives a valid `progress_path`, derive its next sequential ordinal and allocate `standalone:<subject>:<ordinal>`. Persist `state: started`, `outcome: null`, the full reviewed head, and one round-specific result path before any lane dispatch. Only a matching started event resumes with the same ID and path. Duplicate, conflicting, or gapped ordinals block.
 
-Persist the verbatim merged reviewer output through the caller's packaged phase publisher. Use a same-directory temporary path and the reserved create-once final path. Then record the final SHA-256, outcome, stable finding fingerprints, and `state: complete` in one ledger edit. Derive `standalone_passes` and finding totals from the registries; never increment them directly.
+Create a `review-result/v1` wrapper containing event ID, full head, outcome, `re_review_of`, and the complete P0-P3 inventory. Append the merged reviewer body verbatim. Publish the wrapper through the caller's packaged phase publisher. Then record its SHA-256, outcome, full inventory, and `state: complete` in one ledger edit.
 
-On resume, a started event without a final result re-dispatches. A matching journal-owned result completes it without dispatch. A foreign or different result blocks with `review-event-conflict`. A complete event with a missing or mismatched result blocks with `review-event-integrity`; never allocate a replacement event.
+On resume, a started event without a final result re-dispatches. A matching journal-owned wrapper completes it only after metadata validation. A foreign or different result blocks with `review-event-conflict`. A complete event with a missing or mismatched result blocks with `review-event-integrity`; never allocate a replacement event.
 
 A standalone review without `progress_path` remains report-only. It returns the report to its caller and creates no run event or artifact.
 

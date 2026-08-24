@@ -32,11 +32,13 @@ Build one stable-fingerprint inventory before choosing the verdict. Include stru
 
 Use the existing fingerprint contract for every row. If an outside-diff item lacks a file, line anchor, or title, resolve that evidence gap before inventory. Do not invent a weaker identity.
 
-Recompute the inventory from the actual merged output, review body, and orchestrator outside-diff results. Compare it with the recorded inventory. An omitted or extra fingerprint blocks the verdict as an incomplete inventory.
+Recompute the P0-P3 inventory from the sealed result wrapper. Compare its full fingerprint, source, and severity rows with the recorded inventory using exact set equality. Report omitted and extra rows separately. Join dispositions against the sealed inventory, never the recorded copy.
 
-Join each actionable fingerprint to the selected ledger's current `finding_dispositions` row. A terminal disposition is `fixed`, or `deferred` with a rationale. A fix event cannot author either transition. Only a verifying source re-review may author `fixed`.
+Join each sealed fingerprint and severity to the selected ledger's current `finding_dispositions` row. `fixed` satisfies the gate. A reasoned `deferred` row remains in accounting but satisfies clean only for P3. P0-P2 remain actionable unless fixed. A fix event cannot author either transition.
 
-The verdict cannot be `clean` while any actionable fingerprint lacks a terminal disposition. A complete control inventory may return `clean`; removing one outside-diff disposition from that same inventory must block.
+Only an explicit `re_review_of` relationship may author `fixed`. Validate the source event, kind, subject, and sequential ordinal. Derive the current inventory from the sealed re-review wrapper; never trust caller-supplied before or after sets.
+
+The verdict cannot be `clean` while any actionable fingerprint lacks an allowed disposition. A complete control inventory may return `clean`; omitted, extra, wrong-source, still-present, and deferred P0-P2 mutants must block.
 
 ## Validator protocol (interactive verification path)
 

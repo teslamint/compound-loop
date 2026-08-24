@@ -146,6 +146,14 @@ REVIEW_CASES = (
     "fix_cannot_mark_fixed",
     "outside_diff_missing_disposition",
     "standalone_and_reuse",
+    "inventory_omitted_row",
+    "inventory_extra_row",
+    "wrong_source_re_review",
+    "unrelated_later_review",
+    "finding_still_present",
+    "severity_deferred_gate",
+    "ordinal_gap_rejected",
+    "completed_full_row",
 )
 
 
@@ -470,12 +478,12 @@ def require_review_contract() -> None:
         (SCHEMA, "completed review result missing"),
         (SCHEMA, "completed review digest mismatch"),
         (IMPLEMENTING, "Allocate and persist the review event before dispatch"),
-        (IMPLEMENTING, "verbatim reviewer output"),
-        (IMPLEMENTING, "Only the source review's verifying re-review may set `fixed`"),
+        (IMPLEMENTING, "reviewer body verbatim"),
+        (IMPLEMENTING, "Only the explicit source re-review may set `fixed`"),
         (REVIEWING, "cheapest artifact that satisfies every written check"),
         (REVIEWING, "phase-gate reuse does not allocate another event"),
         (MERGE_PIPELINE, "review-body and outside-diff"),
-        (MERGE_PIPELINE, "terminal disposition"),
+        (MERGE_PIPELINE, "allowed disposition"),
     )
     missing = [fragment for text, fragment in required if fragment not in text]
     if missing:
@@ -483,8 +491,8 @@ def require_review_contract() -> None:
 
 
 class ReviewFixture:
-    TERMINAL_DISPOSITIONS = frozenset(("fixed", "deferred"))
     SOURCE_KINDS = frozenset(("unit", "final", "standalone"))
+    WRAPPER_MARKER = b"\n--- reviewer body ---\n"
 
     def __init__(self, repo: Path, progress_path: Path) -> None:
         self.repo = repo
@@ -509,52 +517,67 @@ class ReviewFixture:
         self.persisted_writes += 1
 
     def event(self, event_id: str) -> dict[str, object]:
-        for event in self.events:
-            if event["id"] == event_id:
-                return event
-        raise AssertionError(f"unknown fixture event: {event_id}")
+        matches = [event for event in self.events if event["id"] == event_id]
+        if len(matches) != 1:
+            raise Blocked(f"review event conflict: {event_id}")
+        return matches[0]
 
     def allocate(
         self,
         kind: str,
         subject: str,
-        ordinal: int,
         head: str,
+        re_review_of: str | None = None,
         source_review_event: str | None = None,
     ) -> dict[str, object]:
         if kind not in {"unit", "fix", "final", "standalone"}:
             raise Blocked(f"unknown review event kind: {kind}")
+        siblings = [event for event in self.events if event["kind"] == kind and event["subject"] == subject]
+        ordinals = sorted(int(event["ordinal"]) for event in siblings)
+        if ordinals != list(range(1, len(ordinals) + 1)):
+            raise Blocked(f"review event ordinal gap: {kind}:{subject}")
+        started = [event for event in siblings if event["state"] == "started"]
+        if started:
+            if len(started) != 1:
+                raise Blocked(f"review event conflict: {kind}:{subject}")
+            event = started[0]
+            if event["reviewed_head"] != head or event["re_review_of"] != re_review_of or event["source_review_event"] != source_review_event:
+                raise Blocked(f"review event conflict: {event['id']}")
+            return event
+        ordinal = len(siblings) + 1
+        if re_review_of is not None:
+            if kind not in self.SOURCE_KINDS:
+                raise Blocked("only source review kinds may re-review")
+            source = self.event(re_review_of)
+            if source["state"] != "complete" or source["kind"] != kind or source["subject"] != subject:
+                raise Blocked("re-review source mismatch")
+            if int(source["ordinal"]) != ordinal - 1:
+                raise Blocked("re-review source order mismatch")
+        if kind == "fix":
+            if not isinstance(source_review_event, str) or self.event(source_review_event)["state"] != "complete":
+                raise Blocked("fix source review mismatch")
+        elif source_review_event is not None:
+            raise Blocked("non-fix event has fix source")
         event_id = f"{kind}:{subject}:{ordinal}"
-        result_path = f"reviews/events/{kind}-{subject}-{ordinal}.md"
-        candidate: dict[str, object] = {
+        result_path = self.progress_path.parent / f"reviews/events/{kind}-{subject}-{ordinal}.md"
+        event: dict[str, object] = {
             "id": event_id,
             "kind": kind,
             "subject": subject,
             "ordinal": ordinal,
-            "reviewed_head": head,
             "state": "started",
-            "result_path": (self.progress_path.parent / result_path).relative_to(self.repo).as_posix(),
+            "reviewed_head": head,
+            "result_path": result_path.relative_to(self.repo).as_posix(),
             "result_sha256": None,
-            "source_review_event": source_review_event,
+            "outcome": None,
             "finding_inventory": [],
+            "source_review_event": source_review_event,
+            "re_review_of": re_review_of,
         }
-        matches = [event for event in self.events if event["id"] == event_id]
-        if matches:
-            if len(matches) != 1:
-                raise Blocked(f"review event conflict: {event_id}")
-            existing = matches[0]
-            identity_fields = ("id", "kind", "subject", "ordinal", "reviewed_head", "result_path", "source_review_event")
-            if any(existing[field] != candidate[field] for field in identity_fields):
-                raise Blocked(f"review event conflict: {event_id}")
-            if existing["state"] == "complete":
-                self.verify_result(event_id)
-            elif existing != candidate:
-                raise Blocked(f"review event conflict: {event_id}")
-            return existing
-        self.events.append(candidate)
+        self.events.append(event)
         self._persist()
-        assert event_id in self.progress_path.read_text(encoding="utf-8"), "event was not persisted before dispatch"
-        return candidate
+        assert event_id in self.progress_path.read_text(encoding="utf-8")
+        return event
 
     def _result_path(self, event: dict[str, object]) -> Path:
         return self.repo / str(event["result_path"])
@@ -562,39 +585,94 @@ class ReviewFixture:
     def _result_relative(self, event: dict[str, object]) -> str:
         return self._result_path(event).relative_to(self.progress_path.parent).as_posix()
 
+    def _inventory(
+        self,
+        review_body: tuple[str, ...],
+        outside_diff: tuple[str, ...],
+        severity: str,
+    ) -> list[dict[str, str]]:
+        if severity not in {"P0", "P1", "P2", "P3"}:
+            raise Blocked(f"unknown finding severity: {severity}")
+        return [
+            *({"fingerprint": fingerprint, "severity": severity, "source": "review-body"} for fingerprint in review_body),
+            *({"fingerprint": fingerprint, "severity": severity, "source": "outside-diff"} for fingerprint in outside_diff),
+        ]
+
+    def _wrapper(
+        self,
+        event: dict[str, object],
+        outcome: str,
+        inventory: list[dict[str, str]],
+        reviewer_body: bytes,
+    ) -> bytes:
+        metadata = {
+            "event_id": event["id"],
+            "finding_inventory": inventory,
+            "outcome": outcome,
+            "re_review_of": event["re_review_of"],
+            "reviewed_head": event["reviewed_head"],
+            "schema": "review-result/v1",
+        }
+        return json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode() + self.WRAPPER_MARKER + reviewer_body
+
+    def _parse_wrapper(self, event: dict[str, object], payload: bytes) -> tuple[dict[str, object], bytes]:
+        if payload.count(self.WRAPPER_MARKER) != 1:
+            raise Blocked(f"review result wrapper invalid: {event['id']}")
+        header, reviewer_body = payload.split(self.WRAPPER_MARKER, 1)
+        try:
+            metadata = json.loads(header)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise Blocked(f"review result wrapper invalid: {event['id']}") from exc
+        required = {"schema", "event_id", "reviewed_head", "outcome", "finding_inventory", "re_review_of"}
+        if set(metadata) != required or metadata["schema"] != "review-result/v1":
+            raise Blocked(f"review result wrapper invalid: {event['id']}")
+        if metadata["event_id"] != event["id"] or metadata["reviewed_head"] != event["reviewed_head"]:
+            raise Blocked(f"review result wrapper identity mismatch: {event['id']}")
+        if metadata["re_review_of"] != event["re_review_of"]:
+            raise Blocked(f"review result wrapper re-review mismatch: {event['id']}")
+        inventory = metadata["finding_inventory"]
+        if not isinstance(inventory, list):
+            raise Blocked(f"review result wrapper invalid: {event['id']}")
+        fingerprints = []
+        for row in inventory:
+            if not isinstance(row, dict) or set(row) != {"fingerprint", "severity", "source"}:
+                raise Blocked(f"review result wrapper invalid: {event['id']}")
+            if row["severity"] not in {"P0", "P1", "P2", "P3"} or row["source"] not in {"structured", "review-body", "outside-diff"}:
+                raise Blocked(f"review result wrapper invalid: {event['id']}")
+            fingerprints.append(row["fingerprint"])
+        if len(fingerprints) != len(set(fingerprints)):
+            raise Blocked(f"review result wrapper duplicate finding: {event['id']}")
+        return metadata, reviewer_body
+
     def complete(
         self,
         event_id: str,
-        output: bytes,
+        reviewer_body: bytes,
         review_body: tuple[str, ...] = (),
         outside_diff: tuple[str, ...] = (),
+        outcome: str | None = None,
+        severity: str = "P1",
     ) -> dict[str, object]:
         event = self.event(event_id)
+        inventory = self._inventory(review_body, outside_diff, severity)
+        resolved_outcome = outcome or ("actionable" if inventory else "clean")
+        wrapper = self._wrapper(event, resolved_outcome, inventory, reviewer_body)
         if event["state"] == "complete":
             self.verify_result(event_id)
-            if self._result_path(event).read_bytes() != output:
-                raise Blocked(f"review result conflict: {event_id}")
+            if self._result_path(event).read_bytes() != wrapper:
+                raise Blocked(f"review-event-conflict: {event_id}")
             return event
         try:
-            payload = publish_from_cli(
-                self.repo,
-                self.progress_path,
-                self._result_relative(event),
-                output,
-                IMPLEMENTING_CLI,
-            )
+            payload = publish_from_cli(self.repo, self.progress_path, self._result_relative(event), wrapper, IMPLEMENTING_CLI)
         except Blocked as exc:
             raise Blocked(f"review-event-conflict: {event_id}: {exc}") from exc
-        digest = hashlib.sha256(output).hexdigest()
-        assert payload["sha256"] == digest
+        metadata, observed_body = self._parse_wrapper(event, wrapper)
+        assert observed_body == reviewer_body, "verbatim reviewer body changed"
         event["state"] = "complete"
-        event["result_sha256"] = digest
-        event["finding_inventory"] = [
-            *({"fingerprint": fingerprint, "source": "review-body"} for fingerprint in review_body),
-            *({"fingerprint": fingerprint, "source": "outside-diff"} for fingerprint in outside_diff),
-        ]
+        event["result_sha256"] = str(payload["sha256"])
+        event["outcome"] = metadata["outcome"]
+        event["finding_inventory"] = metadata["finding_inventory"]
         self._persist()
-        assert self._result_path(event).read_bytes() == output, "reviewer output was not persisted verbatim"
         return event
 
     def recover(self, event_id: str) -> str:
@@ -607,27 +685,33 @@ class ReviewFixture:
             return "redispatch"
         journal_path = self.progress_path.parent / ".phase-artifact-ownership.json"
         if not journal_path.is_file():
-            raise Blocked(f"review result conflict: {event_id}")
+            raise Blocked(f"review-event-conflict: {event_id}")
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
-        relative = self._result_relative(event)
         digest = hashlib.sha256(result_path.read_bytes()).hexdigest()
-        if journal.get("owned", {}).get(relative) != digest:
-            raise Blocked(f"review result conflict: {event_id}")
+        if journal.get("owned", {}).get(self._result_relative(event)) != digest:
+            raise Blocked(f"review-event-conflict: {event_id}")
+        metadata, _ = self._parse_wrapper(event, result_path.read_bytes())
         event["state"] = "complete"
         event["result_sha256"] = digest
+        event["outcome"] = metadata["outcome"]
+        event["finding_inventory"] = metadata["finding_inventory"]
         self._persist()
         return "recovered"
 
-    def verify_result(self, event_id: str) -> None:
+    def verify_result(self, event_id: str) -> tuple[dict[str, object], bytes]:
         event = self.event(event_id)
         if event["state"] != "complete":
             raise Blocked(f"review event incomplete: {event_id}")
         result_path = self._result_path(event)
         if not result_path.is_file():
             raise Blocked(f"completed review result missing: {event_id}")
-        observed = hashlib.sha256(result_path.read_bytes()).hexdigest()
-        if observed != event["result_sha256"]:
+        payload = result_path.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != event["result_sha256"]:
             raise Blocked(f"completed review digest mismatch: {event_id}")
+        metadata, reviewer_body = self._parse_wrapper(event, payload)
+        if metadata["outcome"] != event["outcome"] or metadata["finding_inventory"] != event["finding_inventory"]:
+            raise Blocked(f"review result ledger mismatch: {event_id}")
+        return metadata, reviewer_body
 
     def counts(self) -> dict[str, int]:
         complete = [event for event in self.events if event["state"] == "complete"]
@@ -640,62 +724,87 @@ class ReviewFixture:
             "findings_deferred": sum(row["status"] == "deferred" for row in self.dispositions.values()),
         }
 
+    def _sealed_finding(self, fingerprint: str) -> tuple[dict[str, str], str]:
+        for event in self.events:
+            if event["state"] != "complete":
+                continue
+            metadata, _ = self.verify_result(str(event["id"]))
+            for row in metadata["finding_inventory"]:
+                if row["fingerprint"] == fingerprint:
+                    return row, str(event["id"])
+        raise Blocked(f"unknown finding fingerprint: {fingerprint}")
+
     def set_disposition(self, fingerprint: str, status: str, event_id: str, rationale: str | None = None) -> None:
         event = self.event(event_id)
         if event["state"] != "complete":
             raise Blocked(f"disposition event incomplete: {event_id}")
         if event["kind"] == "fix":
-            raise Blocked("fix event cannot mark fixed")
+            raise Blocked("fix event cannot change disposition")
         if status == "deferred" and not rationale:
             raise Blocked(f"deferred finding requires rationale: {fingerprint}")
-        known = {
-            str(row["fingerprint"])
-            for review_event in self.events
-            for row in review_event["finding_inventory"]
-        }
-        if fingerprint not in known:
-            raise Blocked(f"unknown finding fingerprint: {fingerprint}")
+        row, introduced_by = self._sealed_finding(fingerprint)
         current = self.dispositions.get(fingerprint)
         if current is not None and current["status"] == "fixed":
             raise Blocked(f"fixed finding is terminal: {fingerprint}")
-        introduced_by = current["introduced_by"] if current is not None else next(
-            str(review_event["id"])
-            for review_event in self.events
-            if fingerprint in {str(row["fingerprint"]) for row in review_event["finding_inventory"]}
-        )
         self.dispositions[fingerprint] = {
             "status": status,
-            "introduced_by": introduced_by,
+            "severity": row["severity"],
+            "introduced_by": current["introduced_by"] if current else introduced_by,
             "resolved_by": event_id,
+            "rationale": rationale,
         }
         self._persist()
 
-    def verify_re_review(self, event_id: str, prior: tuple[str, ...], current: tuple[str, ...]) -> None:
+    def verify_re_review(self, event_id: str) -> None:
         event = self.event(event_id)
-        if event["kind"] not in self.SOURCE_KINDS or event["state"] != "complete":
-            raise Blocked("only verifying re-review may mark fixed")
-        for fingerprint in prior:
-            if fingerprint not in current:
-                introduced = self.event(next(
-                    str(review_event["id"])
-                    for review_event in self.events
-                    if fingerprint in {str(row["fingerprint"]) for row in review_event["finding_inventory"]}
-                ))
-                if event["kind"] != introduced["kind"] or event["subject"] != introduced["subject"] or event["ordinal"] <= introduced["ordinal"]:
-                    raise Blocked("only verifying re-review may mark fixed")
-                self.set_disposition(fingerprint, "fixed", event_id)
+        self.verify_result(event_id)
+        source_id = event["re_review_of"]
+        if event["kind"] not in self.SOURCE_KINDS or not isinstance(source_id, str):
+            raise Blocked("only explicit verifying re-review may mark fixed")
+        source = self.event(source_id)
+        if source["kind"] != event["kind"] or source["subject"] != event["subject"] or int(source["ordinal"]) + 1 != int(event["ordinal"]):
+            raise Blocked("re-review source mismatch")
+        source_metadata, _ = self.verify_result(source_id)
+        current_metadata, _ = self.verify_result(event_id)
+        current = {row["fingerprint"] for row in current_metadata["finding_inventory"]}
+        for row in source_metadata["finding_inventory"]:
+            fingerprint = str(row["fingerprint"])
+            if fingerprint in current:
+                raise Blocked(f"re-review finding still present: {fingerprint}")
+            self.set_disposition(fingerprint, "fixed", event_id)
 
-    def clean_gate(self, event_id: str, inventory: tuple[str, ...]) -> None:
+    def clean_gate(self, event_id: str) -> None:
         event = self.event(event_id)
-        expected = {str(row["fingerprint"]) for row in event["finding_inventory"]}
-        supplied = set(inventory)
-        missing = sorted(expected - supplied)
-        if missing:
-            raise Blocked("outside-diff finding inventory incomplete: " + ",".join(missing))
-        for fingerprint in sorted(expected):
-            disposition = self.dispositions.get(fingerprint, {}).get("status")
-            if disposition not in self.TERMINAL_DISPOSITIONS:
+        result_path = self._result_path(event)
+        if not result_path.is_file():
+            raise Blocked(f"completed review result missing: {event_id}")
+        payload = result_path.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != event["result_sha256"]:
+            raise Blocked(f"completed review digest mismatch: {event_id}")
+        metadata, _ = self._parse_wrapper(event, payload)
+        sealed_rows = {
+            (str(row["fingerprint"]), str(row["source"]), str(row["severity"]))
+            for row in metadata["finding_inventory"]
+        }
+        recorded_rows = {
+            (str(row["fingerprint"]), str(row["source"]), str(row["severity"]))
+            for row in event["finding_inventory"]
+        }
+        omitted = sorted(sealed_rows - recorded_rows)
+        extra = sorted(recorded_rows - sealed_rows)
+        if omitted or extra:
+            raise Blocked(f"finding inventory mismatch: omitted={omitted}; extra={extra}")
+        for fingerprint, _, severity in sorted(sealed_rows):
+            disposition = self.dispositions.get(fingerprint)
+            if disposition is None:
                 raise Blocked(f"finding lacks terminal disposition: {fingerprint}")
+            if disposition["severity"] != severity:
+                raise Blocked(f"finding disposition severity mismatch: {fingerprint}")
+            if disposition["status"] == "fixed":
+                continue
+            if severity == "P3" and disposition["status"] == "deferred" and disposition["rationale"]:
+                continue
+            raise Blocked(f"{severity} finding remains actionable: {fingerprint}")
 
     def reuse_phase_gate(self, event_id: str) -> dict[str, object]:
         event = self.event(event_id)
@@ -1649,14 +1758,14 @@ def run_case(name: str) -> None:
             output = b'{"verdict":"clean"}\nreviewer tail preserved\n'
 
             if name == "review_event_lifecycle":
-                first = reviews.allocate("unit", "U1", 1, head)
+                first = reviews.allocate("unit", "U1", head)
                 reviews.complete(str(first["id"]), b'{"verdict":"actionable"}\n', review_body=("fp-review",))
-                fix = reviews.allocate("fix", "U1", 1, head, source_review_event="unit:U1:1")
+                fix = reviews.allocate("fix", "U1", head, source_review_event="unit:U1:1")
                 reviews.complete(str(fix["id"]), b'{"verdict":"fixed"}\n')
-                second = reviews.allocate("unit", "U1", 2, head)
+                second = reviews.allocate("unit", "U1", head, re_review_of="unit:U1:1")
                 reviews.complete(str(second["id"]), output)
-                reviews.verify_re_review(str(second["id"]), ("fp-review",), ())
-                final = reviews.allocate("final", "branch", 1, head)
+                reviews.verify_re_review(str(second["id"]))
+                final = reviews.allocate("final", "branch", head)
                 reviews.complete(str(final["id"]), output)
                 assert reviews.counts() == {
                     "unit_passes": 2,
@@ -1668,52 +1777,57 @@ def run_case(name: str) -> None:
                 }
                 assert reviews.dispositions["fp-review"]["status"] == "fixed"
             elif name == "event_replay":
-                first = reviews.allocate("unit", "U1", 1, head)
+                first = reviews.allocate("unit", "U1", head)
                 writes = reviews.persisted_writes
-                replay = reviews.allocate("unit", "U1", 1, head)
+                replay = reviews.allocate("unit", "U1", head)
                 assert replay is first and reviews.persisted_writes == writes and len(reviews.events) == 1
                 reviews.complete(str(first["id"]), output)
                 assert reviews.complete(str(first["id"]), output) is first
                 assert reviews.counts()["unit_passes"] == 1
             elif name == "matching_started_result":
-                event = reviews.allocate("unit", "U1", 1, head)
-                publish_from_cli(repo, path, reviews._result_relative(event), output, IMPLEMENTING_CLI)
+                event = reviews.allocate("unit", "U1", head)
+                wrapper = reviews._wrapper(event, "clean", [], output)
+                publish_from_cli(repo, path, reviews._result_relative(event), wrapper, IMPLEMENTING_CLI)
                 assert event["state"] == "started"
                 assert reviews.recover(str(event["id"])) == "recovered"
-                assert event["result_sha256"] == hashlib.sha256(output).hexdigest()
+                assert event["result_sha256"] == hashlib.sha256(wrapper).hexdigest()
                 assert reviews.counts()["unit_passes"] == 1
             elif name == "deferred_then_fixed":
-                first = reviews.allocate("unit", "U1", 1, head)
+                first = reviews.allocate("unit", "U1", head)
                 reviews.complete(str(first["id"]), output, review_body=("fp-deferred",))
                 reviews.set_disposition("fp-deferred", "deferred", str(first["id"]), "triaged for later work")
-                second = reviews.allocate("unit", "U1", 2, head)
+                second = reviews.allocate("unit", "U1", head, re_review_of="unit:U1:1")
                 reviews.complete(str(second["id"]), output)
-                reviews.verify_re_review(str(second["id"]), ("fp-deferred",), ())
+                reviews.verify_re_review(str(second["id"]))
                 assert reviews.dispositions["fp-deferred"] == {
                     "status": "fixed",
+                    "severity": "P1",
                     "introduced_by": "unit:U1:1",
                     "resolved_by": "unit:U1:2",
+                    "rationale": None,
                 }
             elif name == "phase_gate_reuse":
-                final = reviews.allocate("final", "branch", 1, head)
+                final = reviews.allocate("final", "branch", head)
                 reviews.complete(str(final["id"]), output)
                 before_events = list(reviews.events)
                 assert reviews.reuse_phase_gate(str(final["id"])) is final
                 assert reviews.events == before_events and reviews.counts()["final_passes"] == 1
             elif name == "outside_diff_inventory_complete":
-                event = reviews.allocate("final", "branch", 1, head)
+                event = reviews.allocate("final", "branch", head)
                 reviews.complete(
                     str(event["id"]),
                     output,
                     review_body=("fp-body",),
                     outside_diff=("fp-outside",),
+                    severity="P3",
                 )
                 reviews.set_disposition("fp-body", "deferred", str(event["id"]), "accepted minor residual")
                 reviews.set_disposition("fp-outside", "deferred", str(event["id"]), "accepted outside-diff residual")
-                reviews.clean_gate(str(event["id"]), ("fp-body", "fp-outside"))
+                reviews.clean_gate(str(event["id"]))
             elif name == "event_conflict":
-                event = reviews.allocate("unit", "U1", 1, head)
-                publish_from_cli(repo, path, reviews._result_relative(event), b"first result\n", IMPLEMENTING_CLI)
+                event = reviews.allocate("unit", "U1", head)
+                wrapper = reviews._wrapper(event, "clean", [], b"first result\n")
+                publish_from_cli(repo, path, reviews._result_relative(event), wrapper, IMPLEMENTING_CLI)
                 try:
                     reviews.complete(str(event["id"]), b"different result\n")
                 except Blocked as exc:
@@ -1721,7 +1835,7 @@ def run_case(name: str) -> None:
                 else:
                     raise AssertionError("conflicting immutable result did not block")
             elif name == "completed_result_missing":
-                event = reviews.allocate("unit", "U1", 1, head)
+                event = reviews.allocate("unit", "U1", head)
                 reviews.complete(str(event["id"]), output)
                 reviews._result_path(event).unlink()
                 try:
@@ -1731,7 +1845,7 @@ def run_case(name: str) -> None:
                 else:
                     raise AssertionError("missing completed result did not block")
             elif name == "completed_digest_mismatch":
-                event = reviews.allocate("unit", "U1", 1, head)
+                event = reviews.allocate("unit", "U1", head)
                 reviews.complete(str(event["id"]), output)
                 reviews._result_path(event).write_bytes(b"mutated\n")
                 try:
@@ -1741,27 +1855,27 @@ def run_case(name: str) -> None:
                 else:
                     raise AssertionError("mismatched completed result did not block")
             elif name == "fix_cannot_mark_fixed":
-                first = reviews.allocate("unit", "U1", 1, head)
+                first = reviews.allocate("unit", "U1", head)
                 reviews.complete(str(first["id"]), output, review_body=("fp-fix",))
-                fix = reviews.allocate("fix", "U1", 1, head, source_review_event="unit:U1:1")
+                fix = reviews.allocate("fix", "U1", head, source_review_event="unit:U1:1")
                 reviews.complete(str(fix["id"]), output)
                 try:
                     reviews.set_disposition("fp-fix", "fixed", str(fix["id"]))
                 except Blocked as exc:
-                    assert str(exc) == "fix event cannot mark fixed"
+                    assert str(exc) == "fix event cannot change disposition"
                 else:
                     raise AssertionError("fix event marked a finding fixed")
             elif name == "outside_diff_missing_disposition":
-                event = reviews.allocate("final", "branch", 1, head)
+                event = reviews.allocate("final", "branch", head)
                 reviews.complete(str(event["id"]), output, outside_diff=("fp-outside",))
                 try:
-                    reviews.clean_gate(str(event["id"]), ("fp-outside",))
+                    reviews.clean_gate(str(event["id"]))
                 except Blocked as exc:
                     assert str(exc) == "finding lacks terminal disposition: fp-outside"
                 else:
                     raise AssertionError("outside-diff finding without disposition did not block")
             elif name == "standalone_and_reuse":
-                standalone = reviews.allocate("standalone", "branch", 1, head)
+                standalone = reviews.allocate("standalone", "branch", head)
                 reviews.complete(str(standalone["id"]), output)
                 assert reviews.reuse_phase_gate(str(standalone["id"])) is standalone
                 assert reviews.counts() == {
@@ -1772,6 +1886,70 @@ def run_case(name: str) -> None:
                     "findings_fixed": 0,
                     "findings_deferred": 0,
                 }
+            elif name == "inventory_omitted_row":
+                event = reviews.allocate("final", "branch", head)
+                reviews.complete(str(event["id"]), output, outside_diff=("fp-omitted",))
+                reviews.set_disposition("fp-omitted", "deferred", str(event["id"]), "minor")
+                event["finding_inventory"] = []
+                try:
+                    reviews.clean_gate(str(event["id"]))
+                except Blocked as exc:
+                    assert "omitted" in str(exc), str(exc)
+                else:
+                    raise AssertionError("omitted sealed-result inventory row did not block")
+            elif name == "inventory_extra_row":
+                event = reviews.allocate("final", "branch", head)
+                reviews.complete(str(event["id"]), output)
+                event["finding_inventory"] = [{"fingerprint": "fp-extra", "severity": "P1", "source": "outside-diff"}]
+                try:
+                    reviews.clean_gate(str(event["id"]))
+                except Blocked as exc:
+                    assert "extra" in str(exc), str(exc)
+                else:
+                    raise AssertionError("extra recorded inventory row did not block")
+            elif name in {"wrong_source_re_review", "unrelated_later_review", "finding_still_present"}:
+                first = reviews.allocate("unit", "U1", head)
+                reviews.complete(str(first["id"]), output, review_body=("fp-source",))
+                source = "unit:U1:1" if name != "unrelated_later_review" else None
+                second = reviews.allocate("unit", "U1", head, re_review_of=source)
+                current = ("fp-source",) if name == "finding_still_present" else ()
+                reviews.complete(str(second["id"]), output, review_body=current)
+                if name == "wrong_source_re_review":
+                    second["re_review_of"] = "unit:other:1"
+                try:
+                    reviews.verify_re_review(str(second["id"]))
+                except Blocked:
+                    pass
+                else:
+                    raise AssertionError(f"{name} re-review mutant did not block")
+            elif name == "severity_deferred_gate":
+                event = reviews.allocate("final", "branch", head)
+                reviews.complete(str(event["id"]), output, review_body=("fp-p1",))
+                reviews.set_disposition("fp-p1", "deferred", str(event["id"]), "not fixed")
+                try:
+                    reviews.clean_gate(str(event["id"]))
+                except Blocked as exc:
+                    assert "P1" in str(exc), str(exc)
+                else:
+                    raise AssertionError("deferred P1 finding satisfied clean")
+            elif name == "ordinal_gap_rejected":
+                first = reviews.allocate("unit", "U1", head)
+                reviews.complete(str(first["id"]), output)
+                corrupt = dict(first)
+                corrupt["id"] = "unit:U1:3"
+                corrupt["ordinal"] = 3
+                reviews.events.append(corrupt)
+                try:
+                    reviews.allocate("unit", "U1", head)
+                except Blocked as exc:
+                    assert "ordinal gap" in str(exc), str(exc)
+                else:
+                    raise AssertionError("ordinal gap did not block")
+            elif name == "completed_full_row":
+                event = reviews.allocate("unit", "U1", head)
+                reviews.complete(str(event["id"]), output, review_body=("fp-full",))
+                assert event["outcome"] == "actionable"
+                assert event["finding_inventory"] == [{"fingerprint": "fp-full", "severity": "P1", "source": "review-body"}]
         else:
             raise AssertionError(f"unknown case: {name}")
 

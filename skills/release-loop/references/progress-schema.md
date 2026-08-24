@@ -64,10 +64,12 @@ review_events:
     result_path: <artifact_root>/reviews/events/<round-specific-name>
     result_sha256: <64-char lowercase SHA-256 or null while started>
     outcome: <review or fix outcome or null while started>
-    finding_inventory: []               # [{fingerprint: <stable ID>, source: structured | review-body | outside-diff}]
+    finding_inventory: []               # [{fingerprint: <stable ID>, severity: P0 | P1 | P2 | P3, source: structured | review-body | outside-diff}]
     source_review_event: <event ID for fix, otherwise null>
+    re_review_of: <prior unit, final, or standalone event ID; otherwise null>
 finding_dispositions:
   - fingerprint: <stable reviewing fingerprint>
+    severity: P0 | P1 | P2 | P3
     status: fixed | deferred
     introduced_by: <review event ID>
     resolved_by: <verifying re-review event ID or terminal-triage authority>
@@ -110,16 +112,17 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - `.release-loop/` contains local working state. Gitignore it by default. Durable spec, plan, and Retro documents remain committed. Corrupt backups stay with their selected artifact root and move into its terminal archive.
 - `final_action` is additive and optional on `release-loop/v1`: absence stays valid — consumers reject unknown `schema:` versions, never unknown fields.
 - `review_events`, `finding_dispositions`, and `review_counts` are additive. New ledgers include all three. A legacy ledger may add them only with `completeness: partial` and a fresh `counting_started_at`.
-- `review_events` is append-only. Allocate and persist one `state: started` row before dispatch. Its ID is `<kind>:<subject>:<ordinal>`, and replay reuses that row and ordinal.
-- Reserve one round-specific `result_path` in the started row. A `fix` row also names its `source_review_event`. A completed row never dispatches again.
-- Publish validated reviewer bytes through the packaged phase publisher. Use one same-directory temporary path and the reserved create-once final path. Persist the publisher's final SHA-256 in the event.
-- A started event without a final result re-dispatches under the same ID. A journal-owned final result completes that event without another dispatch when its digest matches.
+- `review_events` is append-only. Derive the next ordinal from the ledger: the first is 1, then each kind and subject advances without gaps. Only a matching started row replays. Duplicate, conflicting, or gapped rows block.
+- Reserve one round-specific `result_path` in the started row. Persist `outcome: null` before dispatch. A `fix` row names `source_review_event`; a source re-review names `re_review_of`. A completed row never dispatches again.
+- Wrap each immutable result in `review-result/v1` metadata. It contains event ID, full head, outcome, `re_review_of`, and the full severity inventory. Append the reviewer body verbatim after the wrapper delimiter.
+- Publish the validated wrapper through the packaged phase publisher. Use one same-directory temporary path and the reserved create-once final path. Persist the publisher's final SHA-256 in the event.
+- A started event without a final result re-dispatches under the same ID. A journal-owned final result completes that event only after wrapper validation. Persist its outcome and full inventory in the completion edit.
 - A foreign or different final result blocks with `review-event-conflict`. Never allocate another event to bypass the conflict.
 - A complete event must have its immutable result. A missing file blocks with `review-event-integrity: completed review result missing`. A digest mismatch blocks with `review-event-integrity: completed review digest mismatch`.
 - Persist reviewer output verbatim. Parsing may validate its shape, but no caller may rewrite the authoritative result bytes.
 - Each finding uses the reviewing contract's stable fingerprint. `finding_dispositions` contains at most one current row per fingerprint.
-- A fix event cannot change a disposition. Only a later re-review of the source review's kind and subject may set `fixed` after verifying closure.
-- Terminal triage may set `deferred` only with a rationale. Allowed transitions are absent to `fixed` or `deferred`, and `deferred` to `fixed`. `fixed` is terminal.
+- A fix event cannot change a disposition. Only an explicit `re_review_of` relation may set `fixed`. Validate matching kind, subject, sequential ordinal, and source event, then derive closure from the sealed re-review wrapper.
+- Terminal triage may set `deferred` only with a rationale. Record its original severity. Deferred findings remain in accounting, but only deferred P3 may satisfy a clean gate. P0-P2 require `fixed`.
 - Derive `review_counts` after every registry transition. Count complete events by kind. Derive finding totals from current disposition rows. Never increment these counters directly.
 - Write the event or disposition transition, derived counters, result pointer, and evidence Log line in one ledger edit. Replaying one event ID changes none of them.
 - `final_action.status` has exactly three transitions: `predicted → determined` in the same edit as its Log line, when the exact command becomes knowable; `determined → predicted` on invalidation (PR closed, new commits on the branch) with the reason logged in the same edit; `determined → executed` in the same edit as the evidence Log line and `merged: true` — the two fields never disagree across a write.

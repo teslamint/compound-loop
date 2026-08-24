@@ -94,16 +94,16 @@ The six durable outcomes are mandatory: `success` advances HEAD once with one se
 Apply this protocol to every unit review, fixer batch, and final branch review. The selected ledger is the registry authority.
 
 1. Validate every complete event's result path and SHA-256 before reuse. Block on `review-event-integrity: completed review result missing` or `review-event-integrity: completed review digest mismatch`. Never allocate a replacement ID for either failure.
-2. Allocate and persist the review event before dispatch. Use `<kind>:<subject>:<ordinal>`, where the ledger allocates the next ordinal once for that kind and subject. Persist `state: started`, the full reviewed head, and a round-specific result path. A fix event also names its source review event.
-3. Replay reuses a matching started event and its reserved path. Conflicting event fields or an occupied different final result block with `review-event-conflict`.
+2. Allocate and persist the review event before dispatch. Derive the next ordinal from existing rows for that kind and subject: first is 1, then sequential. Persist `state: started`, `outcome: null`, the full reviewed head, and a round-specific result path. A fix event names its source review event. A unit, final, or standalone re-review names its exact `re_review_of` event.
+3. Replay only a matching started event and its reserved path. Duplicate, conflicting, or gapped ordinals block. An occupied different final result blocks with `review-event-conflict`.
 4. A started event without a published final result re-dispatches under the same ID. A matching journal-owned final result completes the started event without another dispatch.
-5. Write the worker's verbatim reviewer output to a same-directory temporary path. Validate the output, then invoke the packaged publisher:
+5. Build a `review-result/v1` wrapper with event ID, full head, outcome, `re_review_of`, and the complete P0-P3 finding inventory. Append the worker's reviewer body verbatim. Write that wrapper to a same-directory temporary path, validate it, then invoke the packaged publisher:
 
    `python3 "$implementing_skill_root/scripts/phase-artifact-integrity.py" publish --repo . --progress-path <repo-relative-progress-path> --source <repo-relative-temporary-path> --target <repo-relative-round-result-path>`
 
 6. Persist the publisher's final SHA-256, outcome, stable finding fingerprints, `state: complete`, and the evidence Log line in one ledger edit. Derive `review_counts` from complete events and current dispositions in that same edit. Never increment lifecycle totals directly.
 7. Count complete `unit`, `fix`, and `final` events as `unit_passes`, `fix_rounds`, and `final_passes`. A re-review is another unit pass. Event replay and later phase-gate reuse add no count.
-8. A fix event cannot change a finding disposition. Only the source review's verifying re-review may set `fixed`, and only after it verifies the fingerprint is absent. Terminal triage may set `deferred` with a rationale. `deferred` may later become `fixed`; `fixed` is terminal.
+8. A fix event cannot change a finding disposition. Only the explicit source re-review may set `fixed`. Validate its kind, subject, sequential ordinal, and source, then derive absence from its sealed wrapper. Never accept caller-supplied fingerprint sets as closure evidence. Terminal triage may set `deferred` with a rationale. Only deferred P3 may satisfy clean; P0-P2 require `fixed`.
 
 ## Per-unit loop
 
