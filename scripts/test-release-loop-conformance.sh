@@ -1230,12 +1230,51 @@ def require_adapter_array(actual, expected, label):
         fail(f"{label} argv mismatch")
 
 
-def verify_preflight_inputs(source_path, source_digest, policy_digests):
-    if hashlib.sha256(source_path.read_bytes()).hexdigest() != source_digest:
-        fail("preflight source changed")
+def adapter_source_snapshot(feature_root):
+    paths = []
+    for relative in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "PRINCIPLES.md"):
+        path = feature_root / relative
+        if path.is_file():
+            paths.append(path)
+    for directory in ("skills", "references", "schemas"):
+        source_root = feature_root / directory
+        if source_root.is_dir():
+            paths.extend(path for path in source_root.rglob("*") if path.is_file())
+    snapshot = {}
+    for path in sorted(paths):
+        if path.is_symlink():
+            fail("preflight source symlink")
+        relative = str(path.relative_to(feature_root))
+        snapshot[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if not snapshot or "skills/release-loop/SKILL.md" not in snapshot:
+        fail("preflight source set incomplete")
+    return snapshot
+
+
+def verify_preflight_inputs(feature_root, source_snapshot, policy_digests):
+    if adapter_source_snapshot(feature_root) != source_snapshot:
+        fail("preflight source set changed")
     for path, digest in policy_digests.items():
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             fail("preflight policy changed")
+
+
+def run_adapter_checked(command, cwd, env, input_bytes, feature_root, source_snapshot, policy_digests):
+    verify_preflight_inputs(feature_root, source_snapshot, policy_digests)
+    try:
+        return run_bounded(command, cwd, env, input_bytes=input_bytes)
+    finally:
+        verify_preflight_inputs(feature_root, source_snapshot, policy_digests)
+
+
+def read_bounded_file(path, size_cap=65536):
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        fail("bounded result missing")
+    if size > size_cap:
+        fail("bounded result exceeded cap")
+    return path.read_text(encoding="utf-8")
 
 
 def parse_session_id(output, harness):
@@ -1321,7 +1360,8 @@ else:
         identity = "not-a-uuid"
     if "--output-last-message" in args:
         result_path = Path(args[args.index("--output-last-message") + 1])
-        result_path.write_text("fake codex result\\n", encoding="utf-8")
+        result_value = "x" * 70000 if mode == "oversized-result" else "fake codex result\\n"
+        result_path.write_text(result_value, encoding="utf-8")
     print(json.dumps({{"type": "thread.started", "thread_id": identity}}))
 '''
     path.write_text(source, encoding="utf-8")
@@ -1391,6 +1431,7 @@ def validate_preflight():
         }
         source_path = root / "skills/release-loop/SKILL.md"
         source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        source_snapshot = adapter_source_snapshot(root)
         golden_claude = load_json(data_root / "golden/claude/L1-full-lifecycle.json")
         golden_codex = load_json(data_root / "golden/codex/L1-full-lifecycle.json")
         claude_id = "11111111-1111-4111-8111-111111111111"
@@ -1462,14 +1503,14 @@ def validate_preflight():
             ("codex", codex_resume, b"approve\n", codex_id),
         )
         for harness, command, stdin_bytes, expected_id in commands:
-            verify_preflight_inputs(source_path, source_digest, policy_digests)
-            result = run_bounded(command, fixture_root, env, input_bytes=stdin_bytes)
+            result = run_adapter_checked(
+                command, fixture_root, env, stdin_bytes, root, source_snapshot, policy_digests
+            )
             if result.returncode != 0:
                 fail(f"{harness} fake adapter failed")
             if parse_session_id(result.stdout, harness) != expected_id:
                 fail(f"{harness} session identity mismatch")
-            verify_preflight_inputs(source_path, source_digest, policy_digests)
-        if not codex_result.is_file() or codex_result.read_text(encoding="utf-8") != "fake codex result\n":
+        if read_bounded_file(codex_result) != "fake codex result\n":
             fail("Codex bounded result missing")
         packet = json.loads(codex_stdin)
         if packet["skill_bytes"].encode("utf-8") != source_path.read_bytes():
@@ -1478,7 +1519,7 @@ def validate_preflight():
             fail("Codex feature source mismatch")
         if packet["skill_sha256"] != source_digest:
             fail("Codex stdin source digest mismatch")
-        verify_preflight_inputs(source_path, source_digest, policy_digests)
+        verify_preflight_inputs(root, source_snapshot, policy_digests)
 
         captures = [json.loads(line) for line in capture_path.read_text(encoding="utf-8").splitlines()]
         adapter_captures = [row for row in captures if row["argv"] not in (["auth", "status"], ["login", "status"])]
@@ -1506,7 +1547,9 @@ def validate_preflight():
             fail("unreadable auth fixture accepted")
         negatives += 1
         malformed_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, fake_mode="malformed-id")
-        malformed = run_bounded(claude_initial, fixture_root, malformed_env)
+        malformed = run_adapter_checked(
+            claude_initial, fixture_root, malformed_env, b"", root, source_snapshot, policy_digests
+        )
         try:
             parse_session_id(malformed.stdout, "claude")
         except ValueError as exc:
@@ -1528,7 +1571,7 @@ def validate_preflight():
         drift_bytes = settings_path.read_bytes()
         settings_path.write_bytes(drift_bytes + b"\n")
         try:
-            verify_preflight_inputs(source_path, source_digest, policy_digests)
+            verify_preflight_inputs(root, source_snapshot, policy_digests)
         except ValueError as exc:
             if "preflight policy changed" not in str(exc):
                 fail(f"policy drift diagnostic mismatch: {exc}")
@@ -1537,27 +1580,42 @@ def validate_preflight():
         settings_path.write_bytes(drift_bytes)
         negatives += 1
         source_copy_root = fixture_root / "source-copy"
+        for relative in source_snapshot:
+            target = source_copy_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / relative, target)
+        source_copy_snapshot = adapter_source_snapshot(source_copy_root)
         source_copy = source_copy_root / "skills/release-loop/SKILL.md"
-        source_copy.parent.mkdir(parents=True)
-        source_copy.write_bytes(source_path.read_bytes())
-        source_copy_digest = hashlib.sha256(source_copy.read_bytes()).hexdigest()
+        source_copy.chmod(0o444)
+        source_copy.parent.chmod(0o555)
         write_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, fake_mode="source-write")
         write_env["CONFORMANCE_MUTATION_TARGET"] = str(source_copy)
         write_command = build_claude_initial(
             source_copy_root, claude_model, settings_path, mcp_path, "1.00", golden_claude["prompt"], claude_id
         )
-        run_bounded(write_command, fixture_root, write_env)
         try:
-            verify_preflight_inputs(source_copy, source_copy_digest, {})
+            write_result = run_adapter_checked(
+                write_command,
+                fixture_root,
+                write_env,
+                b"",
+                source_copy_root,
+                source_copy_snapshot,
+                policy_digests,
+            )
         except ValueError as exc:
-            if "preflight source changed" not in str(exc):
-                fail(f"source-write diagnostic mismatch: {exc}")
-        else:
+            fail(f"source-write mutant crossed sandbox boundary: {exc}")
+        finally:
+            source_copy.parent.chmod(0o755)
+            source_copy.chmod(0o644)
+        if write_result.returncode == 0 or adapter_source_snapshot(source_copy_root) != source_copy_snapshot:
             fail("source-write mutant was accepted")
         negatives += 1
         unbounded_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, fake_mode="unbounded")
         try:
-            run_bounded(codex_initial, fixture_root, unbounded_env)
+            run_adapter_checked(
+                codex_initial, fixture_root, unbounded_env, codex_stdin, root, source_snapshot, policy_digests
+            )
         except ValueError as exc:
             if "output exceeded cap" not in str(exc):
                 fail(f"unbounded output diagnostic mismatch: {exc}")
@@ -1565,7 +1623,9 @@ def validate_preflight():
             fail("unbounded adapter output accepted")
         negatives += 1
         malformed_output_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, fake_mode="malformed-output")
-        malformed_output = run_bounded(codex_initial, fixture_root, malformed_output_env)
+        malformed_output = run_adapter_checked(
+            codex_initial, fixture_root, malformed_output_env, codex_stdin, root, source_snapshot, policy_digests
+        )
         try:
             parse_session_id(malformed_output.stdout, "codex")
         except ValueError as exc:
@@ -1573,6 +1633,22 @@ def validate_preflight():
                 fail(f"malformed output diagnostic mismatch: {exc}")
         else:
             fail("malformed adapter output accepted")
+        negatives += 1
+        oversized_result_env = closed_adapter_env(
+            fake_bin, isolated_home, temp_dir, capture_path, fake_mode="oversized-result"
+        )
+        oversized = run_adapter_checked(
+            codex_initial, fixture_root, oversized_result_env, codex_stdin, root, source_snapshot, policy_digests
+        )
+        if oversized.returncode != 0:
+            fail("oversized result fixture failed before result validation")
+        try:
+            read_bounded_file(codex_result)
+        except ValueError as exc:
+            if "bounded result exceeded cap" not in str(exc):
+                fail(f"oversized result diagnostic mismatch: {exc}")
+        else:
+            fail("oversized result file accepted")
         negatives += 1
         summary = (2, 4, negatives, len(captures))
     if fixture_path.exists():
