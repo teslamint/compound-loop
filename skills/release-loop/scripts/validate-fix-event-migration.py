@@ -11,6 +11,9 @@ import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
+from phase_artifact_core import ArtifactBlocked
+from phase_artifact_core import guard as guard_phase_artifact_path
+
 
 SCHEMA = "review-fix-event-migration/v1"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -28,6 +31,19 @@ def canonical(value):
     if path.is_absolute() or not path.parts or ".." in path.parts or path.as_posix() != value:
         raise Blocked("fix migration path invalid: " + value)
     return path
+
+
+def physical_guard(repo, relative, allowed_root=None):
+    allowed = allowed_root or ".release-loop"
+    try:
+        return guard_phase_artifact_path(
+            repo,
+            canonical(relative).as_posix(),
+            canonical(allowed).as_posix(),
+            allow_root=relative == allowed,
+        )
+    except ArtifactBlocked as exc:
+        raise Blocked(str(exc)) from exc
 
 
 def digest(path):
@@ -78,8 +94,8 @@ def parse_review_events(text):
     return events
 
 
-def journal(root):
-    path = root / ".phase-artifact-ownership.json"
+def journal(repo, root):
+    path = physical_guard(repo, (root / ".phase-artifact-ownership.json").relative_to(repo).as_posix(), root.relative_to(repo).as_posix())
     if path.is_symlink() or not path.is_file():
         raise Blocked("fix migration ownership journal missing")
     try:
@@ -92,14 +108,14 @@ def journal(root):
 
 
 def validate_owned(repo, root, relative, expected, label):
-    path = repo / canonical(relative)
+    path = physical_guard(repo, relative, root.relative_to(repo).as_posix())
     try:
         key = path.relative_to(root).as_posix()
     except ValueError as exc:
         raise Blocked(label + " outside artifact root") from exc
     if path.is_symlink() or not path.is_file() or digest(path) != expected:
         raise Blocked(label + " digest mismatch")
-    if journal(root)["owned"].get(key) != expected:
+    if journal(repo, root)["owned"].get(key) != expected:
         raise Blocked(label + " is not publisher-owned")
     return path
 
@@ -138,15 +154,13 @@ def validate_migration(repo, progress_relative, adoption_relative, signature_che
     repo = Path(repo).resolve(strict=True)
     progress_relative = canonical(progress_relative).as_posix()
     adoption_relative = canonical(adoption_relative).as_posix()
-    progress = repo / progress_relative
-    if progress.is_symlink():
-        raise Blocked("fix migration progress symlink")
+    progress = physical_guard(repo, progress_relative)
     values, text = progress_values(progress)
     root_relative = values.get("artifact_root")
     if not root_relative or progress.parent != repo / canonical(root_relative):
         raise Blocked("fix migration progress/root mismatch")
-    root = progress.parent
-    adoption_path = repo / adoption_relative
+    root = physical_guard(repo, values["artifact_root"], values["artifact_root"])
+    adoption_path = physical_guard(repo, adoption_relative, values["artifact_root"])
     if adoption_path.is_symlink() or not adoption_path.is_file():
         raise Blocked("fix migration adoption missing")
     adoption_sha = digest(adoption_path)

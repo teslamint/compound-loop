@@ -13,10 +13,12 @@ import sys
 from pathlib import Path, PurePosixPath
 
 from phase_artifact_core import ArtifactBlocked
+from phase_artifact_core import JOURNAL_NAME
 from phase_artifact_core import compensate as compensate_phase_artifact
+from phase_artifact_core import git_tracked as phase_artifact_git_tracked
 from phase_artifact_core import publish as publish_phase_artifact
 from phase_artifact_core import read_journal as read_phase_artifact_journal
-from phase_artifact_core import validate_owned_finals as validate_phase_artifact_finals
+from phase_artifact_core import sha256 as phase_artifact_sha256
 from phase_artifact_core import validate_pending_files as validate_phase_artifact_pending
 
 SCHEMA_VERSION = "release-loop/v1"
@@ -24,7 +26,7 @@ FEATURE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 PHASES = frozenset(("design", "plan", "implement", "review", "ship", "retro", "done", "blocked"))
 PHASE_STATUSES = frozenset(("in-progress", "waiting-user", "blocked", "complete"))
 TEST_FAILURE_ENV = "RUN_ARTIFACT_INTEGRITY_TEST_FAIL"
-TEST_FAILURES = frozenset(("archive-after-first", "handoff-after-marker", "publish-before-final"))
+TEST_FAILURES = frozenset(("archive-after-first", "archive-after-journal", "handoff-after-marker", "publish-before-final"))
 
 
 class Blocked(RuntimeError):
@@ -236,6 +238,44 @@ def move_one(source: Path, destination: Path) -> None:
     shutil.move(str(source), str(target))
 
 
+def validate_archive_publication(
+    repo: Path,
+    source_root: str,
+    destination_root: str,
+) -> Path:
+    states = []
+    for root in (source_root, destination_root):
+        journal, _, state = read_phase_artifact_journal(repo, root)
+        if journal.exists():
+            states.append((root, journal, state))
+    if len(states) > 1:
+        reject("archive destination conflict", "publisher journal exists in source and destination")
+    if not states:
+        return guard(repo, f"{source_root}/{JOURNAL_NAME}", source_root)
+    journal_root, journal, state = states[0]
+    validate_phase_artifact_pending(repo, journal_root, state)
+    if state["pending"] is not None:
+        reject("archive destination conflict", "pending publication requires recovery or compensation")
+    for key, expected in state["owned"].items():
+        candidates = []
+        for root in (source_root, destination_root):
+            candidate = guard(repo, f"{root}/{key}", root)
+            if candidate.exists() or candidate.is_symlink():
+                candidates.append(candidate)
+        if len(candidates) != 1:
+            reject("artifact ownership", f"owned final invalid {key}")
+        candidate = candidates[0]
+        relative = candidate.relative_to(repo).as_posix()
+        if (
+            candidate.is_symlink()
+            or not candidate.is_file()
+            or phase_artifact_git_tracked(repo, relative)
+            or phase_artifact_sha256(candidate) != expected
+        ):
+            reject("artifact ownership", f"owned final invalid {key}")
+    return journal
+
+
 def archive(
     repo: Path,
     progress_path: str,
@@ -243,6 +283,7 @@ def archive(
 ) -> tuple[str, list[str], str]:
     repo = repo.resolve(strict=True)
     inject_after_first = test_failure("archive-after-first")
+    inject_after_journal = test_failure("archive-after-journal")
     progress_file, values, text = validate_progress(repo, progress_path)
     mode, stored = archive_evidence(text)
     candidate = destination or stored
@@ -270,16 +311,13 @@ def archive(
     selected = stored
     destination_path = guard(repo, selected, ".release-loop/archive")
     source_rel = values["artifact_root"]
-    journal, _, publication = read_phase_artifact_journal(repo, source_rel)
-    validate_phase_artifact_finals(repo, source_rel, publication)
-    validate_phase_artifact_pending(repo, source_rel, publication)
-    if publication["pending"] is not None:
-        reject("archive destination conflict", "pending publication requires recovery or compensation")
+    journal = validate_archive_publication(repo, source_rel, selected)
     if source_rel == ".release-loop":
         guard(repo, progress_path, ".release-loop")
         source = repo / ".release-loop"
         children = []
-        for child in (source / ".tmp", journal):
+        controls = (source / ".tmp", journal) if journal.parent == source else (source / ".tmp",)
+        for child in controls:
             if child.exists() or child.is_symlink():
                 guard(repo, child.relative_to(repo).as_posix(), ".release-loop")
                 children.append(child)
@@ -302,6 +340,8 @@ def archive(
         move_one(child, destination_path)
         order.append(child.name)
         if inject_after_first:
+            reject("injected archive interruption", child.name)
+        if inject_after_journal and child.name == JOURNAL_NAME:
             reject("injected archive interruption", child.name)
     move_one(progress_file, destination_path)
     order.append("progress.md")

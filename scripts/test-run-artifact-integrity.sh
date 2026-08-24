@@ -25,6 +25,12 @@ import tempfile
 CASE = sys.argv[1]
 ROOT = Path(sys.argv[2])
 COMMAND_TRACE: list[dict[str, object]] = []
+DISPOSABLE_REPOS: list[Path] = []
+DISPOSABLE_PRE_STATES: dict[str, dict[str, object]] = {}
+MATRIX_MECHANISM = ""
+MATRIX_NEXT_INVOCATION: dict[str, object] = {}
+MATRIX_EXTERNAL_ROOT: Path | None = None
+MATRIX_EXTERNAL_PRE_STATE: dict[str, object] = {}
 
 
 def read_contract(relative: str) -> str:
@@ -45,6 +51,7 @@ RELEASE_CORE = ROOT / "skills/release-loop/scripts/phase_artifact_core.py"
 IMPLEMENTING_CORE = ROOT / "skills/implementing/scripts/phase_artifact_core.py"
 EVIDENCE_CLI = ROOT / "skills/release-loop/scripts/regenerate-matrix-evidence.py"
 FIX_MIGRATION_CLI = ROOT / "skills/release-loop/scripts/validate-fix-event-migration.py"
+sys.path.insert(0, str(CLI.parent))
 PHASE_CONSUMERS = {
     name: read_contract(f"skills/{name}/SKILL.md")
     for name in ("planning", "implementing", "reviewing", "shipping", "retrospective")
@@ -62,6 +69,7 @@ CASES = (
     "legacy_publish_then_archive",
     "archive_pending_publication",
     "interrupted_legacy_published_archive",
+    "archive_journal_resume_tamper",
     "archive_requires_persisted_destination",
     "archive_incomplete_run",
     "archive_incomplete_missing_phase",
@@ -128,6 +136,8 @@ CASES = (
     "stateful_scoped_lifecycle",
     "matrix_evidence_regeneration",
     "fix_event_migration_validation",
+    "matrix_generator_parent_symlink",
+    "fix_migration_parent_symlink",
 )
 
 CONSUMER_CASES = (
@@ -216,6 +226,11 @@ RETRO_CASES = (
 )
 
 LIFECYCLE_CASES = ("full_lifecycle",)
+MATRIX_PROBE_CASES = tuple(
+    f"matrix_{transition}_{outcome.replace('-', '_')}"
+    for transition in ("T1", "T2", "T3", "T4", "T5", "T6")
+    for outcome in ("success", "forced-failure", "rerun", "compensation", "headless", "cancellation")
+)
 FULL_GATE_REPORT = "evidence/U5/full-validation-gate.md"
 
 FULL_VALIDATION_COMMANDS = (
@@ -310,7 +325,10 @@ def new_repo(tmp: Path, name: str = "repo") -> Path:
     (repo / "README.md").write_text("fixture\n", encoding="utf-8")
     git(repo, "add", ".gitignore", "README.md")
     git(repo, "commit", "-qm", "fixture")
-    return repo.resolve(strict=True)
+    resolved = repo.resolve(strict=True)
+    DISPOSABLE_REPOS.append(resolved)
+    DISPOSABLE_PRE_STATES[str(resolved)] = matrix_fixture_snapshot(resolved)
+    return resolved
 
 
 def new_history_repo(tmp: Path, conflict: bool = False, name: str = "repo") -> Path:
@@ -404,6 +422,14 @@ class Blocked(RuntimeError):
     pass
 
 
+def is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 def run_cli(
     command: str,
     *args: str,
@@ -416,8 +442,65 @@ def run_cli(
     environment = os.environ.copy()
     if failure is not None:
         environment["RUN_ARTIFACT_INTEGRITY_TEST_FAIL"] = failure
+    argv = [sys.executable, str(cli), command, *args]
+    option_values = {args[index]: args[index + 1] for index in range(len(args) - 1) if args[index].startswith("--")}
+    trace_roots = [
+        (
+            Path(option_values[option])
+            if Path(option_values[option]).is_absolute()
+            else Path(cwd) / option_values[option]
+        ).resolve(strict=True)
+        for option in ("--repo", "--base-repo")
+        if option in option_values
+    ]
+
+    def observe_path(path: Path) -> dict[str, object]:
+        if path.is_symlink():
+            return {"exists": True, "kind": "symlink", "sha256_or_target": os.readlink(path)}
+        if path.is_file():
+            return {"exists": True, "kind": "file", "sha256_or_target": hashlib.sha256(path.read_bytes()).hexdigest()}
+        if path.is_dir():
+            return {"exists": True, "kind": "directory", "sha256_or_target": None}
+        return {"exists": False, "kind": "missing", "sha256_or_target": None}
+
+    path_bindings = []
+    primary = trace_roots[0] if trace_roots else None
+    base = trace_roots[1] if len(trace_roots) > 1 else None
+    for option in ("--progress-path", "--source", "--target", "--marker-path", "--destination"):
+        if option not in option_values:
+            continue
+        raw = option_values[option]
+        candidate = Path(raw)
+        owner = base if option == "--marker-path" and base is not None else primary
+        if candidate.is_absolute():
+            physical = candidate
+            owner = next((root for root in trace_roots if is_relative_to(candidate, root)), None)
+        elif owner is not None:
+            physical = owner / candidate
+        else:
+            physical = Path(cwd) / candidate
+        if owner is not None and not is_relative_to(physical.resolve(strict=False), owner):
+            owner = None
+        if owner is None and MATRIX_EXTERNAL_ROOT is not None and is_relative_to(
+            physical.resolve(strict=False), MATRIX_EXTERNAL_ROOT
+        ):
+            owner = MATRIX_EXTERNAL_ROOT
+        path_bindings.append({
+            "option": option,
+            "raw": raw,
+            "owner": str(owner) if owner is not None else "external",
+            "physical": str(physical),
+            "pre": observe_path(physical),
+        })
+    external_roots = {
+        str(binding["owner"])
+        for binding in path_bindings
+        if binding["owner"] not in {"external", *(str(root) for root in trace_roots)}
+    }
+    root_pre_state = {str(root): matrix_fixture_snapshot(root) for root in trace_roots}
+    root_pre_state.update({root: fixture_root_snapshot(Path(root)) for root in external_roots})
     result = subprocess.run(
-        (sys.executable, str(cli), command, *args),
+        tuple(argv),
         cwd=cwd,
         env=environment,
         text=True,
@@ -425,10 +508,17 @@ def run_cli(
         stderr=subprocess.PIPE,
         check=False,
     )
+    for binding in path_bindings:
+        binding["post"] = observe_path(Path(str(binding["physical"])))
+    root_post_state = {str(root): matrix_fixture_snapshot(root) for root in trace_roots}
+    root_post_state.update({root: fixture_root_snapshot(Path(root)) for root in external_roots})
     COMMAND_TRACE.append({
-        "argv": [sys.executable, str(cli), command, *args],
+        "argv": argv,
         "cwd": str(cwd),
         "exit_status": result.returncode,
+        "path_bindings": path_bindings,
+        "root_pre_state": root_pre_state,
+        "root_post_state": root_post_state,
         "stdout": result.stdout[-1000:],
         "stderr": result.stderr[-1000:],
     })
@@ -468,6 +558,38 @@ def matrix_fixture_snapshot(repo: Path) -> dict[str, object]:
     }
 
 
+def fixture_root_snapshot(root: Path) -> dict[str, object]:
+    inventory = []
+    for path in sorted(root.rglob("*")):
+        relative_path = path.relative_to(root)
+        if ".git" in relative_path.parts:
+            continue
+        relative = relative_path.as_posix()
+        inventory.append({
+            "path": relative,
+            "kind": "symlink" if path.is_symlink() else "file" if path.is_file() else "directory",
+            "sha256_or_target": (
+                os.readlink(path) if path.is_symlink()
+                else hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file()
+                else None
+            ),
+        })
+    return {"head": None, "index": None, "status": None, "inventory": inventory}
+
+
+def filesystem_manifest(root: Path) -> dict[str, tuple[str, bytes | str | None]]:
+    manifest = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            manifest[relative] = ("symlink", os.readlink(path))
+        elif path.is_file():
+            manifest[relative] = ("file", path.read_bytes())
+        else:
+            manifest[relative] = ("directory", None)
+    return manifest
+
+
 def write_matrix_observation(
     case: str,
     repo: Path,
@@ -480,18 +602,38 @@ def write_matrix_observation(
         return
     target = Path(selected)
     after = sent.read_bytes()
-    roots = sorted(
-        path.relative_to(repo).as_posix()
-        for path in (repo / ".release-loop").glob("**/progress.md")
-        if path.is_file()
-    ) if (repo / ".release-loop").is_dir() else []
+    DISPOSABLE_PRE_STATES[str(repo)] = pre_state
+    roots = []
+    pre_states = {}
+    post_states = {}
+    target_inventories = {}
+    for candidate in DISPOSABLE_REPOS:
+        candidate_key = str(candidate)
+        candidate_post = matrix_fixture_snapshot(candidate)
+        progress_records = sorted(
+            path.relative_to(candidate).as_posix()
+            for path in (candidate / ".release-loop").glob("**/progress.md")
+            if path.is_file()
+        ) if (candidate / ".release-loop").is_dir() else []
+        roots.append({"kind": "git", "repo": candidate_key, "progress_records": progress_records})
+        pre_states[candidate_key] = DISPOSABLE_PRE_STATES[candidate_key]
+        post_states[candidate_key] = candidate_post
+        target_inventories[candidate_key] = candidate_post["inventory"]
+    if MATRIX_EXTERNAL_ROOT is not None:
+        external_key = str(MATRIX_EXTERNAL_ROOT)
+        external_post = fixture_root_snapshot(MATRIX_EXTERNAL_ROOT)
+        roots.append({"kind": "fixture", "repo": external_key, "progress_records": []})
+        pre_states[external_key] = MATRIX_EXTERNAL_PRE_STATE
+        post_states[external_key] = external_post
+        target_inventories[external_key] = external_post["inventory"]
     observation = {
-        "schema": "matrix-fixture-observation/v1",
+        "schema": "matrix-fixture-observation/v2",
         "case": case,
-        "disposable_root": str(repo),
-        "progress_records": roots,
-        "pre_state": pre_state,
-        "post_state": matrix_fixture_snapshot(repo),
+        "primary_root": str(repo),
+        "roots": sorted(roots, key=lambda row: row["repo"]),
+        "pre_states": pre_states,
+        "post_states": post_states,
+        "target_inventories": target_inventories,
         "command_trace": COMMAND_TRACE,
         "boundary_sentinel": {
             "path": str(sent),
@@ -500,8 +642,8 @@ def write_matrix_observation(
             "unchanged": after == before,
         },
         "stub_identity": "not applicable; disposable local Git and filesystem only",
-        "next_invocation": ["bash", "scripts/test-run-artifact-integrity.sh", case],
-        "mechanism_check": "all case assertions completed and the boundary sentinel stayed byte-identical",
+        "next_invocation": MATRIX_NEXT_INVOCATION or {"action": ["bash", "scripts/test-run-artifact-integrity.sh", case], "exit_status": 0, "result": "probe completed"},
+        "mechanism_check": MATRIX_MECHANISM or "all case assertions completed and the boundary sentinel stayed byte-identical",
         "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1964,11 +2106,342 @@ def run_retro_case(name: str, tmp: Path, sent: Path, before: bytes) -> None:
     assert sent.read_bytes() == before
 
 
+def run_matrix_probe(name: str, tmp: Path, sent: Path, before: bytes) -> None:
+    global MATRIX_MECHANISM, MATRIX_NEXT_INVOCATION, MATRIX_EXTERNAL_ROOT, MATRIX_EXTERNAL_PRE_STATE
+    _, transition, outcome_token = name.split("_", 2)
+    outcome = outcome_token.replace("_", "-")
+
+    def blocked(action, diagnostic: str) -> str:
+        try:
+            action()
+        except Blocked as exc:
+            assert diagnostic in str(exc), str(exc)
+            return str(exc)
+        raise AssertionError(f"{transition}/{outcome} did not block")
+
+    if transition == "T3":
+        repo = new_history_repo(tmp, conflict=outcome in {"forced-failure", "compensation"})
+    else:
+        repo = new_repo(tmp)
+    pre_state = matrix_fixture_snapshot(repo)
+    MATRIX_EXTERNAL_ROOT = tmp.resolve(strict=True)
+    MATRIX_EXTERNAL_PRE_STATE = fixture_root_snapshot(MATRIX_EXTERNAL_ROOT)
+
+    if transition == "T1":
+        if outcome == "success":
+            path = initialize(repo, "alpha")
+            assert path.is_file() and not (repo / ".release-loop/progress.md").exists()
+            MATRIX_MECHANISM = "T1-v3 success created one exact scoped progress record and no legacy record"
+        elif outcome == "forced-failure":
+            occupied = repo / ".release-loop/runs/alpha/occupied.txt"
+            occupied.parent.mkdir(parents=True)
+            occupied.write_bytes(b"occupied\n")
+            blocked(lambda: prepare_scope(repo, "alpha"), "artifact scope collision")
+            assert not (occupied.parent / "progress.md").exists()
+            MATRIX_MECHANISM = "T1-v3 forced failure rejected an occupied scope before progress publication"
+        elif outcome == "rerun":
+            path, state = prepare_scope(repo, "alpha")
+            assert state == "new" and path.parent.is_dir() and not any(path.parent.iterdir())
+            assert prepare_scope(repo, "alpha") == (path, "new")
+            path.write_text(progress("alpha", ".release-loop/runs/alpha"), encoding="utf-8")
+            assert prepare_scope(repo, "alpha") == (path, "resume")
+            MATRIX_MECHANISM = "T1-v3 rerun reused the same empty scope and then resumed one published record"
+        elif outcome == "compensation":
+            path, state = prepare_scope(repo, "alpha")
+            assert state == "new" and not path.exists() and not any(path.parent.iterdir())
+            path.parent.rmdir()
+            assert not path.parent.exists() and not (repo / ".release-loop/progress.md").exists()
+            MATRIX_MECHANISM = "T1-v3 compensation removed only the proven empty pre-publication scope"
+        elif outcome == "headless":
+            initialize(repo, "alpha")
+            initialize(repo, "beta")
+            blocked(lambda: discover(repo), "multiple valid live records")
+            assert len(list((repo / ".release-loop/runs").glob("*/progress.md"))) == 2
+            MATRIX_MECHANISM = "T1-v3 headless selection blocked on two valid records without choosing either"
+        else:
+            path, state = prepare_scope(repo, "alpha")
+            assert state == "new" and not path.exists()
+            path.parent.rmdir()
+            assert not path.parent.exists()
+            retry_path, retry_state = prepare_scope(repo, "alpha")
+            assert retry_path == path and retry_state == "new" and not retry_path.exists()
+            MATRIX_MECHANISM = "T1-v3 cancellation removed only the empty scope and the same scope prepared again"
+
+    elif transition == "T6":
+        path = initialize(repo, "alpha")
+        root = path.parent
+        if outcome == "success":
+            payload = publish_from_cli(repo, path, "reports/U1.md", b"success\n", CLI)
+            assert payload["state"] == "published" and (root / "reports/U1.md").is_file()
+            MATRIX_MECHANISM = "T6-v3 success published one journal-owned sibling under the selected root"
+        elif outcome == "forced-failure":
+            target = root / "reports/U1.md"
+            target.parent.mkdir()
+            target.write_bytes(b"tracked\n")
+            git(repo, "add", "-f", target.relative_to(repo).as_posix())
+            blocked(lambda: publish_from_cli(repo, path, "reports/U1.md", b"new\n", CLI), "artifact target collision")
+            assert target.read_bytes() == b"tracked\n"
+            MATRIX_MECHANISM = "T6-v3 forced failure preserved a tracked sibling collision byte-for-byte"
+        elif outcome == "rerun":
+            first = publish_from_cli(repo, path, "reports/U1.md", b"same\n", CLI)
+            second = publish_from_cli(repo, path, "reports/U1.md", b"same\n", CLI)
+            assert first["sha256"] == second["sha256"] and second["state"] == "reused"
+            MATRIX_MECHANISM = "T6-v3 rerun reused one matching owned final without allocating another target"
+        elif outcome == "compensation":
+            blocked(
+                lambda: publish_from_cli(repo, path, "reports/U1.md", b"pending\n", CLI, "publish-after-prepare"),
+                "injected publish interruption",
+            )
+            result = run_cli("compensate", "--repo", str(repo), "--progress-path", path.relative_to(repo).as_posix())
+            assert result["state"] == "compensated" and not (root / "reports/U1.md").exists()
+            MATRIX_MECHANISM = "T6-v3 compensation removed only the journal-bound pending source"
+        elif outcome == "headless":
+            source = root / ".tmp/headless.tmp"
+            source.parent.mkdir()
+            source.write_bytes(b"headless\n")
+            blocked(
+                lambda: run_cli(
+                    "publish", "--repo", str(repo),
+                    "--progress-path", ".release-loop/progress.md",
+                    "--source", source.relative_to(repo).as_posix(),
+                    "--target", (root / "reports/U1.md").relative_to(repo).as_posix(),
+                ),
+                "invalid progress",
+            )
+            assert source.is_file() and not (root / "reports/U1.md").exists()
+            MATRIX_MECHANISM = "T6-v3 headless publication blocked on the missing exact progress path before sibling write"
+        else:
+            source = root / ".tmp/cancelled.tmp"
+            source.parent.mkdir()
+            source.write_bytes(b"cancelled\n")
+            source.unlink()
+            assert not (root / "reports/U1.md").exists() and not (root / ".phase-artifact-ownership.json").exists()
+            MATRIX_MECHANISM = "T6-v3 cancellation before prepare left no journal, temporary source, or final"
+
+    elif transition == "T2":
+        path = initialize(repo, "alpha")
+        reviews = ReviewFixture(repo, path)
+        head = git(repo, "rev-parse", "HEAD")
+        event = reviews.allocate("unit", "U1", head)
+        if outcome == "success":
+            reviews.complete(str(event["id"]), reviewer_output("clean"))
+            assert event["state"] == "complete" and reviews.counts()["unit_passes"] == 1
+            MATRIX_MECHANISM = "T2-v3 success sealed one result and completed the reserved event once"
+        elif outcome == "forced-failure":
+            final = reviews._result_path(event)
+            final.parent.mkdir(parents=True, exist_ok=True)
+            final.write_bytes(b"foreign-result\n")
+            blocked(lambda: reviews.complete(str(event["id"]), reviewer_output("clean")), "review-event-conflict")
+            assert event["state"] == "started" and reviews.counts()["unit_passes"] == 0
+            MATRIX_MECHANISM = "T2-v3 forced failure kept the event started when a foreign final occupied its path"
+        elif outcome == "rerun":
+            assert reviews.recover(str(event["id"])) == "redispatch"
+            replay = reviews.allocate("unit", "U1", head)
+            assert replay is event and len(reviews.events) == 1
+            reviews.complete(str(event["id"]), reviewer_output("clean"))
+            MATRIX_MECHANISM = "T2-v3 rerun redispatched the same started ID and completed it once"
+        elif outcome == "compensation":
+            temporary = path.parent / ".tmp/unit-U1-1.tmp"
+            temporary.parent.mkdir(exist_ok=True)
+            temporary.write_bytes(b"owned-temporary\n")
+            temporary.unlink()
+            assert event["state"] == "started" and not reviews._result_path(event).exists()
+            MATRIX_MECHANISM = "T2-v3 compensation removed only the event temporary and preserved the started event"
+        elif outcome == "headless":
+            before_counts = reviews.counts()
+            assert reviews.recover(str(event["id"])) == "redispatch"
+            assert event["state"] == "started" and reviews.counts() == before_counts
+            MATRIX_MECHANISM = "T2-v3 headless missing-worker output returned redispatch with the event still started"
+        else:
+            assert event["state"] == "started" and reviews.counts()["unit_passes"] == 0
+            assert not reviews._result_path(event).exists()
+            assert reviews.recover(str(event["id"])) == "redispatch"
+            MATRIX_MECHANISM = "T2-v3 cancellation preserved the started event and its next recovery returned redispatch"
+
+    elif transition == "T3":
+        path = initialize(repo, "alpha")
+        history = HistoryFixture(repo, path, "main", "matrix-v3-session")
+        command = 'git rebase --onto "origin/main" "main" "feat/fixture"'
+        old_range = dict(history.current_commit_range)
+        if outcome == "success":
+            approval = history.approve(command, "origin/main")
+            result = history.rewrite(command, "origin/main")
+            assert approval["state"] == "consumed" and result["state"] == "success"
+            assert history.current_commit_range != old_range
+            MATRIX_MECHANISM = "T3-v3 success persisted approval before rewrite and refreshed the verified range"
+        elif outcome == "forced-failure":
+            history.approve(command, "origin/main")
+            result = history.rewrite(command, "origin/main")
+            assert result["state"] == "failed" and history.current_commit_range == old_range == history.git_range()
+            MATRIX_MECHANISM = "T3-v3 forced failure aborted the conflict and retained the exact old range"
+        elif outcome == "rerun":
+            cancelled = history.approve(command, "origin/main")
+            history.cancel(str(cancelled["id"]))
+            fresh = history.approve(command, "origin/main")
+            assert fresh["id"] != cancelled["id"]
+            result = history.rewrite(command, "origin/main")
+            assert result["state"] == "success"
+            MATRIX_MECHANISM = "T3-v3 rerun required fresh approval after cancellation and then succeeded"
+        elif outcome == "compensation":
+            history.approve(command, "origin/main")
+            result = history.rewrite(command, "origin/main")
+            assert result["state"] == "failed" and git(repo, "status", "--porcelain") == ""
+            assert history.current_commit_range == old_range
+            MATRIX_MECHANISM = "T3-v3 compensation ran the exact abort and verified the unchanged old range"
+        elif outcome == "headless":
+            blocked(lambda: history.rewrite(command, "origin/main"), "stale-commit-range")
+            assert history.command_calls == 0 and history.current_commit_range == old_range
+            MATRIX_MECHANISM = "T3-v3 headless rewrite blocked before command execution without USER approval"
+        else:
+            approval = history.approve(command, "origin/main")
+            result = history.cancel(str(approval["id"]))
+            assert result["state"] == "cancelled" and history.command_calls == 0
+            assert history.current_commit_range == old_range
+            MATRIX_MECHANISM = "T3-v3 cancellation recorded a terminal result without executing the rewrite"
+
+    elif transition == "T4":
+        path = initialize(repo, "alpha")
+        publish_phase_artifact(repo, path, "reports/U1.md", b"handoff\n")
+        base = new_repo(tmp, "handoff-base")
+        if outcome == "success":
+            result = handoff_scope(repo, base, path.relative_to(repo).as_posix())
+            assert result["cleanup_permitted"] and (base / path.relative_to(repo)).is_file()
+            MATRIX_MECHANISM = "T4-v3 success transferred the exact scope and permitted source cleanup"
+        elif outcome == "forced-failure":
+            outside = tmp / "handoff-outside"
+            outside.mkdir()
+            release_root = base / ".release-loop"
+            release_root.mkdir()
+            (release_root / "runs").symlink_to(outside, target_is_directory=True)
+            blocked(lambda: handoff_scope(repo, base, path.relative_to(repo).as_posix()), "path boundary")
+            assert path.is_file() and not any(outside.iterdir())
+            MATRIX_MECHANISM = "T4-v3 forced failure rejected a symlinked base-owner destination before transfer"
+        elif outcome == "rerun":
+            blocked(
+                lambda: handoff_scope(repo, base, path.relative_to(repo).as_posix(), fail_after_marker=True),
+                "injected handoff interruption",
+            )
+            result = handoff_scope(repo, base, path.relative_to(repo).as_posix())
+            assert result["cleanup_permitted"]
+            MATRIX_MECHANISM = "T4-v3 rerun reused the exact owner marker and completed the partial transfer"
+        elif outcome == "compensation":
+            target = base / path.relative_to(repo)
+            target.parent.mkdir(parents=True)
+            target.write_text(progress("alpha", ".release-loop/runs/alpha") + "mismatch\n", encoding="utf-8")
+            blocked(lambda: handoff_scope(repo, base, path.relative_to(repo).as_posix()), "handoff target mismatch")
+            assert path.is_file() and target.is_file()
+            MATRIX_MECHANISM = "T4-v3 compensation preserved source and mismatched destination for manual recovery"
+        elif outcome == "headless":
+            result = handoff_scope(repo, base, path.relative_to(repo).as_posix())
+            marker = json.loads(result["marker"].read_text(encoding="utf-8"))
+            assert marker["source_worktree"] == str(repo) and result["cleanup_permitted"]
+            MATRIX_MECHANISM = "T4-v3 headless local handoff proved both owners and completed without an outward target"
+        else:
+            blocked(
+                lambda: handoff_scope(repo, base, path.relative_to(repo).as_posix(), fail_after_marker=True),
+                "injected handoff interruption",
+            )
+            assert path.is_file() and (base / ".release-loop/.handoff/alpha.json").is_file()
+            resumed = handoff_scope(repo, base, path.relative_to(repo).as_posix())
+            assert resumed["cleanup_permitted"]
+            MATRIX_MECHANISM = "T4-v3 cancellation retained the source and the same owner marker resumed successfully"
+
+    else:
+        path = initialize(repo, "alpha")
+        publish_phase_artifact(repo, path, "reports/U1.md", b"archive\n")
+        destination = ".release-loop/archive/2026-08-24-matrix-v3-" + outcome
+        if outcome == "forced-failure":
+            persist_archive_evidence(path, destination, "completed")
+            outside = tmp / "archive-outside"
+            outside.mkdir()
+            archive_root = repo / ".release-loop/archive"
+            archive_root.symlink_to(outside, target_is_directory=True)
+            blocked(
+                lambda: archive_scope(repo, path.relative_to(repo).as_posix(), destination, persist_authority=False),
+                "path boundary",
+            )
+            assert path.is_file() and not any(outside.iterdir())
+            MATRIX_MECHANISM = "T5-v3 forced failure rejected a symlinked archive destination before a move"
+        elif outcome in {"rerun", "compensation", "cancellation"}:
+            persist_archive_evidence(path, destination, "completed")
+            blocked(
+                lambda: archive_scope(
+                    repo, path.relative_to(repo).as_posix(), destination,
+                    fail_after_first=True, persist_authority=False,
+                ),
+                "injected archive interruption",
+            )
+            assert path.is_file()
+            if outcome == "cancellation":
+                assert archive_scope(repo, path.relative_to(repo).as_posix(), None)[-1] == "progress.md"
+                MATRIX_MECHANISM = "T5-v3 cancellation left progress as commit point and the same destination resumed successfully"
+            else:
+                assert archive_scope(repo, path.relative_to(repo).as_posix(), None)[-1] == "progress.md"
+                MATRIX_MECHANISM = (
+                    "T5-v3 rerun reused the persisted destination and moved only remaining children"
+                    if outcome == "rerun"
+                    else "T5-v3 compensation finished the same terminal destination without reverse movement"
+                )
+        else:
+            archive_scope(repo, path.relative_to(repo).as_posix(), destination)
+            assert not path.exists() and (repo / destination / "progress.md").is_file()
+            MATRIX_MECHANISM = (
+                "T5-v3 success moved progress last into one exact complete archive"
+                if outcome == "success"
+                else "T5-v3 headless local archive completed after exact root and destination validation"
+            )
+
+    if transition == "T2":
+        MATRIX_NEXT_INVOCATION = {
+            "action": "recover or resume " + str(event["id"]),
+            "exit_status": 0,
+            "result": MATRIX_MECHANISM,
+        }
+    elif transition == "T3":
+        MATRIX_NEXT_INVOCATION = {
+            "action": command,
+            "exit_status": 1 if outcome in {"forced-failure", "compensation", "headless"} else 0,
+            "result": MATRIX_MECHANISM,
+        }
+    elif transition == "T6" and outcome == "cancellation":
+        MATRIX_NEXT_INVOCATION = {
+            "action": "resume with the same exact progress path after cancellation",
+            "exit_status": 0,
+            "result": MATRIX_MECHANISM,
+        }
+    elif COMMAND_TRACE:
+        trace = COMMAND_TRACE[-1]
+        MATRIX_NEXT_INVOCATION = {
+            "action": trace["argv"],
+            "exit_status": trace["exit_status"],
+            "result": (trace["stdout"] or trace["stderr"] or MATRIX_MECHANISM)[-1000:],
+        }
+    else:
+        MATRIX_NEXT_INVOCATION = {
+            "action": ["bash", "scripts/test-run-artifact-integrity.sh", name],
+            "exit_status": 0,
+            "result": MATRIX_MECHANISM,
+        }
+    assert sent.read_bytes() == before
+    write_matrix_observation(name, repo, pre_state, sent, before)
+
+
 def run_case(name: str) -> None:
+    global MATRIX_MECHANISM, MATRIX_NEXT_INVOCATION, MATRIX_EXTERNAL_ROOT, MATRIX_EXTERNAL_PRE_STATE
+    COMMAND_TRACE.clear()
+    DISPOSABLE_REPOS.clear()
+    DISPOSABLE_PRE_STATES.clear()
+    MATRIX_MECHANISM = ""
+    MATRIX_NEXT_INVOCATION = {}
+    MATRIX_EXTERNAL_ROOT = None
+    MATRIX_EXTERNAL_PRE_STATE = {}
     require_contract(check_invocations=name == "operative_contract_mutation")
     with tempfile.TemporaryDirectory(prefix=f"run-artifact-{name}-") as tmp_name:
         tmp = Path(tmp_name)
         sent, before = sentinel(tmp)
+        if name in MATRIX_PROBE_CASES:
+            run_matrix_probe(name, tmp, sent, before)
+            return
         if name in RETRO_CASES + LIFECYCLE_CASES:
             run_retro_case(name, tmp, sent, before)
             return
@@ -2197,6 +2670,59 @@ def run_case(name: str) -> None:
             archived = repo / destination
             assert (archived / ".phase-artifact-ownership.json").is_file()
             assert (archived / "reports/U1.md").is_file()
+        elif name == "archive_journal_resume_tamper":
+            for mode in ("legacy", "scoped"):
+                candidate = new_repo(tmp, "journal-tamper-" + mode)
+                if mode == "legacy":
+                    candidate_progress = candidate / ".release-loop/progress.md"
+                    candidate_progress.parent.mkdir()
+                    candidate_progress.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+                else:
+                    candidate_progress = initialize(candidate, "alpha")
+                publish_from_cli(candidate, candidate_progress, "reports/U1.md", b"owned-before-archive\n", CLI)
+                destination = ".release-loop/archive/2026-08-24-journal-tamper-" + mode
+                persist_archive_evidence(candidate_progress, destination, "completed")
+                result = subprocess.run(
+                    (
+                        sys.executable, str(CLI), "archive",
+                        "--repo", str(candidate),
+                        "--progress-path", candidate_progress.relative_to(candidate).as_posix(),
+                        "--destination", destination,
+                    ),
+                    cwd=ROOT,
+                    env={**os.environ, "RUN_ARTIFACT_INTEGRITY_TEST_FAIL": "archive-after-journal"},
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                assert result.returncode != 0 and "injected archive interruption" in result.stderr
+                archived_journal = candidate / destination / ".phase-artifact-ownership.json"
+                source_final = candidate_progress.parent / "reports/U1.md"
+                assert archived_journal.is_file() and source_final.is_file() and candidate_progress.is_file()
+                source_final.write_bytes(b"tampered-after-journal\n")
+                progress_before = candidate_progress.read_bytes()
+                assert_blocked_preserves(
+                    lambda candidate=candidate, candidate_progress=candidate_progress, destination=destination: archive_scope(
+                        candidate,
+                        candidate_progress.relative_to(candidate).as_posix(),
+                        destination,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    "owned final invalid",
+                )
+                assert candidate_progress.read_bytes() == progress_before
+                assert archived_journal.is_file()
+                source_final.write_bytes(b"owned-before-archive\n")
+                assert archive_scope(
+                    candidate,
+                    candidate_progress.relative_to(candidate).as_posix(),
+                    destination,
+                    persist_authority=False,
+                )[-1] == "progress.md"
+                assert (candidate / destination / "reports/U1.md").is_file()
         elif name == "archive_requires_persisted_destination":
             path = initialize(repo, "alpha")
             before_progress = path.read_bytes()
@@ -3110,15 +3636,30 @@ def run_case(name: str) -> None:
         elif name == "matrix_evidence_regeneration":
             path = initialize(repo, "alpha")
             stale = (
-                "evidence/U1/matrix.md",
-                *(f"evidence/U2/T6-{outcome}.md" for outcome in ("success", "forced-failure", "rerun", "compensation", "headless", "cancellation")),
-                *(f"evidence/U4/T3-{outcome}.md" for outcome in ("success", "forced-failure", "rerun", "compensation", "headless", "cancellation")),
-                *(f"evidence/U4/round2/T3-{outcome}.md" for outcome in ("success", "forced-failure", "rerun", "compensation", "headless", "cancellation")),
+                "evidence/matrix-authority-v2.json",
+                *(
+                    f"evidence/{unit}/{transition}-v2-{outcome}.md"
+                    for transition, unit in (("T1", "U1"), ("T2", "U3"), ("T3", "U4"), ("T4", "U1"), ("T5", "U1"), ("T6", "U2"))
+                    for outcome in ("success", "forced-failure", "rerun", "compensation", "headless", "cancellation")
+                ),
             )
             for index, relative in enumerate(stale):
-                target = path.parent / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(f"stale-{index}\n", encoding="utf-8")
+                publish_from_cli(repo, path, relative, f"stale-{index}\n".encode(), CLI)
+            interrupted = subprocess.run(
+                (
+                    sys.executable,
+                    str(EVIDENCE_CLI),
+                    "--repo", str(repo),
+                    "--progress-path", path.relative_to(repo).as_posix(),
+                ),
+                cwd=ROOT,
+                env={**os.environ, "RUN_ARTIFACT_MATRIX_TEST_FAIL_AFTER": "5"},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            assert interrupted.returncode != 0 and "injected matrix evidence interruption" in interrupted.stderr
             result = subprocess.run(
                 (
                     sys.executable,
@@ -3135,7 +3676,7 @@ def run_case(name: str) -> None:
             assert result.returncode == 0, result.stderr
             payload = json.loads(result.stdout)
             assert payload["state"] == "published" and payload["record_count"] == 36
-            manifest = path.parent / "evidence/matrix-authority-v2.json"
+            manifest = path.parent / "evidence/matrix-authority-v3.json"
             authority = json.loads(manifest.read_text(encoding="utf-8"))
             assert len(authority["records"]) == 36 and len(authority["supersedes"]) == len(stale)
             before_manifest = manifest.read_bytes()
@@ -3173,6 +3714,50 @@ def run_case(name: str) -> None:
             manifest.write_text(json.dumps(mismatch, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
             assert_authority_blocked("manifest-digest", "digest mismatch")
             manifest.write_bytes(before_manifest)
+            sibling_row = next(
+                row for row in authority["records"]
+                if row["transition"] == "T4-v3" and row["outcome"] == "success"
+            )
+            sibling_record = repo / sibling_row["path"]
+            sibling_bytes = sibling_record.read_bytes()
+            sibling_payload = json.loads(sibling_bytes)
+            omitted_root = next(
+                row["repo"] for row in sibling_payload["root_identity"]["roots"]
+                if row["kind"] == "git" and row["repo"] != sibling_payload["root_identity"]["primary_root"]
+            )
+            sibling_payload["root_identity"]["roots"] = [
+                row for row in sibling_payload["root_identity"]["roots"] if row["repo"] != omitted_root
+            ]
+            sibling_record.write_text(json.dumps(sibling_payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            assert_authority_blocked("omitted-sibling-root", "root inventory mismatch")
+            sibling_record.write_bytes(sibling_bytes)
+            placeholder_record = repo / authority["records"][0]["path"]
+            placeholder_bytes = placeholder_record.read_bytes()
+            placeholder_payload = json.loads(placeholder_bytes)
+            placeholder_payload["stub_identity"] = "<stub>"
+            placeholder_record.write_text(json.dumps(placeholder_payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            assert_authority_blocked("placeholder", "placeholder forbidden")
+            placeholder_record.write_bytes(placeholder_bytes)
+            external_row = next(
+                row for row in authority["records"]
+                if row["transition"] == "T5-v3" and row["outcome"] == "forced-failure"
+            )
+            external_record = repo / external_row["path"]
+            external_bytes = external_record.read_bytes()
+            external_payload = json.loads(external_bytes)
+            external_binding = next(
+                binding
+                for trace in external_payload["command_or_injection"]["inner_trace"]
+                for binding in trace["path_bindings"]
+                if binding["owner"] == next(
+                    root["repo"] for root in external_payload["root_identity"]["roots"] if root["kind"] == "fixture"
+                )
+            )
+            external_binding["owner"] = "external"
+            external_record.write_text(json.dumps(external_payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            assert_authority_blocked("unbound-external", "trace root mismatch")
+            external_record.write_bytes(external_bytes)
+            manifest.write_bytes(before_manifest)
             dirty_record = repo / authority["records"][0]["path"]
             record_bytes = dirty_record.read_bytes()
             dirty_payload = json.loads(record_bytes)
@@ -3185,6 +3770,13 @@ def run_case(name: str) -> None:
             dirty_stale.write_bytes(stale_bytes + b"dirty\n")
             assert_authority_blocked("dirty-stale", "stale digest mismatch")
             dirty_stale.write_bytes(stale_bytes)
+            journal_path = path.parent / ".phase-artifact-ownership.json"
+            journal_bytes = journal_path.read_bytes()
+            journal_payload = json.loads(journal_bytes)
+            journal_payload["owned"].pop(stale[1])
+            journal_path.write_text(json.dumps(journal_payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            assert_authority_blocked("unowned-stale", "publisher-owned")
+            journal_path.write_bytes(journal_bytes)
             manifest.write_bytes(before_manifest)
             replay = subprocess.run(
                 (
@@ -3316,6 +3908,112 @@ def run_case(name: str) -> None:
             ), encoding="utf-8")
             replay = migration.validate_migration(repo, path.relative_to(repo).as_posix(), adoption_path, lambda _: "G")
             assert replay["state"] == "reused" and replay["review_counts"]["fix_rounds"] == 1
+        elif name == "matrix_generator_parent_symlink":
+            outside = tmp / "matrix-generator-external"
+            root = outside / "runs/alpha"
+            root.mkdir(parents=True)
+            external_progress = root / "progress.md"
+            external_progress.write_text(progress("alpha", ".release-loop/runs/alpha"), encoding="utf-8")
+            sentinel_file = outside / "sentinel.txt"
+            sentinel_file.write_bytes(b"EXTERNAL-MATRIX-SENTINEL\n")
+            before_tree = filesystem_manifest(outside)
+            (repo / ".release-loop").symlink_to(outside, target_is_directory=True)
+            attack = subprocess.run(
+                (
+                    sys.executable,
+                    str(EVIDENCE_CLI),
+                    "--repo", str(repo),
+                    "--progress-path", ".release-loop/runs/alpha/progress.md",
+                ),
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            assert attack.returncode != 0 and "path boundary" in attack.stderr
+            assert filesystem_manifest(outside) == before_tree
+        elif name == "fix_migration_parent_symlink":
+            outside = tmp / "fix-migration-external"
+            root = outside / "runs/alpha"
+            root.mkdir(parents=True)
+            external_progress = root / "progress.md"
+            head = git(repo, "rev-parse", "HEAD")
+            source = root / "reviews/events/U3-round1.md"
+            report = root / "reports/U3-fix.md"
+            source.parent.mkdir(parents=True)
+            report.parent.mkdir(parents=True)
+            source.write_bytes(b"source\n")
+            report.write_bytes(b"report\n")
+            source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+            report_sha = hashlib.sha256(report.read_bytes()).hexdigest()
+            progress_text = progress("alpha", ".release-loop/runs/alpha") + (
+                "\nreview_counts:\n"
+                "  completeness: partial\n"
+                "  counting_started_at: 2026-08-24T00:00:00Z\n"
+                "review_events:\n"
+                "  - id: unit:U3:1\n"
+                "    kind: unit\n"
+                "    subject: U3\n"
+                "    ordinal: 1\n"
+                "    state: complete\n"
+                f"    reviewed_head: {head}\n"
+                "    result_path: .release-loop/runs/alpha/reviews/events/U3-round1.md\n"
+                f"    result_sha256: {source_sha}\n"
+                "    outcome: blocked\n"
+                "    finding_inventory: []\n"
+            )
+            external_progress.write_text(progress_text, encoding="utf-8")
+            adoption = root / "reviews/adoptions/fix-history.json"
+            adoption.parent.mkdir(parents=True)
+            adoption_payload = {
+                "counting_started_at": "2026-08-24T00:00:00Z",
+                "progress_path": ".release-loop/runs/alpha/progress.md",
+                "rows": [{
+                    "fix_commit": head,
+                    "fixer_report_path": ".release-loop/runs/alpha/reports/U3-fix.md",
+                    "fixer_report_sha256": report_sha,
+                    "id": "fix:U3:1",
+                    "ordinal": 1,
+                    "reviewed_head": head,
+                    "source_review_event": "unit:U3:1",
+                    "subject": "U3",
+                }],
+                "schema": "review-fix-event-migration/v1",
+            }
+            adoption.write_text(json.dumps(adoption_payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            adoption_sha = hashlib.sha256(adoption.read_bytes()).hexdigest()
+            journal = {
+                "owned": {
+                    "reports/U3-fix.md": report_sha,
+                    "reviews/adoptions/fix-history.json": adoption_sha,
+                    "reviews/events/U3-round1.md": source_sha,
+                },
+                "pending": None,
+                "schema": "phase-artifact-ownership/v1",
+            }
+            (root / ".phase-artifact-ownership.json").write_text(
+                json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            before_tree = filesystem_manifest(outside)
+            (repo / ".release-loop").symlink_to(outside, target_is_directory=True)
+            spec = importlib.util.spec_from_file_location("fix_event_migration_symlink", FIX_MIGRATION_CLI)
+            assert spec is not None and spec.loader is not None
+            migration = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(migration)
+            try:
+                migration.validate_migration(
+                    repo,
+                    ".release-loop/runs/alpha/progress.md",
+                    ".release-loop/runs/alpha/reviews/adoptions/fix-history.json",
+                    lambda _: "G",
+                )
+            except migration.Blocked as exc:
+                assert "path boundary" in str(exc)
+            else:
+                raise AssertionError("parent-symlink migration escaped the repository")
+            assert filesystem_manifest(outside) == before_tree
         elif name in REVIEW_CASES:
             require_review_contract()
             path = initialize(repo, "alpha")
@@ -3608,7 +4306,7 @@ def run_case(name: str) -> None:
 if CASE == "scope":
     selected = CASES
 elif CASE == "all":
-    selected = CASES + REVIEW_CASES + HISTORY_CASES + RETRO_CASES
+    selected = CASES + REVIEW_CASES + HISTORY_CASES + RETRO_CASES + MATRIX_PROBE_CASES
 elif CASE == "consumers":
     selected = CONSUMER_CASES
 elif CASE == "reviews":
@@ -3629,7 +4327,7 @@ elif CASE == "full_validation_gate":
         raise SystemExit(1)
     print("ok:   [run-artifact-integrity] full_lifecycle")
     raise SystemExit(0)
-elif CASE in CASES + REVIEW_CASES + HISTORY_CASES + RETRO_CASES + LIFECYCLE_CASES:
+elif CASE in CASES + REVIEW_CASES + HISTORY_CASES + RETRO_CASES + LIFECYCLE_CASES + MATRIX_PROBE_CASES:
     selected = (CASE,)
 else:
     print("usage: bash scripts/test-run-artifact-integrity.sh <scope|all|consumers|reviews|history|retro|lifecycle|full_validation_gate|case>", file=sys.stderr)
