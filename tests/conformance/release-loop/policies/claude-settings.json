@@ -7,24 +7,7 @@
       "Edit",
       "Glob",
       "Grep",
-      "Bash(git status:*)",
-      "Bash(git diff:*)",
-      "Bash(git log:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(git push origin:*)",
-      "Bash(git push -u origin:*)",
-      "Bash(git rev-parse:*)",
-      "Bash(git ls-remote:*)",
-      "Bash(gh auth status:*)",
-      "Bash(gh repo view:*)",
-      "Bash(gh pr create:*)",
-      "Bash(gh pr checks:*)",
-      "Bash(gh pr view:*)",
-      "Bash(gh pr comment:*)",
-      "Bash(gh pr merge:*)",
-      "Bash(gh api:*)",
-      "Bash(gh run view:*)"
+      "Bash(.conformance/bin/fixture-exec:*)"
     ],
     "deny": [
       "WebFetch",
@@ -32,6 +15,8 @@
       "Bash(curl:*)",
       "Bash(ssh:*)",
       "Bash(npm publish:*)",
+      "Bash(git:*)",
+      "Bash(gh:*)",
       "Bash(python:*)",
       "Bash(python3:*)"
     ]
