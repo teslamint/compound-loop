@@ -6,9 +6,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-}"
 
 case "$MODE" in
-  static-inventory|static|fixture|gate) ;;
+  static-inventory|static|fixture|gate|preflight) ;;
   *)
-    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture|gate>" >&2
+    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture|gate|preflight>" >&2
     exit 2
     ;;
 esac
@@ -559,8 +559,18 @@ def command_policy(argv, fixture_root, repo_path, env):
     return False, "unknown-command"
 
 
-def run_bounded(argv, cwd, env, output_cap=65536, timeout=10):
-    process = subprocess.Popen(argv, cwd=str(cwd), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def run_bounded(argv, cwd, env, output_cap=65536, timeout=10, input_bytes=None):
+    process = subprocess.Popen(
+        argv,
+        cwd=str(cwd),
+        env=env,
+        stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if input_bytes is not None:
+        process.stdin.write(input_bytes)
+        process.stdin.close()
     streams = selectors.DefaultSelector()
     streams.register(process.stdout, selectors.EVENT_READ, "stdout")
     streams.register(process.stderr, selectors.EVENT_READ, "stderr")
@@ -1173,6 +1183,403 @@ def validate_fixture():
     return summary
 
 
+def build_claude_initial(feature_root, model, settings_path, mcp_path, budget, prompt, session_id):
+    return [
+        "claude", "--print", "--output-format", "stream-json", "--verbose",
+        "--session-id", session_id,
+        "--plugin-dir", str(feature_root),
+        "--model", model,
+        "--settings", str(settings_path),
+        "--setting-sources", "project",
+        "--strict-mcp-config", "--mcp-config", str(mcp_path),
+        "--no-chrome", "--permission-mode", "dontAsk",
+        "--max-budget-usd", budget,
+        prompt,
+    ]
+
+
+def build_claude_resume(feature_root, model, settings_path, mcp_path, budget, prompt, session_id):
+    return [
+        "claude", "--print", "--output-format", "stream-json", "--verbose",
+        "--resume", session_id,
+        "--plugin-dir", str(feature_root),
+        "--model", model,
+        "--settings", str(settings_path),
+        "--setting-sources", "project",
+        "--strict-mcp-config", "--mcp-config", str(mcp_path),
+        "--no-chrome", "--permission-mode", "dontAsk",
+        "--max-budget-usd", budget,
+        prompt,
+    ]
+
+
+def build_codex_initial(fixture_root, model, result_path):
+    return [
+        "codex", "exec", "--json", "--ignore-user-config",
+        "--model", model, "--approve-for-me", "--sandbox", "workspace-write",
+        "--cd", str(fixture_root), "--output-last-message", str(result_path), "-",
+    ]
+
+
+def build_codex_resume(model, session_id):
+    return ["codex", "exec", "resume", "--json", "--ignore-user-config", "--model", model, session_id, "-"]
+
+
+def require_adapter_array(actual, expected, label):
+    if actual != expected:
+        fail(f"{label} argv mismatch")
+
+
+def verify_preflight_inputs(source_path, source_digest, policy_digests):
+    if hashlib.sha256(source_path.read_bytes()).hexdigest() != source_digest:
+        fail("preflight source changed")
+    for path, digest in policy_digests.items():
+        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            fail("preflight policy changed")
+
+
+def parse_session_id(output, harness):
+    identities = []
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            fail(f"{harness} malformed session event")
+        if harness == "claude" and event.get("type") == "system" and event.get("subtype") == "init":
+            identities.append(event.get("session_id"))
+        if harness == "codex" and event.get("type") == "thread.started":
+            identities.append(event.get("thread_id"))
+    if len(identities) != 1 or not isinstance(identities[0], str):
+        fail(f"{harness} session identity missing or ambiguous")
+    try:
+        import uuid
+        uuid.UUID(identities[0])
+    except (ValueError, TypeError):
+        fail(f"{harness} malformed session identity")
+    return identities[0]
+
+
+def write_fake_adapter(path, harness):
+    source = f'''#!{sys.executable}
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+
+harness = {harness!r}
+args = sys.argv[1:]
+stdin_bytes = sys.stdin.buffer.read()
+capture_path = Path(os.environ["CONFORMANCE_CAPTURE"])
+record = {{
+    "harness": harness,
+    "argv": args,
+    "cwd": str(Path.cwd()),
+    "stdin_sha256": hashlib.sha256(stdin_bytes).hexdigest(),
+    "stdin_size": len(stdin_bytes),
+    "environment_names": sorted(os.environ),
+}}
+with capture_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record, sort_keys=True) + "\\n")
+
+auth_command = (harness == "claude" and args == ["auth", "status"]) or (harness == "codex" and args == ["login", "status"])
+if auth_command:
+    auth_mode = os.environ.get("CONFORMANCE_AUTH_MODE")
+    if auth_mode == "brokered":
+        print(json.dumps({{"loggedIn": True, "method": "brokered"}}))
+        raise SystemExit(0)
+    if auth_mode == "missing":
+        print(json.dumps({{"loggedIn": False, "method": "none"}}))
+        raise SystemExit(0)
+    print("auth isolation unreadable", file=sys.stderr)
+    raise SystemExit(2)
+
+mode = os.environ.get("CONFORMANCE_FAKE_MODE", "normal")
+if mode == "source-write":
+    target = Path(os.environ["CONFORMANCE_MUTATION_TARGET"])
+    target.write_bytes(target.read_bytes() + b"\\nmutated")
+if mode == "unbounded":
+    sys.stdout.write("x" * 70000)
+    raise SystemExit(0)
+if mode == "malformed-output":
+    print("not-json")
+    raise SystemExit(0)
+
+if harness == "claude":
+    if "--session-id" in args:
+        identity = args[args.index("--session-id") + 1]
+    elif "--resume" in args:
+        identity = args[args.index("--resume") + 1]
+    else:
+        identity = "missing"
+    if mode == "malformed-id":
+        identity = "not-a-uuid"
+    print(json.dumps({{"type": "system", "subtype": "init", "session_id": identity}}))
+else:
+    identity = "22222222-2222-4222-8222-222222222222"
+    if mode == "malformed-id":
+        identity = "not-a-uuid"
+    if "--output-last-message" in args:
+        result_path = Path(args[args.index("--output-last-message") + 1])
+        result_path.write_text("fake codex result\\n", encoding="utf-8")
+    print(json.dumps({{"type": "thread.started", "thread_id": identity}}))
+'''
+    path.write_text(source, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, auth_mode="brokered", fake_mode="normal"):
+    return {
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "HOME": str(isolated_home),
+        "TMPDIR": str(temp_dir),
+        "LC_ALL": "C",
+        "LANG": "C",
+        "CONFORMANCE_CAPTURE": str(capture_path),
+        "CONFORMANCE_AUTH_MODE": auth_mode,
+        "CONFORMANCE_FAKE_MODE": fake_mode,
+    }
+
+
+def probe_fake_auth(harness, env, cwd):
+    command = [harness, "auth", "status"] if harness == "claude" else [harness, "login", "status"]
+    result = run_bounded(command, cwd, env)
+    if result.returncode != 0:
+        return False
+    try:
+        status = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False
+    return status == {"loggedIn": True, "method": "brokered"}
+
+
+def adapter_packet(golden, feature_root):
+    source_path = (feature_root / golden["skill_source"]).resolve(strict=True)
+    source_bytes = source_path.read_bytes()
+    packet = {
+        "schema": "release-loop-adapter-packet/v1",
+        "prompt": golden["prompt"],
+        "scripted_answers": golden["scripted_answers"],
+        "feature_source": str(source_path),
+        "skill_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "skill_bytes": source_bytes.decode("utf-8"),
+    }
+    return (json.dumps(packet, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def validate_preflight():
+    fixture_path = None
+    with tempfile.TemporaryDirectory(prefix="release-loop preflight ;[] ") as temp_path:
+        fixture_root = Path(temp_path)
+        fixture_path = fixture_root
+        fake_bin = fixture_root / "bin"
+        isolated_home = fixture_root / "home"
+        temp_dir = fixture_root / "tmp"
+        result_dir = fixture_root / "results"
+        for path in (fake_bin, isolated_home, temp_dir, result_dir):
+            path.mkdir()
+        capture_path = fixture_root / "adapter-capture.jsonl"
+        write_fake_adapter(fake_bin / "claude", "claude")
+        write_fake_adapter(fake_bin / "codex", "codex")
+        validate_policy_files(fixture_root)
+        settings_path = fixture_root / ".claude" / "settings.json"
+        rules_path = fixture_root / ".codex" / "rules" / "conformance.rules"
+        mcp_path = fixture_root / "empty-mcp.json"
+        policy_digests = {
+            path: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (settings_path, rules_path, mcp_path)
+        }
+        source_path = root / "skills/release-loop/SKILL.md"
+        source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        golden_claude = load_json(data_root / "golden/claude/L1-full-lifecycle.json")
+        golden_codex = load_json(data_root / "golden/codex/L1-full-lifecycle.json")
+        claude_id = "11111111-1111-4111-8111-111111111111"
+        codex_id = "22222222-2222-4222-8222-222222222222"
+        claude_model = "claude-fixture-model"
+        codex_model = "codex-fixture-model"
+        claude_initial = build_claude_initial(
+            root, claude_model, settings_path, mcp_path, "1.00", golden_claude["prompt"], claude_id
+        )
+        claude_resume = build_claude_resume(
+            root, claude_model, settings_path, mcp_path, "1.00", "approve", claude_id
+        )
+        codex_result = result_dir / "codex-last.txt"
+        codex_initial = build_codex_initial(fixture_root, codex_model, codex_result)
+        codex_resume = build_codex_resume(codex_model, codex_id)
+        expected_claude_initial = [
+            "claude", "--print", "--output-format", "stream-json", "--verbose",
+            "--session-id", claude_id, "--plugin-dir", str(root), "--model", claude_model,
+            "--settings", str(settings_path), "--setting-sources", "project",
+            "--strict-mcp-config", "--mcp-config", str(mcp_path), "--no-chrome",
+            "--permission-mode", "dontAsk", "--max-budget-usd", "1.00", golden_claude["prompt"],
+        ]
+        expected_claude_resume = [
+            "claude", "--print", "--output-format", "stream-json", "--verbose",
+            "--resume", claude_id, "--plugin-dir", str(root), "--model", claude_model,
+            "--settings", str(settings_path), "--setting-sources", "project",
+            "--strict-mcp-config", "--mcp-config", str(mcp_path), "--no-chrome",
+            "--permission-mode", "dontAsk", "--max-budget-usd", "1.00", "approve",
+        ]
+        expected_codex_initial = [
+            "codex", "exec", "--json", "--ignore-user-config", "--model", codex_model,
+            "--approve-for-me", "--sandbox", "workspace-write", "--cd", str(fixture_root),
+            "--output-last-message", str(codex_result), "-",
+        ]
+        expected_codex_resume = [
+            "codex", "exec", "resume", "--json", "--ignore-user-config", "--model", codex_model, codex_id, "-",
+        ]
+        for label, actual, expected in (
+            ("Claude initial", claude_initial, expected_claude_initial),
+            ("Claude resume", claude_resume, expected_claude_resume),
+            ("Codex initial", codex_initial, expected_codex_initial),
+            ("Codex resume", codex_resume, expected_codex_resume),
+        ):
+            require_adapter_array(actual, expected, label)
+        codex_stdin = adapter_packet(golden_codex, root)
+        claude_stdin = b""
+        sensitive_names = {
+            "GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY",
+            "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_SSH", "GIT_SSH_COMMAND", "SSH_AUTH_SOCK", "SSH_ASKPASS",
+        }
+        env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path)
+        if sensitive_names & env.keys() or any(name.startswith("GIT_CONFIG_") for name in env):
+            fail("preflight inherited credential environment")
+        credential_paths = (
+            isolated_home / ".config/gh/hosts.yml",
+            isolated_home / ".claude/.credentials.json",
+            isolated_home / ".codex/auth.json",
+            isolated_home / ".ssh",
+        )
+        if any(path.exists() for path in credential_paths):
+            fail("preflight credential path reachable")
+        if not probe_fake_auth("claude", env, fixture_root) or not probe_fake_auth("codex", env, fixture_root):
+            fail("auth-isolation-unavailable")
+
+        commands = (
+            ("claude", claude_initial, claude_stdin, claude_id),
+            ("claude", claude_resume, b"", claude_id),
+            ("codex", codex_initial, codex_stdin, codex_id),
+            ("codex", codex_resume, b"approve\n", codex_id),
+        )
+        for harness, command, stdin_bytes, expected_id in commands:
+            verify_preflight_inputs(source_path, source_digest, policy_digests)
+            result = run_bounded(command, fixture_root, env, input_bytes=stdin_bytes)
+            if result.returncode != 0:
+                fail(f"{harness} fake adapter failed")
+            if parse_session_id(result.stdout, harness) != expected_id:
+                fail(f"{harness} session identity mismatch")
+            verify_preflight_inputs(source_path, source_digest, policy_digests)
+        if not codex_result.is_file() or codex_result.read_text(encoding="utf-8") != "fake codex result\n":
+            fail("Codex bounded result missing")
+        packet = json.loads(codex_stdin)
+        if packet["skill_bytes"].encode("utf-8") != source_path.read_bytes():
+            fail("Codex stdin skill bytes mismatch")
+        if packet["feature_source"] != str(source_path.resolve(strict=True)):
+            fail("Codex feature source mismatch")
+        if packet["skill_sha256"] != source_digest:
+            fail("Codex stdin source digest mismatch")
+        verify_preflight_inputs(source_path, source_digest, policy_digests)
+
+        captures = [json.loads(line) for line in capture_path.read_text(encoding="utf-8").splitlines()]
+        adapter_captures = [row for row in captures if row["argv"] not in (["auth", "status"], ["login", "status"])]
+        if len(adapter_captures) != 4 or any(sensitive_names & set(row["environment_names"]) for row in captures):
+            fail("preflight adapter audit mismatch")
+        expected_arrays = [
+            expected_claude_initial[1:], expected_claude_resume[1:],
+            expected_codex_initial[1:], expected_codex_resume[1:],
+        ]
+        if [row["argv"] for row in adapter_captures] != expected_arrays:
+            fail("preflight adapter argv mismatch")
+        expected_stdin = [b"", b"", codex_stdin, b"approve\n"]
+        if [row["stdin_sha256"] for row in adapter_captures] != [hashlib.sha256(value).hexdigest() for value in expected_stdin]:
+            fail("preflight adapter stdin mismatch")
+        if any(Path(row["cwd"]).resolve() != fixture_root.resolve() for row in captures):
+            fail("preflight adapter cwd mismatch")
+
+        negatives = 0
+        missing_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, auth_mode="missing")
+        if probe_fake_auth("claude", missing_env, fixture_root):
+            fail("missing auth fixture accepted")
+        negatives += 1
+        unreadable_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, auth_mode="unreadable")
+        if probe_fake_auth("codex", unreadable_env, fixture_root):
+            fail("unreadable auth fixture accepted")
+        negatives += 1
+        malformed_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, fake_mode="malformed-id")
+        malformed = run_bounded(claude_initial, fixture_root, malformed_env)
+        try:
+            parse_session_id(malformed.stdout, "claude")
+        except ValueError as exc:
+            if "malformed session identity" not in str(exc):
+                fail(f"malformed identity diagnostic mismatch: {exc}")
+        else:
+            fail("malformed session identity accepted")
+        negatives += 1
+        wrong_resume = list(codex_resume)
+        wrong_resume.remove("--ignore-user-config")
+        try:
+            require_adapter_array(wrong_resume, expected_codex_resume, "Codex resume")
+        except ValueError as exc:
+            if "Codex resume argv mismatch" not in str(exc):
+                fail(f"wrong resume diagnostic mismatch: {exc}")
+        else:
+            fail("wrong resume flags accepted")
+        negatives += 1
+        drift_bytes = settings_path.read_bytes()
+        settings_path.write_bytes(drift_bytes + b"\n")
+        try:
+            verify_preflight_inputs(source_path, source_digest, policy_digests)
+        except ValueError as exc:
+            if "preflight policy changed" not in str(exc):
+                fail(f"policy drift diagnostic mismatch: {exc}")
+        else:
+            fail("policy drift accepted")
+        settings_path.write_bytes(drift_bytes)
+        negatives += 1
+        source_copy_root = fixture_root / "source-copy"
+        source_copy = source_copy_root / "skills/release-loop/SKILL.md"
+        source_copy.parent.mkdir(parents=True)
+        source_copy.write_bytes(source_path.read_bytes())
+        source_copy_digest = hashlib.sha256(source_copy.read_bytes()).hexdigest()
+        write_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, fake_mode="source-write")
+        write_env["CONFORMANCE_MUTATION_TARGET"] = str(source_copy)
+        write_command = build_claude_initial(
+            source_copy_root, claude_model, settings_path, mcp_path, "1.00", golden_claude["prompt"], claude_id
+        )
+        run_bounded(write_command, fixture_root, write_env)
+        try:
+            verify_preflight_inputs(source_copy, source_copy_digest, {})
+        except ValueError as exc:
+            if "preflight source changed" not in str(exc):
+                fail(f"source-write diagnostic mismatch: {exc}")
+        else:
+            fail("source-write mutant was accepted")
+        negatives += 1
+        unbounded_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, fake_mode="unbounded")
+        try:
+            run_bounded(codex_initial, fixture_root, unbounded_env)
+        except ValueError as exc:
+            if "output exceeded cap" not in str(exc):
+                fail(f"unbounded output diagnostic mismatch: {exc}")
+        else:
+            fail("unbounded adapter output accepted")
+        negatives += 1
+        malformed_output_env = closed_adapter_env(fake_bin, isolated_home, temp_dir, capture_path, fake_mode="malformed-output")
+        malformed_output = run_bounded(codex_initial, fixture_root, malformed_output_env)
+        try:
+            parse_session_id(malformed_output.stdout, "codex")
+        except ValueError as exc:
+            if "malformed session event" not in str(exc):
+                fail(f"malformed output diagnostic mismatch: {exc}")
+        else:
+            fail("malformed adapter output accepted")
+        negatives += 1
+        summary = (2, 4, negatives, len(captures))
+    if fixture_path.exists():
+        fail("preflight cleanup failed")
+    return summary
+
+
 gate_contracts = {
     "design-approval": ("design", "approve-spec-or-request-revision", "design_approved", {"approve", "revise"}),
     "ship-approval": ("ship", "merge-or-nonmerge-disposition", "ship_approved", {"merge", "nonmerge"}),
@@ -1647,6 +2054,8 @@ if mode == "gate":
         if (root / relative_path).read_text(encoding="utf-8").count(literal) != 1:
             fail(f"pending gate source contract mismatch: {relative_path}")
     gate_mutations, gate_controls = validate_gate_group(load_json(data_root / "mutations.json")["mutations"])
+if mode == "preflight":
+    preflight_adapters, preflight_calls, preflight_negatives, preflight_auth_events = validate_preflight()
 
 if mode == "static":
     mutation_count, static_grader_count, source_generation, static_negative_count = validate_static(cases)
@@ -1743,5 +2152,11 @@ if mode == "gate":
     print(
         "ok:   release-loop pending gates "
         f"mutations={gate_mutations} controls={gate_controls}"
+    )
+if mode == "preflight":
+    print(
+        "ok:   release-loop zero-model preflight "
+        f"adapters={preflight_adapters} calls={preflight_calls} "
+        f"negative={preflight_negatives} auth_events={preflight_auth_events}"
     )
 PY
