@@ -1788,6 +1788,7 @@ def validate_paid_receipt(
     expected_caps,
     expected_auth_brokers,
     expected_source_identity,
+    expected_approval_packet_sha256,
     session_marker,
     session_started,
     observed_at,
@@ -1795,7 +1796,7 @@ def validate_paid_receipt(
 ):
     required = {
         "schema", "gate_kind", "command_sha256", "models", "caps", "approved_at",
-        "auth_brokers", "source_identity", "session_marker", "nonce", "status",
+        "auth_brokers", "source_identity", "approval_packet_sha256", "session_marker", "nonce", "status",
     }
     if not isinstance(receipt, dict) or set(receipt) != required:
         return "paid-receipt-shape"
@@ -1836,6 +1837,10 @@ def validate_paid_receipt(
         return "paid-receipt-source"
     if not re.fullmatch(r"[0-9a-f]{64}", str(expected_source_identity["plan_body_seal"])):
         return "paid-receipt-source"
+    if receipt["approval_packet_sha256"] != expected_approval_packet_sha256:
+        return "paid-receipt-approval-packet"
+    if not re.fullmatch(r"[0-9a-f]{64}", str(expected_approval_packet_sha256)):
+        return "paid-receipt-approval-packet"
     approved = parse_gate_timestamp(receipt["approved_at"])
     started = parse_gate_timestamp(session_started)
     observed = parse_gate_timestamp(observed_at)
@@ -1923,6 +1928,60 @@ def parse_paid_mode(mode_name, arguments):
     return command, models, caps
 
 
+def build_paid_approval_packet(mode_name, command, models, caps, auth_brokers, source_identity, pilot_evidence=None):
+    return {
+        "schema": "release-loop-paid-approval/v1",
+        "gate_kind": mode_name,
+        "command": shlex.join(command),
+        "command_sha256": paid_command_digest(command),
+        "models": models,
+        "caps": caps,
+        "auth_brokers": auth_brokers,
+        "source_identity": source_identity,
+        "codex_hard_dollar_cap": "unavailable-observed-token-cap-enforced",
+        "pilot_evidence": pilot_evidence,
+    }
+
+
+def validate_paid_approval_packet(packet, mode_name, command, models, caps, auth_brokers, source_identity):
+    expected = build_paid_approval_packet(
+        mode_name,
+        command,
+        models,
+        caps,
+        auth_brokers,
+        source_identity,
+        packet.get("pilot_evidence") if isinstance(packet, dict) else None,
+    )
+    if not isinstance(packet, dict) or set(packet) != set(expected):
+        return "paid-approval-packet-shape"
+    if packet != expected:
+        return "paid-approval-packet-mismatch"
+    if mode_name == "live-pilot" and packet["pilot_evidence"] is not None:
+        return "paid-approval-packet-pilot-evidence"
+    if mode_name == "live":
+        evidence = packet["pilot_evidence"]
+        if not isinstance(evidence, dict) or set(evidence) != {"results_sha256", "settlement_sha256"}:
+            return "paid-approval-packet-pilot-evidence"
+        if any(not re.fullmatch(r"[0-9a-f]{64}", str(value)) for value in evidence.values()):
+            return "paid-approval-packet-pilot-evidence"
+    return None
+
+
+def read_paid_approval_packet(path, allowed_root, mode_name, command, models, caps, auth_brokers, source_identity):
+    payload = read_bounded_file(path, allowed_root, 1048576).encode("utf-8")
+    try:
+        packet = json.loads(payload)
+    except json.JSONDecodeError:
+        fail("paid-approval-packet-JSON")
+    invariant = validate_paid_approval_packet(
+        packet, mode_name, command, models, caps, auth_brokers, source_identity
+    )
+    if invariant is not None:
+        fail(invariant)
+    return packet, hashlib.sha256(payload).hexdigest()
+
+
 def consume_paid_receipt_file(
     receipt_path,
     nonce_ledger_path,
@@ -1933,6 +1992,8 @@ def consume_paid_receipt_file(
     auth_brokers,
     source_identity,
     source_identity_reader,
+    approval_packet_sha256,
+    approval_packet_reader,
     session_marker,
     session_started,
     observed_at,
@@ -1965,6 +2026,8 @@ def consume_paid_receipt_file(
         used_nonces = {row.get("nonce") for row in nonce_ledger["consumptions"] if isinstance(row, dict)}
         if source_identity_reader() != source_identity:
             fail("paid-receipt-source")
+        if approval_packet_reader() != approval_packet_sha256:
+            fail("paid-receipt-approval-packet")
         invariant = validate_paid_receipt(
             receipt,
             command,
@@ -1973,6 +2036,7 @@ def consume_paid_receipt_file(
             caps,
             auth_brokers,
             source_identity,
+            approval_packet_sha256,
             session_marker,
             session_started,
             observed_at,
@@ -2664,6 +2728,8 @@ def run_paid_mode_entry(
     auth_brokers,
     source_identity,
     source_identity_reader,
+    approval_packet_sha256,
+    approval_packet_reader,
     session_marker,
     session_started,
     observed_at,
@@ -2681,6 +2747,8 @@ def run_paid_mode_entry(
         auth_brokers,
         source_identity,
         source_identity_reader,
+        approval_packet_sha256,
+        approval_packet_reader,
         session_marker,
         session_started,
         observed_at,
@@ -2695,16 +2763,18 @@ def run_paid_mode_entry(
     if mode_name == "live-pilot":
         derived_caps = derive_full_run_caps(caps, results, ledger)
         derived_full_command = full_run_command(derived_caps, models)
-        approval_packet = {
-            "schema": "release-loop-full-run-approval/v1",
-            "pilot_results_sha256": object_digest(results),
-            "pilot_settlement_sha256": object_digest(normalized_resource_ledger(ledger)),
-            "full_command": shlex.join(derived_full_command),
-            "full_command_sha256": paid_command_digest(derived_full_command),
-            "models": models,
-            "caps": derived_caps,
-            "codex_hard_dollar_cap": "unavailable-observed-token-cap-enforced",
-        }
+        approval_packet = build_paid_approval_packet(
+            "live",
+            derived_full_command,
+            models,
+            derived_caps,
+            auth_brokers,
+            source_identity,
+            {
+                "results_sha256": object_digest(results),
+                "settlement_sha256": object_digest(normalized_resource_ledger(ledger)),
+            },
+        )
     generation_root = evidence_root / f"{mode_name}-generation-{receipt['nonce']}"
     generation_digest = finalize_generation_directory(
         generation_root,
@@ -3312,6 +3382,11 @@ def validate_resource_group():
     used_nonces = set()
     pilot = pilot_command(caps, models)
     pilot_caps = {**caps, "max_concurrency": 1, "total_wall_time": caps["session_timeout"] * 2}
+    pilot_approval_packet = build_paid_approval_packet(
+        "live-pilot", pilot, models, pilot_caps, auth_brokers, source_identity
+    )
+    pilot_approval_payload = (json.dumps(pilot_approval_packet, sort_keys=True, indent=2) + "\n").encode()
+    pilot_approval_sha256 = hashlib.sha256(pilot_approval_payload).hexdigest()
     parsed_pilot, parsed_models, parsed_caps = parse_paid_mode("live-pilot", pilot[3:])
     if parsed_pilot != pilot or parsed_models != models or parsed_caps != pilot_caps:
         fail("resource pilot command parser mismatch")
@@ -3323,13 +3398,14 @@ def validate_resource_group():
         "caps": pilot_caps,
         "auth_brokers": auth_brokers,
         "source_identity": source_identity,
+        "approval_packet_sha256": pilot_approval_sha256,
         "approved_at": "2026-08-24T06:00:30Z",
         "session_marker": session_marker,
         "nonce": "a" * 32,
         "status": "approved",
     }
     if validate_paid_receipt(
-        receipt, pilot, "live-pilot", models, pilot_caps, auth_brokers, source_identity, session_marker, session_started, observed_at, used_nonces
+        receipt, pilot, "live-pilot", models, pilot_caps, auth_brokers, source_identity, pilot_approval_sha256, session_marker, session_started, observed_at, used_nonces
     ) is not None:
         fail("resource pilot receipt control failed")
     consumed, invariant = consume_paid_receipt(receipt, used_nonces)
@@ -3341,7 +3417,9 @@ def validate_resource_group():
         receipt_temp_root = Path(receipt_temp)
         receipt_path = receipt_temp_root / "receipt.json"
         nonce_path = receipt_temp_root / "nonces.json"
+        approval_path = receipt_temp_root / "live-pilot-approval.json"
         write_json_atomic(receipt_path, receipt, receipt_temp_root)
+        approval_path.write_bytes(pilot_approval_payload)
         durable_receipt, durable_consumption = consume_paid_receipt_file(
             receipt_path,
             nonce_path,
@@ -3352,6 +3430,8 @@ def validate_resource_group():
             auth_brokers,
             source_identity,
             lambda: source_identity,
+            pilot_approval_sha256,
+            lambda: hashlib.sha256(approval_path.read_bytes()).hexdigest(),
             session_marker,
             session_started,
             observed_at,
@@ -3370,6 +3450,8 @@ def validate_resource_group():
                 auth_brokers,
                 source_identity,
                 lambda: source_identity,
+                pilot_approval_sha256,
+                lambda: hashlib.sha256(approval_path.read_bytes()).hexdigest(),
                 session_marker,
                 session_started,
                 observed_at,
@@ -3399,6 +3481,8 @@ def validate_resource_group():
                         auth_brokers,
                         source_identity,
                         lambda: source_identity,
+                        pilot_approval_sha256,
+                        lambda: hashlib.sha256(approval_path.read_bytes()).hexdigest(),
                         session_marker,
                         session_started,
                         observed_at,
@@ -3429,6 +3513,8 @@ def validate_resource_group():
                 auth_brokers,
                 source_identity,
                 lambda: {**source_identity, "head_sha": "0" * 40},
+                pilot_approval_sha256,
+                lambda: hashlib.sha256(approval_path.read_bytes()).hexdigest(),
                 session_marker,
                 session_started,
                 observed_at,
@@ -3441,6 +3527,35 @@ def validate_resource_group():
             fail("resource source change under lock accepted")
         if source_race_nonces.exists():
             fail("resource source failure mutated nonce authority")
+        approval_race_receipt = {**receipt, "nonce": "9" * 32}
+        approval_race_path = receipt_temp_root / "approval-race-receipt.json"
+        approval_race_nonces = receipt_temp_root / "approval-race-nonces.json"
+        write_json_atomic(approval_race_path, approval_race_receipt, receipt_temp_root)
+        try:
+            consume_paid_receipt_file(
+                approval_race_path,
+                approval_race_nonces,
+                pilot,
+                "live-pilot",
+                models,
+                pilot_caps,
+                auth_brokers,
+                source_identity,
+                lambda: source_identity,
+                pilot_approval_sha256,
+                lambda: "0" * 64,
+                session_marker,
+                session_started,
+                observed_at,
+                receipt_temp_root,
+            )
+        except ValueError as exc:
+            if "paid-receipt-approval-packet" not in str(exc):
+                fail(f"resource approval-under-lock diagnostic mismatch: {exc}")
+        else:
+            fail("resource approval packet change under lock accepted")
+        if approval_race_nonces.exists():
+            fail("resource approval failure mutated nonce authority")
     ledger = new_resource_ledger(pilot_caps)
     if reserve_claude(ledger, pilot_caps, "pilot-claude") is not None:
         fail("resource Claude pilot reservation failed")
@@ -3461,15 +3576,27 @@ def validate_resource_group():
     if not expected_flags <= set(full_command):
         fail("resource full command flags missing")
 
+    full_approval_packet = build_paid_approval_packet(
+        "live",
+        full_command,
+        models,
+        caps,
+        auth_brokers,
+        source_identity,
+        {"results_sha256": "1" * 64, "settlement_sha256": "2" * 64},
+    )
+    full_approval_payload = (json.dumps(full_approval_packet, sort_keys=True, indent=2) + "\n").encode()
+    full_approval_sha256 = hashlib.sha256(full_approval_payload).hexdigest()
     full_receipt = copy.deepcopy(receipt)
     full_receipt.update(
         gate_kind="live",
         command_sha256=paid_command_digest(full_command),
         caps=caps,
+        approval_packet_sha256=full_approval_sha256,
         nonce="b" * 32,
     )
     if validate_paid_receipt(
-        full_receipt, full_command, "live", models, caps, auth_brokers, source_identity, session_marker, session_started, observed_at, used_nonces
+        full_receipt, full_command, "live", models, caps, auth_brokers, source_identity, full_receipt["approval_packet_sha256"], session_marker, session_started, observed_at, used_nonces
     ) is not None:
         fail("resource full receipt control failed")
     consume_paid_receipt(full_receipt, used_nonces)
@@ -3602,6 +3729,8 @@ def validate_resource_group():
         paid_root = Path(paid_temp)
         pilot_entry_receipt = {**receipt, "nonce": "2" * 32}
         write_json_atomic(paid_root / "live-pilot-receipt.json", pilot_entry_receipt, paid_root)
+        pilot_entry_approval = paid_root / "live-pilot-approval.json"
+        pilot_entry_approval.write_bytes(pilot_approval_payload)
         pilot_entry = run_paid_mode_entry(
             "live-pilot",
             pilot[3:],
@@ -3610,6 +3739,8 @@ def validate_resource_group():
             auth_brokers,
             source_identity,
             lambda: source_identity,
+            pilot_approval_sha256,
+            lambda: hashlib.sha256(pilot_entry_approval.read_bytes()).hexdigest(),
             session_marker,
             session_started,
             observed_at,
@@ -3620,7 +3751,7 @@ def validate_resource_group():
             fail("resource pilot limits were not derived from evidence")
         approval_packet_path = Path(pilot_entry["generation_path"]) / "full-run-approval.json"
         approval_packet = json.loads(read_bounded_file(approval_packet_path, approval_packet_path.parent, 1048576))
-        if approval_packet.get("full_command") != pilot_entry["full_command"]:
+        if approval_packet.get("command") != pilot_entry["full_command"]:
             fail("resource full-run approval packet mismatch")
 
         def missing_telemetry_launcher(call_spec):
@@ -3668,6 +3799,8 @@ def validate_resource_group():
                 auth_brokers,
                 source_identity,
                 lambda: source_identity,
+                pilot_approval_sha256,
+                lambda: hashlib.sha256(pilot_entry_approval.read_bytes()).hexdigest(),
                 session_marker,
                 session_started,
                 observed_at,
@@ -3679,6 +3812,8 @@ def validate_resource_group():
             fail("resource paid pilot entry reused receipt")
         full_entry_receipt = {**full_receipt, "nonce": "3" * 32}
         write_json_atomic(paid_root / "live-receipt.json", full_entry_receipt, paid_root)
+        full_entry_approval = paid_root / "live-approval.json"
+        full_entry_approval.write_bytes(full_approval_payload)
         full_entry = run_paid_mode_entry(
             "live",
             full_command[3:],
@@ -3687,6 +3822,8 @@ def validate_resource_group():
             auth_brokers,
             source_identity,
             lambda: source_identity,
+            full_approval_sha256,
+            lambda: hashlib.sha256(full_entry_approval.read_bytes()).hexdigest(),
             session_marker,
             session_started,
             observed_at,
@@ -3711,7 +3848,7 @@ def validate_resource_group():
         fail("resource unavailable process table accepted")
     negatives += 1
     if validate_paid_receipt(
-        None, pilot, "live-pilot", models, pilot_caps, auth_brokers, source_identity, session_marker, session_started, observed_at, used_nonces
+        None, pilot, "live-pilot", models, pilot_caps, auth_brokers, source_identity, pilot_approval_sha256, session_marker, session_started, observed_at, used_nonces
     ) != "paid-receipt-shape":
         fail("resource missing receipt accepted")
     negatives += 1
@@ -3723,9 +3860,10 @@ def validate_resource_group():
         ("caps", {**receipt, "caps": {**caps, "max_turns_per_session": 5}, "nonce": "1" * 32}, "paid-receipt-caps"),
         ("broker", {**receipt, "auth_brokers": {"claude": "0" * 64, "codex": auth_brokers["codex"]}, "nonce": "5" * 32}, "paid-receipt-auth-brokers"),
         ("source", {**receipt, "source_identity": {**source_identity, "head_sha": "0" * 40}, "nonce": "6" * 32}, "paid-receipt-source"),
+        ("approval", {**receipt, "approval_packet_sha256": "0" * 64, "nonce": "8" * 32}, "paid-receipt-approval-packet"),
     ):
         actual = validate_paid_receipt(
-            mutant, pilot, "live-pilot", models, pilot_caps, auth_brokers, source_identity, session_marker, session_started, observed_at, used_nonces
+            mutant, pilot, "live-pilot", models, pilot_caps, auth_brokers, source_identity, pilot_approval_sha256, session_marker, session_started, observed_at, used_nonces
         )
         if actual != expected:
             fail(f"resource receipt mutant mismatch: {label}")
@@ -4329,7 +4467,7 @@ if mode == "resource":
         resource_manifest,
     ) = validate_resource_group()
 if mode in {"live-pilot", "live"}:
-    parse_paid_mode(mode, mode_args)
+    live_command, live_models, live_caps = parse_paid_mode(mode, mode_args)
     live_evidence_root = root / ".release-loop/evidence"
     live_receipt_path = live_evidence_root / f"{mode}-receipt.json"
     if not live_receipt_path.is_file():
@@ -4342,6 +4480,19 @@ if mode in {"live-pilot", "live"}:
     live_source_readiness = paid_source_preflight()
     live_auth_readiness = paid_auth_preflight()
     live_auth_brokers = {harness: row["sha256"] for harness, row in live_auth_readiness.items()}
+    live_approval_path = live_evidence_root / f"{mode}-approval.json"
+    if not live_approval_path.is_file():
+        fail("paid-approval-packet missing")
+    _, live_approval_sha256 = read_paid_approval_packet(
+        live_approval_path,
+        live_evidence_root,
+        mode,
+        live_command,
+        live_models,
+        live_caps,
+        live_auth_brokers,
+        live_source_readiness["receipt"],
+    )
 
     def live_launcher(call_spec):
         enriched = copy.copy(call_spec)
@@ -4361,6 +4512,17 @@ if mode in {"live-pilot", "live"}:
         live_auth_brokers,
         live_source_readiness["receipt"],
         lambda: paid_source_preflight()["receipt"],
+        live_approval_sha256,
+        lambda: read_paid_approval_packet(
+            live_approval_path,
+            live_evidence_root,
+            mode,
+            live_command,
+            live_models,
+            live_caps,
+            live_auth_brokers,
+            paid_source_preflight()["receipt"],
+        )[1],
         live_session_marker,
         live_session_started,
         live_observed_at,
