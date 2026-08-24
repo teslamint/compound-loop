@@ -372,6 +372,8 @@ def sc2_invariant(fixture):
         return "sc2-invariance"
     if fixture.get("changed_axis") != fixture.get("effect_axis"):
         return "sc2-axis"
+    if pairs[1][0]["comparison"] == pairs[1][1]["comparison"]:
+        return "sc2-changed-output"
     if pairs[1][0]["effect"] == pairs[1][1]["effect"]:
         return "sc2-effect-signal"
     return None
@@ -572,6 +574,16 @@ def validate_static(cases):
     if result == unrelated["expected"] and invariant == expected_invariants[unrelated["id"]]:
         fail("unrelated rejection probe was accepted")
     static_negative_probes.append("unrelated-rejection")
+    unchanged_output = copy.deepcopy(
+        next(row for row in mutation_rows if row["id"] == "controlled-same-kind-pairs")
+    )
+    unchanged_output["fixture"]["changed"]["right"]["comparison"] = copy.deepcopy(
+        unchanged_output["fixture"]["changed"]["left"]["comparison"]
+    )
+    result, _, invariant = grade_mutation(unchanged_output, cases_by_id, clauses_by_id)
+    if result == "pass" or invariant != "sc2-changed-output":
+        fail("unchanged changed-axis output probe was accepted")
+    static_negative_probes.append("changed-output")
     disabled_result = grade_mutation(
         next(row for row in mutation_rows if row["grader"] == "sc2-guard"),
         cases_by_id,
