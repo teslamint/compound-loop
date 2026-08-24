@@ -2780,6 +2780,48 @@ def run_case(name: str) -> None:
                     raise AssertionError("archive did not interrupt after manifest creation")
                 manifest = destination_path / ".archive-source-manifest.json"
                 assert manifest.is_file() and candidate_progress.is_file()
+                progress_bytes = candidate_progress.read_bytes()
+                candidate_progress.write_bytes(progress_bytes + b"\n# TAMPERED BODY\n")
+                assert_blocked_preserves(
+                    lambda candidate=candidate, candidate_progress=candidate_progress: archive_scope(
+                        candidate,
+                        candidate_progress.relative_to(candidate).as_posix(),
+                        None,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    "archive destination conflict",
+                )
+                candidate_progress.write_bytes(progress_bytes)
+                missing_progress = candidate_progress.with_name("progress.md.missing")
+                candidate_progress.rename(missing_progress)
+                assert_blocked_preserves(
+                    lambda candidate=candidate, candidate_progress=candidate_progress: archive_scope(
+                        candidate,
+                        candidate_progress.relative_to(candidate).as_posix(),
+                        None,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    "invalid progress",
+                )
+                missing_progress.rename(candidate_progress)
+                duplicate_progress = destination_path / "progress.md"
+                duplicate_progress.write_bytes(progress_bytes)
+                assert_blocked_preserves(
+                    lambda candidate=candidate, candidate_progress=candidate_progress: archive_scope(
+                        candidate,
+                        candidate_progress.relative_to(candidate).as_posix(),
+                        None,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    "archive destination conflict",
+                )
+                duplicate_progress.unlink()
                 foreign.write_bytes(b"FOREIGN-AFTER-INTERRUPTION\n")
                 assert_blocked_preserves(
                     lambda candidate=candidate, candidate_progress=candidate_progress: archive_scope(

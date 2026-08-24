@@ -259,7 +259,7 @@ def archive_manifest_entries(root: Path, children: list[Path]) -> list[dict[str,
     return sorted(entries, key=lambda row: str(row["path"]))
 
 
-def prepare_archive_manifest(source: Path, children: list[Path], destination: Path) -> None:
+def prepare_archive_manifest(source: Path, children: list[Path], progress: Path, destination: Path) -> None:
     manifest_path = destination / ARCHIVE_MANIFEST_NAME
     temporary = destination / (ARCHIVE_MANIFEST_NAME + ".tmp")
     if temporary.exists() or temporary.is_symlink():
@@ -277,7 +277,7 @@ def prepare_archive_manifest(source: Path, children: list[Path], destination: Pa
         existing = list(destination.iterdir())
         if existing:
             reject("archive destination conflict", existing[0].as_posix())
-        manifest = {"schema": ARCHIVE_MANIFEST_SCHEMA, "entries": archive_manifest_entries(source, children)}
+        manifest = {"schema": ARCHIVE_MANIFEST_SCHEMA, "entries": archive_manifest_entries(source, [*children, progress])}
         temporary.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
         os.replace(temporary, manifest_path)
     destination_children = [
@@ -285,7 +285,8 @@ def prepare_archive_manifest(source: Path, children: list[Path], destination: Pa
         for child in destination.iterdir()
         if child.name != ARCHIVE_MANIFEST_NAME
     ]
-    observed = archive_manifest_entries(source, children) + archive_manifest_entries(destination, destination_children)
+    source_entries = [*children, progress] if progress.exists() else children
+    observed = archive_manifest_entries(source, source_entries) + archive_manifest_entries(destination, destination_children)
     observed.sort(key=lambda row: str(row["path"]))
     if observed != manifest["entries"]:
         reject("archive destination conflict", "source manifest mismatch")
@@ -387,7 +388,7 @@ def archive(
         for child in children:
             guard(repo, child.relative_to(repo).as_posix(), source_rel)
     destination_path.mkdir(parents=True, exist_ok=True)
-    prepare_archive_manifest(source, children, destination_path)
+    prepare_archive_manifest(source, children, progress_file, destination_path)
     order = []
     for child in children:
         move_one(child, destination_path)
