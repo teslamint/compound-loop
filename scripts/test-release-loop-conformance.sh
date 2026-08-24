@@ -2934,6 +2934,9 @@ def generation_allowed_names(manifest):
 
 
 def verified_generation_tree(generation_root, allowed_extra=frozenset()):
+    generation_root = Path(generation_root)
+    if generation_root.is_symlink():
+        fail("generation root unsafe")
     try:
         generation_root = generation_root.resolve(strict=True)
     except FileNotFoundError:
@@ -3008,6 +3011,41 @@ def verify_handoff_directory(handoff_root):
     return generation, owner, handoff_manifest
 
 
+def install_base_generation_from_handoff(handoff_root, target):
+    handoff_generation, _, _ = verify_handoff_directory(handoff_root)
+    if target.exists():
+        existing = verified_generation_tree(target)
+        if existing["manifest_sha256"] != handoff_generation["manifest_sha256"]:
+            fail("base generation existing target mismatch")
+        return existing
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = target.parent / f".{target.name}.partial"
+    if staging.exists() and (staging.is_symlink() or not staging.is_dir()):
+        fail("base generation staging unsafe")
+    staging.mkdir(exist_ok=True)
+    owner_path = staging / "owner.json"
+    owner = {
+        "schema": "release-loop-base-generation-owner/v1",
+        "generation_manifest_sha256": handoff_generation["manifest_sha256"],
+    }
+    if owner_path.exists():
+        if json.loads(read_bounded_file(owner_path, staging, 65536)) != owner:
+            fail("base generation staging owner mismatch")
+    else:
+        write_json_atomic(owner_path, owner, staging)
+    for row in handoff_generation["files"]:
+        if row["path"] == "complete.json":
+            continue
+        write_bytes_atomic(staging / row["path"], (handoff_root / row["path"]).read_bytes(), staging)
+    write_bytes_atomic(staging / "complete.json", (handoff_root / "complete.json").read_bytes(), staging)
+    owner_path.unlink()
+    os.replace(str(staging), str(target))
+    installed = verified_generation_tree(target)
+    if installed["manifest_sha256"] != handoff_generation["manifest_sha256"]:
+        fail("base generation installation mismatch")
+    return installed
+
+
 def install_handoff(feature_root, base_root, generation_root, handoff_name, fail_at=None):
     feature_root = feature_root.resolve(strict=True)
     base_root = base_root.resolve(strict=True)
@@ -3016,6 +3054,10 @@ def install_handoff(feature_root, base_root, generation_root, handoff_name, fail
     if git_common_directory(feature_root) != git_common_directory(base_root):
         fail("handoff foreign repository")
     generation = verified_generation_tree(generation_root)
+    try:
+        generation["root"].relative_to((feature_root / ".release-loop/evidence").resolve(strict=True))
+    except (FileNotFoundError, ValueError):
+        fail("handoff generation outside feature evidence")
     if generation["manifest"].get("mode") != "live":
         fail("handoff requires full live generation")
     handoff_parent = base_root / ".release-loop/.handoff"
@@ -3090,7 +3132,7 @@ def tracked_tree_clean(repository_root, allowed_paths=()):
 def publish_baseline_transition(base_root, handoff_root, archive_source, baseline_path, policy_path, roadmap_path, validator):
     base_root = base_root.resolve(strict=True)
     handoff_root = handoff_root.resolve(strict=True)
-    archive_source = archive_source.resolve(strict=True)
+    archive_source = archive_source.resolve(strict=False)
     baseline_path = baseline_path.resolve(strict=False)
     policy_path = policy_path.resolve(strict=True)
     roadmap_path = roadmap_path.resolve(strict=True)
@@ -3099,32 +3141,48 @@ def publish_baseline_transition(base_root, handoff_root, archive_source, baselin
             path.resolve(strict=False).relative_to(base_root)
         except ValueError:
             fail("baseline target outside base")
-    allowed_dirty = [
-        baseline_path.relative_to(base_root), policy_path.relative_to(base_root), roadmap_path.relative_to(base_root)
-    ]
-    if not tracked_tree_clean(base_root, allowed_dirty):
-        fail("baseline target tree dirty")
     handoff_generation, _, handoff_manifest = verify_handoff_directory(handoff_root)
-    archive_generation = verified_generation_tree(archive_source)
+    archive_generation = install_base_generation_from_handoff(handoff_root, archive_source)
     if archive_generation["manifest_sha256"] != handoff_generation["manifest_sha256"]:
         fail("baseline archive source mismatch")
-    policy = load_json(policy_path)
-    if policy.get("schema") != "release-loop-baseline-policy/v1":
-        fail("baseline bootstrap policy unavailable")
-    roadmap_text = roadmap_path.read_text(encoding="utf-8")
+    baseline_relative = baseline_path.relative_to(base_root)
+    policy_relative = policy_path.relative_to(base_root)
+    roadmap_relative = roadmap_path.relative_to(base_root)
+    allowed_dirty = [baseline_relative, policy_relative, roadmap_relative]
+    if not tracked_tree_clean(base_root, allowed_dirty):
+        fail("baseline target tree dirty")
+
+    def head_bytes(relative_path):
+        result = subprocess.run(
+            ["git", "show", f"HEAD:{relative_path}"],
+            cwd=str(base_root),
+            check=False,
+            capture_output=True,
+        )
+        return result.stdout if result.returncode == 0 else None
+
+    head_policy_bytes = head_bytes(policy_relative)
+    head_roadmap_bytes = head_bytes(roadmap_relative)
+    if head_policy_bytes is None or head_roadmap_bytes is None:
+        fail("baseline HEAD inputs missing")
+    head_policy = json.loads(head_policy_bytes)
     roadmap_row = "| Conformance suite |"
-    if policy.get("state") == "enforced":
+    if head_policy.get("state") == "enforced":
+        if not tracked_tree_clean(base_root):
+            fail("baseline enforced tree dirty")
+        policy = load_json(policy_path)
         baseline = load_json(baseline_path)
         if (
             hashlib.sha256(baseline_path.read_bytes()).hexdigest() != policy.get("baseline_sha256")
             or baseline.get("generation_manifest_sha256") != handoff_generation["manifest_sha256"]
-            or roadmap_row in roadmap_text
+            or roadmap_row in roadmap_path.read_text(encoding="utf-8")
         ):
             fail("baseline enforced state mismatch")
         if validator(base_root) != "ALL CHECKS PASSED":
             fail("baseline final validation failed")
         return baseline["generation_manifest_sha256"], baseline
-    if policy.get("state") != "bootstrap" or roadmap_text.count(roadmap_row) != 1:
+    head_roadmap_text = head_roadmap_bytes.decode("utf-8")
+    if head_policy.get("state") != "bootstrap" or head_roadmap_text.count(roadmap_row) != 1:
         fail("baseline ROADMAP row missing or ambiguous")
     corpus_value = load_json(base_root / "tests/conformance/release-loop/corpus.json")
     baseline = {
@@ -3136,19 +3194,40 @@ def publish_baseline_transition(base_root, handoff_root, archive_source, baselin
         "mutations_sha256": hashlib.sha256((base_root / "tests/conformance/release-loop/mutations.json").read_bytes()).hexdigest(),
         "handoff_manifest_sha256": hashlib.sha256((handoff_root / "handoff-manifest.json").read_bytes()).hexdigest(),
     }
-    write_json_atomic(baseline_path, baseline, base_root, 0o644)
+    baseline_bytes = (json.dumps(baseline, sort_keys=True, indent=2) + "\n").encode("utf-8")
     enforced_policy = {
         "schema": "release-loop-baseline-policy/v1",
         "state": "enforced",
-        "baseline": str(baseline_path.relative_to(base_root)),
-        "baseline_sha256": hashlib.sha256(baseline_path.read_bytes()).hexdigest(),
+        "baseline": str(baseline_relative),
+        "baseline_sha256": hashlib.sha256(baseline_bytes).hexdigest(),
         "source_generation": baseline["source_generation"],
         "generation_manifest_sha256": baseline["generation_manifest_sha256"],
         "roadmap_item": "Conformance suite",
     }
-    write_json_atomic(policy_path, enforced_policy, base_root, 0o644)
-    new_roadmap_lines = [line for line in roadmap_text.splitlines() if not line.startswith(roadmap_row)]
-    write_bytes_atomic(roadmap_path, ("\n".join(new_roadmap_lines) + "\n").encode(), base_root, 0o644)
+    policy_bytes = (json.dumps(enforced_policy, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    new_roadmap_lines = [line for line in head_roadmap_text.splitlines() if not line.startswith(roadmap_row)]
+    roadmap_bytes = ("\n".join(new_roadmap_lines) + "\n").encode()
+    original_baseline = head_bytes(baseline_relative)
+    current_baseline = baseline_path.read_bytes() if baseline_path.is_file() else None
+    current_policy = policy_path.read_bytes()
+    current_roadmap = roadmap_path.read_bytes()
+    states = (
+        current_baseline in {original_baseline, baseline_bytes},
+        current_policy in {head_policy_bytes, policy_bytes},
+        current_roadmap in {head_roadmap_bytes, roadmap_bytes},
+    )
+    if not all(states):
+        fail("baseline owned partial mismatch")
+    progress_tuple = (
+        current_baseline == baseline_bytes,
+        current_policy == policy_bytes,
+        current_roadmap == roadmap_bytes,
+    )
+    if progress_tuple not in {(False, False, False), (True, False, False), (True, True, False), (True, True, True)}:
+        fail("baseline partial order mismatch")
+    write_bytes_atomic(baseline_path, baseline_bytes, base_root, 0o644)
+    write_bytes_atomic(policy_path, policy_bytes, base_root, 0o644)
+    write_bytes_atomic(roadmap_path, roadmap_bytes, base_root, 0o644)
     validation_result = validator(base_root)
     if validation_result != "ALL CHECKS PASSED":
         fail("baseline final validation failed")
@@ -3160,13 +3239,37 @@ def mark_v2_acceptance(progress_path, generation_digest, archive_root, observed_
     expected_destination = f"archive-destination: {archive_root}"
     if text_value.count(expected_destination) != 1:
         fail("archive destination evidence mismatch")
-    if "archive_verification:" in text_value and "status: accepted" in text_value:
+    phase = re.search(r"(?m)^phase: ([^\n]+)$", text_value)
+    phase_status = re.search(r"(?m)^phase_status: ([^\n]+)$", text_value)
+    if not phase or phase.group(1) not in {"retro", "done"} or not phase_status:
+        fail("archive V2 phase mismatch")
+    record_pattern = re.compile(
+        r"(?m)^archive_verification:\n"
+        r"  id: (?P<id>[^\n]+)\n"
+        r"  status: (?P<status>[^\n]+)\n"
+        r"  generation_sha256: (?P<digest>[^\n]+)\n"
+        r"  archive_root: (?P<root>[^\n]+)\n"
+        r"  updated: (?P<updated>[^\n]+)$"
+    )
+    records = list(record_pattern.finditer(text_value))
+    if len(records) != 1:
+        fail("archive V2 record missing or duplicate")
+    record = records[0]
+    if (
+        record.group("id") != "V2"
+        or record.group("digest") != generation_digest
+        or record.group("root") != archive_root
+        or parse_gate_timestamp(record.group("updated")) is None
+    ):
+        fail("archive V2 record mismatch")
+    if record.group("status") == "accepted":
         if f"V2 accepted generation={generation_digest}" not in text_value:
             fail("archive V2 accepted digest mismatch")
         return
-    if "archive_verification:" not in text_value or "status: started" not in text_value:
-        fail("archive V2 start missing")
-    text_value = text_value.replace("status: started", "status: accepted", 1)
+    if record.group("status") != "started" or phase.group(1) != "retro" or phase_status.group(1) in {"complete", "blocked"}:
+        fail("archive V2 nonterminal state mismatch")
+    replacement = record.group(0).replace("  status: started\n", "  status: accepted\n", 1)
+    text_value = text_value[:record.start()] + replacement + text_value[record.end():]
     text_value = text_value.rstrip() + (
         f"\n- {observed_at} archive: V2 accepted generation={generation_digest} archive_root={archive_root}\n"
     )
@@ -3187,15 +3290,16 @@ def verify_archive_transition(base_root, archive_root, baseline_path, handoff_ro
     if baseline.get("generation_manifest_sha256") != digest or handoff_generation["manifest_sha256"] != digest:
         fail("archive generation digest mismatch")
     consumed_path = handoff_root / "consumed.json"
+    live_progress_path = base_root / ".release-loop/progress.md"
+    progress_path = live_progress_path if live_progress_path.is_file() else archive_root / "progress.md"
+    if not progress_path.is_file():
+        fail("archive progress evidence missing")
     if consumed_path.is_file():
         consumed = load_json(consumed_path)
         if consumed.get("generation_manifest_sha256") != digest or consumed.get("archive_root") != str(archive_root.relative_to(base_root)):
             fail("archive consumed marker mismatch")
-        mark_v2_acceptance(
-            base_root / ".release-loop/progress.md", digest, str(archive_root.relative_to(base_root)), observed_at
-        )
+        mark_v2_acceptance(progress_path, digest, str(archive_root.relative_to(base_root)), observed_at)
         return digest
-    progress_path = base_root / ".release-loop/progress.md"
     mark_v2_acceptance(progress_path, digest, str(archive_root.relative_to(base_root)), observed_at)
     consumed = {
         "schema": "release-loop-handoff-consumed/v1",
@@ -3356,8 +3460,6 @@ def validate_transition_group():
             fail("transition handoff idempotence failed")
         controls += 1
         archive_source = base_root / ".release-loop/evidence/live-generation"
-        archive_source.parent.mkdir(parents=True)
-        shutil.copytree(generation_root, archive_source)
         baseline_path = data_dir / "baseline.json"
         policy_path = data_dir / "baseline-policy.json"
         roadmap_path = base_root / "ROADMAP.md"
@@ -3415,14 +3517,14 @@ def validate_transition_group():
         staged_generation.parent.mkdir(parents=True)
         shutil.copytree(archive_source, staged_generation)
         progress_path = base_root / ".release-loop/progress.md"
-        progress_path.write_text(
+        valid_progress_text = (
             "---\nphase: retro\nphase_status: in-progress\n"
             "archive_verification:\n  id: V2\n  status: started\n"
             f"  generation_sha256: {handoff_digest}\n  archive_root: {archive_root.relative_to(base_root)}\n"
             "  updated: 2026-08-24T07:00:00Z\n---\n\n## Log\n"
-            f"- 2026-08-24T07:00:00Z retro: archive-destination: {archive_root.relative_to(base_root)}\n",
-            encoding="utf-8",
+            f"- 2026-08-24T07:00:00Z retro: archive-destination: {archive_root.relative_to(base_root)}\n"
         )
+        progress_path.write_text(valid_progress_text, encoding="utf-8")
         wrong_baseline_path = data_dir / "wrong-baseline.json"
         wrong_baseline = copy.deepcopy(baseline)
         wrong_baseline["generation_manifest_sha256"] = "0" * 64
@@ -3436,6 +3538,18 @@ def validate_transition_group():
                 fail(f"transition archive mismatch diagnostic mismatch: {exc}")
         else:
             fail("transition archive digest mismatch accepted")
+        negatives += 1
+        progress_path.write_text(valid_progress_text.replace("  id: V2", "  id: V1"), encoding="utf-8")
+        try:
+            verify_archive_transition(
+                base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:01Z"
+            )
+        except ValueError as exc:
+            if "archive V2 record mismatch" not in str(exc):
+                fail(f"transition V2 record diagnostic mismatch: {exc}")
+        else:
+            fail("transition mismatched V2 record accepted")
+        progress_path.write_text(valid_progress_text, encoding="utf-8")
         negatives += 1
         verified_digest = verify_archive_transition(
             base_root,
@@ -3451,6 +3565,17 @@ def validate_transition_group():
             base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:02Z"
         ) != handoff_digest:
             fail("transition archive idempotence failed")
+        controls += 1
+        archived_progress = archive_root / "progress.md"
+        archived_text = progress_path.read_text(encoding="utf-8").replace(
+            "phase: retro\nphase_status: in-progress", "phase: done\nphase_status: complete"
+        )
+        archived_progress.write_text(archived_text, encoding="utf-8")
+        progress_path.unlink()
+        if verify_archive_transition(
+            base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:03Z"
+        ) != handoff_digest:
+            fail("transition moved progress resume failed")
         controls += 1
 
         extra_generation = temp_root / "extra-generation"
@@ -3474,6 +3599,26 @@ def validate_transition_group():
                 fail(f"transition symlink diagnostic mismatch: {exc}")
         else:
             fail("transition generation symlink accepted")
+        negatives += 1
+        root_symlink = temp_root / "generation-root-link"
+        root_symlink.symlink_to(generation_root, target_is_directory=True)
+        try:
+            verified_generation_tree(root_symlink)
+        except ValueError as exc:
+            if "generation root unsafe" not in str(exc):
+                fail(f"transition root symlink diagnostic mismatch: {exc}")
+        else:
+            fail("transition generation root symlink accepted")
+        negatives += 1
+        external_generation = temp_root / "external-generation"
+        shutil.copytree(generation_root, external_generation)
+        try:
+            install_handoff(feature_root, base_root, external_generation, "external-generation")
+        except ValueError as exc:
+            if "outside feature evidence" not in str(exc):
+                fail(f"transition generation containment diagnostic mismatch: {exc}")
+        else:
+            fail("transition external generation accepted")
         negatives += 1
         foreign_root = temp_root / "foreign"
         foreign_root.mkdir()
