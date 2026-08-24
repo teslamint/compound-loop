@@ -20,6 +20,7 @@ from phase_artifact_core import publish as publish_phase_artifact
 from phase_artifact_core import read_journal as read_phase_artifact_journal
 from phase_artifact_core import sha256 as phase_artifact_sha256
 from phase_artifact_core import validate_pending_files as validate_phase_artifact_pending
+from phase_artifact_core import write_journal as write_phase_artifact_journal
 
 SCHEMA_VERSION = "release-loop/v1"
 ARCHIVE_MANIFEST_NAME = ".archive-source-manifest.json"
@@ -259,7 +260,15 @@ def archive_manifest_entries(root: Path, children: list[Path]) -> list[dict[str,
     return sorted(entries, key=lambda row: str(row["path"]))
 
 
-def prepare_archive_manifest(source: Path, children: list[Path], progress: Path, destination: Path) -> None:
+def prepare_archive_manifest(
+    source: Path,
+    children: list[Path],
+    progress: Path,
+    destination: Path,
+    journal: Path,
+    journal_temporary: Path,
+    publication: dict[str, object],
+) -> None:
     manifest_path = destination / ARCHIVE_MANIFEST_NAME
     temporary = destination / (ARCHIVE_MANIFEST_NAME + ".tmp")
     if temporary.exists() or temporary.is_symlink():
@@ -273,19 +282,34 @@ def prepare_archive_manifest(source: Path, children: list[Path], progress: Path,
             raise Blocked("archive destination conflict: invalid source manifest") from exc
         if set(manifest) != {"schema", "entries"} or manifest.get("schema") != ARCHIVE_MANIFEST_SCHEMA or not isinstance(manifest.get("entries"), list):
             reject("archive destination conflict", "invalid source manifest")
+        recorded = publication["owned"].get(ARCHIVE_MANIFEST_NAME)
+        if recorded != phase_artifact_sha256(manifest_path):
+            reject("archive destination conflict", "archive manifest ownership mismatch")
     else:
         existing = list(destination.iterdir())
         if existing:
             reject("archive destination conflict", existing[0].as_posix())
-        manifest = {"schema": ARCHIVE_MANIFEST_SCHEMA, "entries": archive_manifest_entries(source, [*children, progress])}
+        manifest_children = [child for child in children if child.name != JOURNAL_NAME]
+        manifest = {"schema": ARCHIVE_MANIFEST_SCHEMA, "entries": archive_manifest_entries(source, [*manifest_children, progress])}
         temporary.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
         os.replace(temporary, manifest_path)
+        owned = dict(publication["owned"])
+        if ARCHIVE_MANIFEST_NAME in owned:
+            reject("archive destination conflict", "archive manifest ownership conflict")
+        owned[ARCHIVE_MANIFEST_NAME] = phase_artifact_sha256(manifest_path)
+        write_phase_artifact_journal(
+            journal,
+            journal_temporary,
+            {"schema": publication["schema"], "owned": owned, "pending": None},
+        )
+        publication["owned"] = owned
     destination_children = [
         child
         for child in destination.iterdir()
-        if child.name != ARCHIVE_MANIFEST_NAME
+        if child.name not in {ARCHIVE_MANIFEST_NAME, JOURNAL_NAME}
     ]
-    source_entries = [*children, progress] if progress.exists() else children
+    source_children = [child for child in children if child.name != JOURNAL_NAME]
+    source_entries = [*source_children, progress] if progress.exists() else source_children
     observed = archive_manifest_entries(source, source_entries) + archive_manifest_entries(destination, destination_children)
     observed.sort(key=lambda row: str(row["path"]))
     if observed != manifest["entries"]:
@@ -296,17 +320,21 @@ def validate_archive_publication(
     repo: Path,
     source_root: str,
     destination_root: str,
-) -> Path:
+) -> tuple[Path, Path, dict[str, object]]:
     states = []
+    source_state = None
     for root in (source_root, destination_root):
-        journal, _, state = read_phase_artifact_journal(repo, root)
+        journal, temporary, state = read_phase_artifact_journal(repo, root)
+        if root == source_root:
+            source_state = (journal, temporary, state)
         if journal.exists():
-            states.append((root, journal, state))
+            states.append((root, journal, temporary, state))
     if len(states) > 1:
         reject("archive destination conflict", "publisher journal exists in source and destination")
     if not states:
-        return guard(repo, f"{source_root}/{JOURNAL_NAME}", source_root)
-    journal_root, journal, state = states[0]
+        assert source_state is not None
+        return source_state
+    journal_root, journal, temporary, state = states[0]
     validate_phase_artifact_pending(repo, journal_root, state)
     if state["pending"] is not None:
         reject("archive destination conflict", "pending publication requires recovery or compensation")
@@ -327,7 +355,7 @@ def validate_archive_publication(
             or phase_artifact_sha256(candidate) != expected
         ):
             reject("artifact ownership", f"owned final invalid {key}")
-    return journal
+    return journal, temporary, state
 
 
 def archive(
@@ -364,7 +392,7 @@ def archive(
     selected = stored
     destination_path = guard(repo, selected, ".release-loop/archive")
     source_rel = values["artifact_root"]
-    journal = validate_archive_publication(repo, source_rel, selected)
+    journal, journal_temporary, publication = validate_archive_publication(repo, source_rel, selected)
     if source_rel == ".release-loop":
         guard(repo, progress_path, ".release-loop")
         source = repo / ".release-loop"
@@ -388,7 +416,17 @@ def archive(
         for child in children:
             guard(repo, child.relative_to(repo).as_posix(), source_rel)
     destination_path.mkdir(parents=True, exist_ok=True)
-    prepare_archive_manifest(source, children, progress_file, destination_path)
+    prepare_archive_manifest(
+        source,
+        children,
+        progress_file,
+        destination_path,
+        journal,
+        journal_temporary,
+        publication,
+    )
+    if journal.parent == source and journal.exists() and journal not in children:
+        children.append(journal)
     order = []
     for child in children:
         move_one(child, destination_path)

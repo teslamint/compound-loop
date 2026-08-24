@@ -2748,6 +2748,23 @@ def run_case(name: str) -> None:
                 persist_archive_evidence(candidate_progress, destination, "completed")
                 destination_path = candidate / destination
                 destination_path.mkdir(parents=True)
+                forged_manifest = destination_path / ".archive-source-manifest.json"
+                forged_manifest.write_text(
+                    json.dumps({"entries": [], "schema": "archive-source-manifest/v1"}, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                assert_blocked_preserves(
+                    lambda candidate=candidate, candidate_progress=candidate_progress, destination=destination: archive_scope(
+                        candidate,
+                        candidate_progress.relative_to(candidate).as_posix(),
+                        destination,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    "archive manifest ownership",
+                )
+                forged_manifest.unlink()
                 foreign = destination_path / "foreign.md"
                 foreign.write_bytes(b"FOREIGN\n")
                 progress_before = candidate_progress.read_bytes()
@@ -2781,6 +2798,26 @@ def run_case(name: str) -> None:
                 manifest = destination_path / ".archive-source-manifest.json"
                 assert manifest.is_file() and candidate_progress.is_file()
                 progress_bytes = candidate_progress.read_bytes()
+                manifest_bytes = manifest.read_bytes()
+                coordinated_progress = progress_bytes + b"\n# COORDINATED TAMPER\n"
+                coordinated_manifest = json.loads(manifest_bytes)
+                progress_row = next(row for row in coordinated_manifest["entries"] if row["path"] == "progress.md")
+                progress_row["sha256"] = hashlib.sha256(coordinated_progress).hexdigest()
+                candidate_progress.write_bytes(coordinated_progress)
+                manifest.write_text(json.dumps(coordinated_manifest, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+                assert_blocked_preserves(
+                    lambda candidate=candidate, candidate_progress=candidate_progress: archive_scope(
+                        candidate,
+                        candidate_progress.relative_to(candidate).as_posix(),
+                        None,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    "owned final invalid .archive-source-manifest.json",
+                )
+                candidate_progress.write_bytes(progress_bytes)
+                manifest.write_bytes(manifest_bytes)
                 candidate_progress.write_bytes(progress_bytes + b"\n# TAMPERED BODY\n")
                 assert_blocked_preserves(
                     lambda candidate=candidate, candidate_progress=candidate_progress: archive_scope(
@@ -3637,6 +3674,7 @@ def run_case(name: str) -> None:
                 "progress.md",
                 ".phase-artifact-ownership.json",
                 ".phase-artifact-ownership.json.tmp",
+                ".archive-source-manifest.json",
                 ".tmp",
                 ".tmp/final.md",
             )

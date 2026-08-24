@@ -12,7 +12,8 @@ from pathlib import Path, PurePosixPath
 SCHEMA_VERSION = "release-loop/v1"
 JOURNAL_SCHEMA = "phase-artifact-ownership/v1"
 JOURNAL_NAME = ".phase-artifact-ownership.json"
-CONTROL_NAMES = frozenset(("progress.md", JOURNAL_NAME, JOURNAL_NAME + ".tmp"))
+ARCHIVE_MANIFEST_KEY = ".archive-source-manifest.json"
+CONTROL_NAMES = frozenset(("progress.md", JOURNAL_NAME, JOURNAL_NAME + ".tmp", ARCHIVE_MANIFEST_KEY))
 TARGET_PREFIXES = frozenset(("briefs", "reports", "reviews", "evidence"))
 FAILURE_ENV = "RUN_ARTIFACT_INTEGRITY_TEST_FAIL"
 FAILURES = frozenset((
@@ -135,6 +136,8 @@ def canonical_artifact_key(value: str, role: str) -> str:
         if len(path.parts) < 2 or path.parts[0] != ".tmp":
             reject("artifact ownership", f"source outside .tmp {value}")
     else:
+        if canonical == ARCHIVE_MANIFEST_KEY:
+            return canonical
         if len(path.parts) < 2 or path.parts[0] not in TARGET_PREFIXES or (len(path.parts) == 1 and path.name in CONTROL_NAMES):
             reject("artifact ownership", f"reserved target {value}")
     return canonical
@@ -243,6 +246,8 @@ def publish(repo: Path, progress_relative: str, source_relative: str, target_rel
     root = values["artifact_root"]
     source_key = scoped_artifact_key(root, source_relative, "source")
     target_key = scoped_artifact_key(root, target_relative, "target")
+    if target_key == ARCHIVE_MANIFEST_KEY:
+        reject("artifact ownership", f"reserved target {target_relative}")
     if source_key == target_key:
         reject("artifact ownership", "source equals target")
     source = guard(repo, source_relative, root)
