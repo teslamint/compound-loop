@@ -32,11 +32,17 @@ Build one stable-fingerprint inventory before choosing the verdict. Include stru
 
 Use the existing fingerprint contract for every row. If an outside-diff item lacks a file, line anchor, or title, resolve that evidence gap before inventory. Do not invent a weaker identity.
 
-Recompute the P0-P3 inventory from the sealed result wrapper. Compare its full fingerprint, source, and severity rows with the recorded inventory using exact set equality. Report omitted and extra rows separately. Join dispositions against the sealed inventory, never the recorded copy.
+Require one `review-body/v1` manifest on the reviewer's first output line. Derive outcome and the P0-P3 inventory from that line. The wrapper may repeat them only after exact comparison with the manifest. A clean body with actionable wrapper metadata and an actionable body with clean wrapper metadata both block.
+
+Validate the wrapper's body byte length and SHA-256 before parsing the manifest. Read exactly one header line, then preserve all remaining bytes verbatim. Delimiter-like text inside the body has no framing meaning.
+
+Recompute the inventory from the validated body manifest. Compare its full fingerprint, source, and severity rows with the recorded inventory using exact set equality. Report omitted and extra rows separately. Join dispositions against the sealed inventory, never the recorded copy.
 
 Join each sealed fingerprint and severity to the selected ledger's current `finding_dispositions` row. `fixed` satisfies the gate. A reasoned `deferred` row remains in accounting but satisfies clean only for P3. P0-P2 remain actionable unless fixed. A fix event cannot author either transition.
 
 Only an explicit `re_review_of` relationship may author `fixed`. Validate the source event, kind, subject, and sequential ordinal. Derive the current inventory from the sealed re-review wrapper; never trust caller-supplied before or after sets.
+
+If the source predates wrappers, require `review-legacy-source-adoption/v1`. Validate its immutable artifact digest, source event, exact legacy result path and SHA-256, reviewed head, outcome, and full severity inventory. Never rewrite the legacy result.
 
 The verdict cannot be `clean` while any actionable fingerprint lacks an allowed disposition. A complete control inventory may return `clean`; omitted, extra, wrong-source, still-present, and deferred P0-P2 mutants must block.
 

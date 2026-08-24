@@ -154,6 +154,11 @@ REVIEW_CASES = (
     "severity_deferred_gate",
     "ordinal_gap_rejected",
     "completed_full_row",
+    "clean_body_actionable_metadata",
+    "actionable_body_clean_metadata",
+    "delimiter_in_body",
+    "legacy_source_adoption",
+    "legacy_adoption_mismatch",
 )
 
 
@@ -490,9 +495,23 @@ def require_review_contract() -> None:
         raise AssertionError("missing sealed-review contract: " + " | ".join(missing))
 
 
+def reviewer_output(
+    outcome: str,
+    review_body: tuple[str, ...] = (),
+    outside_diff: tuple[str, ...] = (),
+    severity: str = "P1",
+    tail: bytes = b"",
+) -> bytes:
+    inventory = [
+        *({"fingerprint": fingerprint, "severity": severity, "source": "review-body"} for fingerprint in review_body),
+        *({"fingerprint": fingerprint, "severity": severity, "source": "outside-diff"} for fingerprint in outside_diff),
+    ]
+    manifest = {"finding_inventory": inventory, "outcome": outcome, "schema": "review-body/v1"}
+    return json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n" + tail
+
+
 class ReviewFixture:
     SOURCE_KINDS = frozenset(("unit", "final", "standalone"))
-    WRAPPER_MARKER = b"\n--- reviewer body ---\n"
 
     def __init__(self, repo: Path, progress_path: Path) -> None:
         self.repo = repo
@@ -573,6 +592,8 @@ class ReviewFixture:
             "finding_inventory": [],
             "source_review_event": source_review_event,
             "re_review_of": re_review_of,
+            "source_adoption_path": None,
+            "source_adoption_sha256": None,
         }
         self.events.append(event)
         self._persist()
@@ -585,51 +606,50 @@ class ReviewFixture:
     def _result_relative(self, event: dict[str, object]) -> str:
         return self._result_path(event).relative_to(self.progress_path.parent).as_posix()
 
-    def _inventory(
-        self,
-        review_body: tuple[str, ...],
-        outside_diff: tuple[str, ...],
-        severity: str,
-    ) -> list[dict[str, str]]:
-        if severity not in {"P0", "P1", "P2", "P3"}:
-            raise Blocked(f"unknown finding severity: {severity}")
-        return [
-            *({"fingerprint": fingerprint, "severity": severity, "source": "review-body"} for fingerprint in review_body),
-            *({"fingerprint": fingerprint, "severity": severity, "source": "outside-diff"} for fingerprint in outside_diff),
-        ]
+    def _body_manifest(self, reviewer_body: bytes) -> dict[str, object]:
+        first_line = reviewer_body.split(b"\n", 1)[0]
+        try:
+            manifest = json.loads(first_line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise Blocked("reviewer body manifest invalid") from exc
+        if set(manifest) != {"schema", "outcome", "finding_inventory"} or manifest["schema"] != "review-body/v1":
+            raise Blocked("reviewer body manifest invalid")
+        return manifest
 
-    def _wrapper(
-        self,
-        event: dict[str, object],
-        outcome: str,
-        inventory: list[dict[str, str]],
-        reviewer_body: bytes,
-    ) -> bytes:
+    def _wrapper(self, event: dict[str, object], reviewer_body: bytes) -> bytes:
+        manifest = self._body_manifest(reviewer_body)
         metadata = {
+            "body_length": len(reviewer_body),
+            "body_sha256": hashlib.sha256(reviewer_body).hexdigest(),
             "event_id": event["id"],
-            "finding_inventory": inventory,
-            "outcome": outcome,
+            "finding_inventory": manifest["finding_inventory"],
+            "outcome": manifest["outcome"],
             "re_review_of": event["re_review_of"],
             "reviewed_head": event["reviewed_head"],
             "schema": "review-result/v1",
         }
-        return json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode() + self.WRAPPER_MARKER + reviewer_body
+        return json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode() + b"\n" + reviewer_body
 
     def _parse_wrapper(self, event: dict[str, object], payload: bytes) -> tuple[dict[str, object], bytes]:
-        if payload.count(self.WRAPPER_MARKER) != 1:
+        if b"\n" not in payload:
             raise Blocked(f"review result wrapper invalid: {event['id']}")
-        header, reviewer_body = payload.split(self.WRAPPER_MARKER, 1)
+        header, reviewer_body = payload.split(b"\n", 1)
         try:
             metadata = json.loads(header)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise Blocked(f"review result wrapper invalid: {event['id']}") from exc
-        required = {"schema", "event_id", "reviewed_head", "outcome", "finding_inventory", "re_review_of"}
+        required = {"schema", "event_id", "reviewed_head", "outcome", "finding_inventory", "re_review_of", "body_length", "body_sha256"}
         if set(metadata) != required or metadata["schema"] != "review-result/v1":
             raise Blocked(f"review result wrapper invalid: {event['id']}")
         if metadata["event_id"] != event["id"] or metadata["reviewed_head"] != event["reviewed_head"]:
             raise Blocked(f"review result wrapper identity mismatch: {event['id']}")
         if metadata["re_review_of"] != event["re_review_of"]:
             raise Blocked(f"review result wrapper re-review mismatch: {event['id']}")
+        if metadata["body_length"] != len(reviewer_body) or metadata["body_sha256"] != hashlib.sha256(reviewer_body).hexdigest():
+            raise Blocked(f"review result wrapper body mismatch: {event['id']}")
+        manifest = self._body_manifest(reviewer_body)
+        if metadata["outcome"] != manifest["outcome"] or metadata["finding_inventory"] != manifest["finding_inventory"]:
+            raise Blocked(f"review result wrapper manifest mismatch: {event['id']}")
         inventory = metadata["finding_inventory"]
         if not isinstance(inventory, list):
             raise Blocked(f"review result wrapper invalid: {event['id']}")
@@ -648,15 +668,9 @@ class ReviewFixture:
         self,
         event_id: str,
         reviewer_body: bytes,
-        review_body: tuple[str, ...] = (),
-        outside_diff: tuple[str, ...] = (),
-        outcome: str | None = None,
-        severity: str = "P1",
     ) -> dict[str, object]:
         event = self.event(event_id)
-        inventory = self._inventory(review_body, outside_diff, severity)
-        resolved_outcome = outcome or ("actionable" if inventory else "clean")
-        wrapper = self._wrapper(event, resolved_outcome, inventory, reviewer_body)
+        wrapper = self._wrapper(event, reviewer_body)
         if event["state"] == "complete":
             self.verify_result(event_id)
             if self._result_path(event).read_bytes() != wrapper:
@@ -728,11 +742,72 @@ class ReviewFixture:
         for event in self.events:
             if event["state"] != "complete":
                 continue
-            metadata, _ = self.verify_result(str(event["id"]))
+            metadata = self._source_metadata(event)
             for row in metadata["finding_inventory"]:
                 if row["fingerprint"] == fingerprint:
                     return row, str(event["id"])
         raise Blocked(f"unknown finding fingerprint: {fingerprint}")
+
+    def adopt_legacy_source(
+        self,
+        event_id: str,
+        outcome: str,
+        inventory: list[dict[str, str]],
+    ) -> None:
+        event = self.event(event_id)
+        result_path = self._result_path(event)
+        if event["state"] != "complete" or not result_path.is_file():
+            raise Blocked("legacy source adoption result missing")
+        digest = hashlib.sha256(result_path.read_bytes()).hexdigest()
+        if digest != event["result_sha256"]:
+            raise Blocked("legacy source adoption result mismatch")
+        adoption = {
+            "finding_inventory": inventory,
+            "outcome": outcome,
+            "result_path": event["result_path"],
+            "result_sha256": digest,
+            "reviewed_head": event["reviewed_head"],
+            "schema": "review-legacy-source-adoption/v1",
+            "source_event": event_id,
+        }
+        content = json.dumps(adoption, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        relative = f"reviews/adoptions/{event_id.replace(':', '-')}.json"
+        payload = publish_from_cli(self.repo, self.progress_path, relative, content, IMPLEMENTING_CLI)
+        event["source_adoption_path"] = str(payload["target"])
+        event["source_adoption_sha256"] = str(payload["sha256"])
+        self._persist()
+
+    def _source_metadata(self, event: dict[str, object]) -> dict[str, object]:
+        try:
+            metadata, _ = self.verify_result(str(event["id"]))
+            return metadata
+        except Blocked as wrapper_error:
+            adoption_path = event.get("source_adoption_path")
+            adoption_sha = event.get("source_adoption_sha256")
+            if not isinstance(adoption_path, str) or not isinstance(adoption_sha, str):
+                raise wrapper_error
+            path = self.repo / adoption_path
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != adoption_sha:
+                raise Blocked("legacy source adoption integrity mismatch")
+            try:
+                adoption = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise Blocked("legacy source adoption invalid") from exc
+            expected = {
+                "schema": "review-legacy-source-adoption/v1",
+                "source_event": event["id"],
+                "result_path": event["result_path"],
+                "result_sha256": event["result_sha256"],
+                "reviewed_head": event["reviewed_head"],
+                "outcome": adoption.get("outcome"),
+                "finding_inventory": adoption.get("finding_inventory"),
+            }
+            if adoption != expected:
+                raise Blocked("legacy source adoption metadata mismatch")
+            result_path = self.repo / str(event["result_path"])
+            if not result_path.is_file() or hashlib.sha256(result_path.read_bytes()).hexdigest() != event["result_sha256"]:
+                raise Blocked("legacy source adoption result mismatch")
+            return adoption
 
     def set_disposition(self, fingerprint: str, status: str, event_id: str, rationale: str | None = None) -> None:
         event = self.event(event_id)
@@ -764,7 +839,7 @@ class ReviewFixture:
         source = self.event(source_id)
         if source["kind"] != event["kind"] or source["subject"] != event["subject"] or int(source["ordinal"]) + 1 != int(event["ordinal"]):
             raise Blocked("re-review source mismatch")
-        source_metadata, _ = self.verify_result(source_id)
+        source_metadata = self._source_metadata(source)
         current_metadata, _ = self.verify_result(event_id)
         current = {row["fingerprint"] for row in current_metadata["finding_inventory"]}
         for row in source_metadata["finding_inventory"]:
@@ -1755,13 +1830,13 @@ def run_case(name: str) -> None:
             path = initialize(repo, "alpha")
             reviews = ReviewFixture(repo, path)
             head = git(repo, "rev-parse", "HEAD")
-            output = b'{"verdict":"clean"}\nreviewer tail preserved\n'
+            output = reviewer_output("clean", tail=b'{"verdict":"clean"}\nreviewer tail preserved\n')
 
             if name == "review_event_lifecycle":
                 first = reviews.allocate("unit", "U1", head)
-                reviews.complete(str(first["id"]), b'{"verdict":"actionable"}\n', review_body=("fp-review",))
+                reviews.complete(str(first["id"]), reviewer_output("actionable", review_body=("fp-review",)))
                 fix = reviews.allocate("fix", "U1", head, source_review_event="unit:U1:1")
-                reviews.complete(str(fix["id"]), b'{"verdict":"fixed"}\n')
+                reviews.complete(str(fix["id"]), reviewer_output("fixed"))
                 second = reviews.allocate("unit", "U1", head, re_review_of="unit:U1:1")
                 reviews.complete(str(second["id"]), output)
                 reviews.verify_re_review(str(second["id"]))
@@ -1786,7 +1861,7 @@ def run_case(name: str) -> None:
                 assert reviews.counts()["unit_passes"] == 1
             elif name == "matching_started_result":
                 event = reviews.allocate("unit", "U1", head)
-                wrapper = reviews._wrapper(event, "clean", [], output)
+                wrapper = reviews._wrapper(event, output)
                 publish_from_cli(repo, path, reviews._result_relative(event), wrapper, IMPLEMENTING_CLI)
                 assert event["state"] == "started"
                 assert reviews.recover(str(event["id"])) == "recovered"
@@ -1794,7 +1869,7 @@ def run_case(name: str) -> None:
                 assert reviews.counts()["unit_passes"] == 1
             elif name == "deferred_then_fixed":
                 first = reviews.allocate("unit", "U1", head)
-                reviews.complete(str(first["id"]), output, review_body=("fp-deferred",))
+                reviews.complete(str(first["id"]), reviewer_output("actionable", review_body=("fp-deferred",)))
                 reviews.set_disposition("fp-deferred", "deferred", str(first["id"]), "triaged for later work")
                 second = reviews.allocate("unit", "U1", head, re_review_of="unit:U1:1")
                 reviews.complete(str(second["id"]), output)
@@ -1814,22 +1889,17 @@ def run_case(name: str) -> None:
                 assert reviews.events == before_events and reviews.counts()["final_passes"] == 1
             elif name == "outside_diff_inventory_complete":
                 event = reviews.allocate("final", "branch", head)
-                reviews.complete(
-                    str(event["id"]),
-                    output,
-                    review_body=("fp-body",),
-                    outside_diff=("fp-outside",),
-                    severity="P3",
-                )
+                reviews.complete(str(event["id"]), reviewer_output("actionable", review_body=("fp-body",), outside_diff=("fp-outside",), severity="P3"))
                 reviews.set_disposition("fp-body", "deferred", str(event["id"]), "accepted minor residual")
                 reviews.set_disposition("fp-outside", "deferred", str(event["id"]), "accepted outside-diff residual")
                 reviews.clean_gate(str(event["id"]))
             elif name == "event_conflict":
                 event = reviews.allocate("unit", "U1", head)
-                wrapper = reviews._wrapper(event, "clean", [], b"first result\n")
+                first = reviewer_output("clean", tail=b"first result\n")
+                wrapper = reviews._wrapper(event, first)
                 publish_from_cli(repo, path, reviews._result_relative(event), wrapper, IMPLEMENTING_CLI)
                 try:
-                    reviews.complete(str(event["id"]), b"different result\n")
+                    reviews.complete(str(event["id"]), reviewer_output("clean", tail=b"different result\n"))
                 except Blocked as exc:
                     assert str(exc).startswith("review-event-conflict: unit:U1:1:"), str(exc)
                 else:
@@ -1856,7 +1926,7 @@ def run_case(name: str) -> None:
                     raise AssertionError("mismatched completed result did not block")
             elif name == "fix_cannot_mark_fixed":
                 first = reviews.allocate("unit", "U1", head)
-                reviews.complete(str(first["id"]), output, review_body=("fp-fix",))
+                reviews.complete(str(first["id"]), reviewer_output("actionable", review_body=("fp-fix",)))
                 fix = reviews.allocate("fix", "U1", head, source_review_event="unit:U1:1")
                 reviews.complete(str(fix["id"]), output)
                 try:
@@ -1867,7 +1937,7 @@ def run_case(name: str) -> None:
                     raise AssertionError("fix event marked a finding fixed")
             elif name == "outside_diff_missing_disposition":
                 event = reviews.allocate("final", "branch", head)
-                reviews.complete(str(event["id"]), output, outside_diff=("fp-outside",))
+                reviews.complete(str(event["id"]), reviewer_output("actionable", outside_diff=("fp-outside",)))
                 try:
                     reviews.clean_gate(str(event["id"]))
                 except Blocked as exc:
@@ -1888,7 +1958,7 @@ def run_case(name: str) -> None:
                 }
             elif name == "inventory_omitted_row":
                 event = reviews.allocate("final", "branch", head)
-                reviews.complete(str(event["id"]), output, outside_diff=("fp-omitted",))
+                reviews.complete(str(event["id"]), reviewer_output("actionable", outside_diff=("fp-omitted",), severity="P3"))
                 reviews.set_disposition("fp-omitted", "deferred", str(event["id"]), "minor")
                 event["finding_inventory"] = []
                 try:
@@ -1909,11 +1979,11 @@ def run_case(name: str) -> None:
                     raise AssertionError("extra recorded inventory row did not block")
             elif name in {"wrong_source_re_review", "unrelated_later_review", "finding_still_present"}:
                 first = reviews.allocate("unit", "U1", head)
-                reviews.complete(str(first["id"]), output, review_body=("fp-source",))
+                reviews.complete(str(first["id"]), reviewer_output("actionable", review_body=("fp-source",)))
                 source = "unit:U1:1" if name != "unrelated_later_review" else None
                 second = reviews.allocate("unit", "U1", head, re_review_of=source)
                 current = ("fp-source",) if name == "finding_still_present" else ()
-                reviews.complete(str(second["id"]), output, review_body=current)
+                reviews.complete(str(second["id"]), reviewer_output("actionable" if current else "clean", review_body=current))
                 if name == "wrong_source_re_review":
                     second["re_review_of"] = "unit:other:1"
                 try:
@@ -1924,7 +1994,7 @@ def run_case(name: str) -> None:
                     raise AssertionError(f"{name} re-review mutant did not block")
             elif name == "severity_deferred_gate":
                 event = reviews.allocate("final", "branch", head)
-                reviews.complete(str(event["id"]), output, review_body=("fp-p1",))
+                reviews.complete(str(event["id"]), reviewer_output("actionable", review_body=("fp-p1",)))
                 reviews.set_disposition("fp-p1", "deferred", str(event["id"]), "not fixed")
                 try:
                     reviews.clean_gate(str(event["id"]))
@@ -1947,9 +2017,68 @@ def run_case(name: str) -> None:
                     raise AssertionError("ordinal gap did not block")
             elif name == "completed_full_row":
                 event = reviews.allocate("unit", "U1", head)
-                reviews.complete(str(event["id"]), output, review_body=("fp-full",))
+                reviews.complete(str(event["id"]), reviewer_output("actionable", review_body=("fp-full",)))
                 assert event["outcome"] == "actionable"
                 assert event["finding_inventory"] == [{"fingerprint": "fp-full", "severity": "P1", "source": "review-body"}]
+            elif name in {"clean_body_actionable_metadata", "actionable_body_clean_metadata"}:
+                event = reviews.allocate("unit", "U1", head)
+                body = reviewer_output("clean") if name == "clean_body_actionable_metadata" else reviewer_output("actionable", review_body=("fp-live",))
+                wrapper = reviews._wrapper(event, body)
+                header, raw_body = wrapper.split(b"\n", 1)
+                metadata = json.loads(header)
+                if name == "clean_body_actionable_metadata":
+                    metadata["outcome"] = "actionable"
+                    metadata["finding_inventory"] = [{"fingerprint": "fp-fake", "severity": "P1", "source": "review-body"}]
+                else:
+                    metadata["outcome"] = "clean"
+                    metadata["finding_inventory"] = []
+                mutant = json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode() + b"\n" + raw_body
+                try:
+                    reviews._parse_wrapper(event, mutant)
+                except Blocked as exc:
+                    assert "manifest mismatch" in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"{name} mutant did not block")
+            elif name == "delimiter_in_body":
+                event = reviews.allocate("unit", "U1", head)
+                body = reviewer_output("clean", tail=b"before\n--- reviewer body ---\nafter\n")
+                reviews.complete(str(event["id"]), body)
+                _, observed = reviews.verify_result(str(event["id"]))
+                assert observed == body
+            elif name in {"legacy_source_adoption", "legacy_adoption_mismatch"}:
+                source = reviews.allocate("unit", "U3", head)
+                legacy = b"P0: none\n\nP1 findings\n\n1. legacy finding\n\nSPEC_VERDICT: BLOCKED\nQUALITY_VERDICT: REQUEST_CHANGES\n"
+                published = publish_from_cli(repo, path, reviews._result_relative(source), legacy, IMPLEMENTING_CLI)
+                source["state"] = "complete"
+                source["result_sha256"] = published["sha256"]
+                source["outcome"] = "blocked"
+                source["finding_inventory"] = [{"fingerprint": "fp-legacy", "source": "structured"}]
+                reviews._persist()
+                adopted_inventory = [{"fingerprint": "fp-legacy", "severity": "P1", "source": "structured"}]
+                reviews.adopt_legacy_source(str(source["id"]), "blocked", adopted_inventory)
+                if name == "legacy_adoption_mismatch":
+                    original_path = source["source_adoption_path"]
+                    source["source_adoption_path"] = ".release-loop/reviews/adoptions/wrong.json"
+                    try:
+                        reviews._source_metadata(source)
+                    except Blocked as exc:
+                        assert "adoption integrity mismatch" in str(exc), str(exc)
+                    else:
+                        raise AssertionError("legacy adoption path mismatch did not block")
+                    source["source_adoption_path"] = original_path
+                    source["result_sha256"] = "0" * 64
+                    try:
+                        reviews._source_metadata(source)
+                    except Blocked as exc:
+                        assert "mismatch" in str(exc), str(exc)
+                    else:
+                        raise AssertionError("legacy adoption source SHA mismatch did not block")
+                else:
+                    second = reviews.allocate("unit", "U3", head, re_review_of=str(source["id"]))
+                    reviews.complete(str(second["id"]), reviewer_output("clean"))
+                    reviews.verify_re_review(str(second["id"]))
+                    assert reviews.dispositions["fp-legacy"]["status"] == "fixed"
+                    assert reviews._result_path(source).read_bytes() == legacy
         else:
             raise AssertionError(f"unknown case: {name}")
 

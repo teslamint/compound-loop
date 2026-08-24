@@ -67,6 +67,8 @@ review_events:
     finding_inventory: []               # [{fingerprint: <stable ID>, severity: P0 | P1 | P2 | P3, source: structured | review-body | outside-diff}]
     source_review_event: <event ID for fix, otherwise null>
     re_review_of: <prior unit, final, or standalone event ID; otherwise null>
+    source_adoption_path: <immutable legacy-source adoption path or null>
+    source_adoption_sha256: <64-char lowercase SHA-256 or null>
 finding_dispositions:
   - fingerprint: <stable reviewing fingerprint>
     severity: P0 | P1 | P2 | P3
@@ -114,11 +116,15 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - `review_events`, `finding_dispositions`, and `review_counts` are additive. New ledgers include all three. A legacy ledger may add them only with `completeness: partial` and a fresh `counting_started_at`.
 - `review_events` is append-only. Derive the next ordinal from the ledger: the first is 1, then each kind and subject advances without gaps. Only a matching started row replays. Duplicate, conflicting, or gapped rows block.
 - Reserve one round-specific `result_path` in the started row. Persist `outcome: null` before dispatch. A `fix` row names `source_review_event`; a source re-review names `re_review_of`. A completed row never dispatches again.
-- Wrap each immutable result in `review-result/v1` metadata. It contains event ID, full head, outcome, `re_review_of`, and the full severity inventory. Append the reviewer body verbatim after the wrapper delimiter.
+- The reviewer body starts with one canonical `review-body/v1` JSON manifest line. It declares outcome and the full P0-P3 inventory. Arbitrary verbatim reviewer bytes follow that first line.
+- Derive wrapper outcome and inventory only from that body manifest. Callers cannot supply metadata separately.
+- Frame each `review-result/v1` wrapper as one JSON header line followed by the exact body bytes. The header records body byte length and SHA-256 plus event ID, head, `re_review_of`, outcome, and inventory. Validate length, digest, and equality with the body manifest. Delimiter-like bytes inside the body remain valid.
 - Publish the validated wrapper through the packaged phase publisher. Use one same-directory temporary path and the reserved create-once final path. Persist the publisher's final SHA-256 in the event.
 - A started event without a final result re-dispatches under the same ID. A journal-owned final result completes that event only after wrapper validation. Persist its outcome and full inventory in the completion edit.
 - A foreign or different final result blocks with `review-event-conflict`. Never allocate another event to bypass the conflict.
 - A complete event must have its immutable result. A missing file blocks with `review-event-integrity: completed review result missing`. A digest mismatch blocks with `review-event-integrity: completed review digest mismatch`.
+- A pre-wrapper source may be adopted once through `review-legacy-source-adoption/v1`. The immutable adoption binds source event, exact result path and SHA-256, reviewed head, outcome, and full severity inventory. Preserve the legacy result bytes. Persist the adoption path and SHA-256 on the source event.
+- Re-review resolves an adopted source only after validating both immutable digests and every adoption field. A mismatched path, result digest, head, outcome, inventory, or source event blocks.
 - Persist reviewer output verbatim. Parsing may validate its shape, but no caller may rewrite the authoritative result bytes.
 - Each finding uses the reviewing contract's stable fingerprint. `finding_dispositions` contains at most one current row per fingerprint.
 - A fix event cannot change a disposition. Only an explicit `re_review_of` relation may set `fixed`. Validate matching kind, subject, sequential ordinal, and source event, then derive closure from the sealed re-review wrapper.

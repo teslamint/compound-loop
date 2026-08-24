@@ -97,13 +97,14 @@ Apply this protocol to every unit review, fixer batch, and final branch review. 
 2. Allocate and persist the review event before dispatch. Derive the next ordinal from existing rows for that kind and subject: first is 1, then sequential. Persist `state: started`, `outcome: null`, the full reviewed head, and a round-specific result path. A fix event names its source review event. A unit, final, or standalone re-review names its exact `re_review_of` event.
 3. Replay only a matching started event and its reserved path. Duplicate, conflicting, or gapped ordinals block. An occupied different final result blocks with `review-event-conflict`.
 4. A started event without a published final result re-dispatches under the same ID. A matching journal-owned final result completes the started event without another dispatch.
-5. Build a `review-result/v1` wrapper with event ID, full head, outcome, `re_review_of`, and the complete P0-P3 finding inventory. Append the worker's reviewer body verbatim. Write that wrapper to a same-directory temporary path, validate it, then invoke the packaged publisher:
+5. Require the reviewer body to start with one canonical `review-body/v1` manifest line. Derive outcome and the complete P0-P3 inventory only from that line. Frame `review-result/v1` as one JSON header line followed by the exact body bytes, preserving the reviewer body verbatim. The header binds body byte length and SHA-256, event ID, full head, `re_review_of`, outcome, and inventory. Validate all fields against the body manifest before invoking the packaged publisher:
 
    `python3 "$implementing_skill_root/scripts/phase-artifact-integrity.py" publish --repo . --progress-path <repo-relative-progress-path> --source <repo-relative-temporary-path> --target <repo-relative-round-result-path>`
 
 6. Persist the publisher's final SHA-256, outcome, stable finding fingerprints, `state: complete`, and the evidence Log line in one ledger edit. Derive `review_counts` from complete events and current dispositions in that same edit. Never increment lifecycle totals directly.
 7. Count complete `unit`, `fix`, and `final` events as `unit_passes`, `fix_rounds`, and `final_passes`. A re-review is another unit pass. Event replay and later phase-gate reuse add no count.
 8. A fix event cannot change a finding disposition. Only the explicit source re-review may set `fixed`. Validate its kind, subject, sequential ordinal, and source, then derive absence from its sealed wrapper. Never accept caller-supplied fingerprint sets as closure evidence. Terminal triage may set `deferred` with a rationale. Only deferred P3 may satisfy clean; P0-P2 require `fixed`.
+9. When a source predates wrappers, publish one immutable `review-legacy-source-adoption/v1` artifact. Bind its source event, exact legacy result path and SHA-256, head, outcome, and full severity inventory. Preserve the legacy bytes. Persist the adoption path and SHA-256 on the source event, and reject every field or digest mismatch before re-review.
 
 ## Per-unit loop
 

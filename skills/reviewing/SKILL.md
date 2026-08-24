@@ -50,9 +50,11 @@ Parse tokens, stripping each before treating the remainder as a PR number/URL/br
 
 When a standalone dispatch receives a valid `progress_path`, derive its next sequential ordinal and allocate `standalone:<subject>:<ordinal>`. Persist `state: started`, `outcome: null`, the full reviewed head, and one round-specific result path before any lane dispatch. Only a matching started event resumes with the same ID and path. Duplicate, conflicting, or gapped ordinals block.
 
-Create a `review-result/v1` wrapper containing event ID, full head, outcome, `re_review_of`, and the complete P0-P3 inventory. Append the merged reviewer body verbatim. Publish the wrapper through the caller's packaged phase publisher. Then record its SHA-256, outcome, full inventory, and `state: complete` in one ledger edit.
+Start the merged reviewer body with one canonical `review-body/v1` JSON manifest line. Derive outcome and the complete P0-P3 inventory only from that manifest. Frame `review-result/v1` as one JSON header line followed by the exact body bytes. The header binds body length and SHA-256, event ID, head, `re_review_of`, outcome, and inventory. Validate header-to-body equality, then publish the wrapper.
 
 On resume, a started event without a final result re-dispatches. A matching journal-owned wrapper completes it only after metadata validation. A foreign or different result blocks with `review-event-conflict`. A complete event with a missing or mismatched result blocks with `review-event-integrity`; never allocate a replacement event.
+
+For a pre-wrapper source, accept only one immutable `review-legacy-source-adoption/v1` artifact. It binds source event, exact legacy path and SHA-256, reviewed head, outcome, and full severity inventory. Preserve the source bytes. Validate the adoption path and digest plus every bound field before using it for re-review.
 
 A standalone review without `progress_path` remains report-only. It returns the report to its caller and creates no run event or artifact.
 
