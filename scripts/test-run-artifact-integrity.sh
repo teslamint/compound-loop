@@ -3956,31 +3956,55 @@ def run_case(name: str) -> None:
                 "import sys\n"
                 f"real_git = {real_git!r}\n"
                 "args = sys.argv[1:]\n"
+                "if args == ['log', '-1', '--format=%H', '--', 'docs/deviations/2026-08-24-final-review-integrity-correction-019.md']:\n"
+                "    print(os.environ['MATRIX_TEST_ADDENDUM_COMMIT'])\n"
+                "    raise SystemExit(0)\n"
                 "if args and args[0] == 'log' and '--format=%G?' in args:\n"
-                "    counter_path = os.environ['MATRIX_TEST_SIGNATURE_COUNTER']\n"
-                "    with open(counter_path, encoding='utf-8') as stream:\n"
-                "        count = int(stream.read())\n"
-                "    with open(counter_path, 'w', encoding='utf-8') as stream:\n"
-                "        stream.write(str(count + 1))\n"
-                "    if count == 0:\n"
+                "    commit = args[-1]\n"
+                "    if commit == os.environ['MATRIX_TEST_SOURCE_COMMIT']:\n"
                 "        print(os.environ['MATRIX_TEST_SOURCE_STATUS'])\n"
                 "        raise SystemExit(0)\n"
-                "    if count == 1:\n"
+                "    if commit == os.environ['MATRIX_TEST_ADDENDUM_COMMIT']:\n"
                 "        print(os.environ['MATRIX_TEST_ADDENDUM_STATUS'])\n"
                 "        raise SystemExit(0)\n"
+                "    print('unexpected signature commit: ' + commit, file=sys.stderr)\n"
+                "    raise SystemExit(2)\n"
                 "os.execv(real_git, [real_git, *args])\n",
                 encoding="utf-8",
             )
             signature_git.chmod(0o755)
-            signature_counter = signature_git_dir / "counter"
+            source_commit = git(ROOT, "rev-parse", "HEAD")
+            addendum_commit = "2" * 40
+            unknown_commit = "3" * 40
+            probe_environment = {
+                **os.environ,
+                "MATRIX_TEST_SOURCE_COMMIT": source_commit,
+                "MATRIX_TEST_SOURCE_STATUS": "G",
+                "MATRIX_TEST_ADDENDUM_COMMIT": addendum_commit,
+                "MATRIX_TEST_ADDENDUM_STATUS": "E",
+            }
+
+            def probe_signature(commit: str):
+                return subprocess.run(
+                    (str(signature_git), "log", "-1", "--format=%G?", commit),
+                    env=probe_environment,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+
+            assert [probe_signature(source_commit).stdout.strip() for _ in range(2)] == ["G", "G"]
+            assert [probe_signature(addendum_commit).stdout.strip() for _ in range(2)] == ["E", "E"]
+            assert probe_signature(unknown_commit).returncode != 0
 
             def run_evidence(source_status: str = "G", addendum_status: str = "G", failure_after: str | None = None):
-                signature_counter.write_text("0", encoding="utf-8")
                 environment = os.environ.copy()
                 environment.update({
                     "PATH": str(signature_git_dir) + os.pathsep + environment.get("PATH", ""),
-                    "MATRIX_TEST_SIGNATURE_COUNTER": str(signature_counter),
+                    "MATRIX_TEST_SOURCE_COMMIT": source_commit,
                     "MATRIX_TEST_SOURCE_STATUS": source_status,
+                    "MATRIX_TEST_ADDENDUM_COMMIT": addendum_commit,
                     "MATRIX_TEST_ADDENDUM_STATUS": addendum_status,
                 })
                 if failure_after is None:
