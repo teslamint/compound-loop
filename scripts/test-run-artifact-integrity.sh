@@ -272,6 +272,7 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["SKILL"], "An occupied scope without one matching valid progress record is an artifact-scope collision"),
         (selected["SKILL"], "A published progress record remains resumable."),
         (selected["SCHEMA"], "artifact_root: .release-loop/runs/<feature_slug>"),
+        (selected["SCHEMA"], "Legacy records require `artifact_root: .release-loop`."),
         (selected["SCHEMA"], "The four closed physical-root families are"),
         (selected["SCHEMA"], "Reject every symlink in each existing source or destination component"),
         (selected["ARCHIVE"], "Move scoped `progress.md` last as the archive commit point."),
@@ -281,6 +282,8 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["HOOKS"], "Make the base owner discover and resume that exact progress path."),
         (selected["HOOKS"], "Cancellation preserves the source worktree."),
         (selected["SKILL"], "directory containing the loaded `SKILL.md`"),
+        (selected["SKILL"], "temporary regular file under `<artifact_root>/.tmp/`"),
+        (selected["SCHEMA"], "temporary path under `<artifact_root>/.tmp/`"),
     )
     missing = [fragment for text, fragment in required if fragment not in text]
     if check_invocations:
@@ -773,6 +776,12 @@ def require_phase_consumer_contract() -> None:
         (PHASE_CONSUMERS["implementing"], "<artifact_root>/briefs/U<N>-brief.md"),
         (PHASE_CONSUMERS["implementing"], "<artifact_root>/reports/U<N>-report.md"),
         (PHASE_CONSUMERS["implementing"], "<artifact_root>/reviews/U<N>-diff.txt"),
+        (PHASE_CONSUMERS["implementing"], "<artifact_root>/.tmp/U<N>-brief.tmp"),
+        (PHASE_CONSUMERS["implementing"], "<artifact_root>/.tmp/U<N>-report.tmp"),
+        (PHASE_CONSUMERS["implementing"], "<artifact_root>/.tmp/U<N>-<transition-id>-<outcome>.tmp"),
+        (PHASE_CONSUMERS["implementing"], "<artifact_root>/.tmp/U<N>-diff.tmp"),
+        (PHASE_CONSUMERS["implementing"], "<artifact_root>/.tmp/branch-diff.tmp"),
+        (PHASE_CONSUMERS["implementing"], "publish each temporary artifact"),
         (PHASE_CONSUMERS["reviewing"], "<artifact_root>/evidence/U<N>/"),
         (PLAN_SCHEMA, "<artifact_root>/evidence/U<N>/"),
         (PLAN_SCHEMA, "executable probe"),
@@ -839,6 +848,7 @@ def require_review_contract() -> None:
         (REVIEWING, "phase-gate reuse does not allocate another event"),
         (MERGE_PIPELINE, "review-body and outside-diff"),
         (MERGE_PIPELINE, "allowed disposition"),
+        (MERGE_PIPELINE, "temporary path under `<artifact_root>/.tmp/`"),
     )
     missing = [fragment for text, fragment in required if fragment not in text]
     if missing:
@@ -3440,6 +3450,7 @@ def run_case(name: str) -> None:
             )
         elif name == "publisher_core_parity":
             assert RELEASE_CORE.read_bytes() == IMPLEMENTING_CORE.read_bytes()
+            assert RELEASE_CORE.read_text(encoding="utf-8").count("def scoped_artifact_key(") == 1
             observed = []
             journals = []
             for label, cli in (("release", CLI), ("implementing", IMPLEMENTING_CLI)):
@@ -3861,6 +3872,26 @@ def run_case(name: str) -> None:
             accepted = migration.validate_migration(repo, path.relative_to(repo).as_posix(), adoption_path, lambda _: "G")
             assert accepted["state"] == "new" and accepted["events"][0]["id"] == "fix:U3:1"
             assert accepted["review_counts"]["fix_rounds"] == 1
+            for invalid_ordinal in (None, "not-an-integer"):
+                try:
+                    migration.normalized_existing({"ordinal": invalid_ordinal})
+                except migration.Blocked as exc:
+                    assert "ledger ordinal invalid" in str(exc)
+                else:
+                    raise AssertionError("invalid ledger ordinal did not block")
+
+            invalid_head = dict(base_row)
+            invalid_head["reviewed_head"] = "-"
+            invalid_head_path = publish_adoption("fix-history-invalid-head", [invalid_head])
+            valid_progress = path.read_text(encoding="utf-8")
+            path.write_text(valid_progress.replace(f"    reviewed_head: {head}\n", "    reviewed_head: -\n", 1), encoding="utf-8")
+            try:
+                migration.validate_migration(repo, path.relative_to(repo).as_posix(), invalid_head_path, lambda _: "G")
+            except migration.Blocked as exc:
+                assert "full reviewed head required" in str(exc), str(exc)
+            else:
+                raise AssertionError("invalid reviewed head reached Git")
+            path.write_text(valid_progress, encoding="utf-8")
 
             attacks = []
             wrong_source = dict(base_row)

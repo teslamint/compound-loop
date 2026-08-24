@@ -2637,6 +2637,9 @@ repo = Path(sys.argv[2])
 subprocess.run(("git", "init", "-q"), cwd=repo, check=True)
 for key, value in (("user.name", "Fixture"), ("user.email", "fixture@example.invalid"), ("core.autocrlf", "false"), ("core.safecrlf", "false"), ("commit.gpgsign", "false")):
     subprocess.run(("git", "config", key, value), cwd=repo, check=True)
+(repo / "README.md").write_text("fixture\n", encoding="utf-8")
+subprocess.run(("git", "add", "README.md"), cwd=repo, check=True)
+subprocess.run(("git", "commit", "-qm", "fixture"), cwd=repo, check=True)
 shared = ("exact repo-relative `progress_path`", "`artifact_root = dirname(progress_path)`")
 for name in ("planning", "implementing", "reviewing", "shipping", "retrospective"):
     text = (plugin_root / f"skills/{name}/SKILL.md").read_text(encoding="utf-8")
@@ -2676,6 +2679,8 @@ linked = subprocess.run((sys.executable, str(cli), "initialize", "--repo", str(r
 assert linked.returncode != 0 and "symlink component" in linked.stderr, linked.stderr
 progress_text = progress_path.read_text(encoding="utf-8")
 branch = subprocess.run(("git", "symbolic-ref", "--short", "HEAD"), cwd=repo, check=True, text=True, capture_output=True).stdout.strip()
+head = subprocess.run(("git", "rev-parse", "HEAD"), cwd=repo, check=True, text=True, capture_output=True).stdout.strip()
+base = subprocess.run(("git", "merge-base", "main", "HEAD"), cwd=repo, check=True, text=True, capture_output=True).stdout.strip()
 for fragment in (
     "started: 20",
     "updated: 20",
@@ -2695,6 +2700,14 @@ for fragment in (
     "pr: null",
     "merged: false",
     "blocked_reason: null",
+    "review_counts:\n  completeness: exact\n  counting_started_at: 20",
+    "unit_passes: 0\n  fix_rounds: 0\n  final_passes: 0\n  standalone_passes: 0\n  findings_fixed: 0\n  findings_deferred: 0",
+    "review_events: []",
+    "finding_dispositions: []",
+    "current_commit_range:\n  base: " + base + "\n  head: " + head,
+    "review_gate:\n  event_id: null\n  head: null",
+    "rewrite_approvals: []",
+    "rewrite_results: []",
 ):
     assert fragment in progress_text, fragment
 assert re.search(r"started: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", progress_text)

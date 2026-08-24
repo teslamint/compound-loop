@@ -131,12 +131,22 @@ def default_signature_checker(repo):
     return lambda commit: git(repo, "log", "-1", "--format=%G?", commit)
 
 
+def ordinal_value(event):
+    try:
+        value = int(event.get("ordinal"))
+    except (TypeError, ValueError) as exc:
+        raise Blocked("fix migration ledger ordinal invalid") from exc
+    if value < 1:
+        raise Blocked("fix migration ledger ordinal invalid")
+    return value
+
+
 def normalized_existing(event):
     return {
         "id": event.get("id"),
         "kind": event.get("kind"),
         "subject": event.get("subject"),
-        "ordinal": int(event.get("ordinal", "0")),
+        "ordinal": ordinal_value(event),
         "state": event.get("state"),
         "reviewed_head": event.get("reviewed_head"),
         "result_path": event.get("result_path"),
@@ -205,6 +215,9 @@ def validate_migration(repo, progress_relative, adoption_relative, signature_che
             raise Blocked("fix migration source review is chained")
         if source.get("subject") != row["subject"] or source.get("reviewed_head") != row["reviewed_head"]:
             raise Blocked("fix migration source review mismatch")
+        reviewed_head = row["reviewed_head"]
+        if not isinstance(reviewed_head, str) or not COMMIT.fullmatch(reviewed_head):
+            raise Blocked("fix migration full reviewed head required")
         source_sha = source.get("result_sha256")
         source_path = source.get("result_path")
         if not isinstance(source_sha, str) or not SHA256.fullmatch(source_sha) or not isinstance(source_path, str):
@@ -217,7 +230,7 @@ def validate_migration(repo, progress_relative, adoption_relative, signature_che
             raise Blocked("fix migration full fix commit mismatch")
         if checker(commit) != "G":
             raise Blocked("fix migration signed fix commit required")
-        ancestor = subprocess.run(("git", "merge-base", "--is-ancestor", row["reviewed_head"], commit), cwd=str(repo), check=False)
+        ancestor = subprocess.run(("git", "merge-base", "--is-ancestor", reviewed_head, commit), cwd=str(repo), check=False)
         if ancestor.returncode != 0:
             raise Blocked("fix migration commit/source mismatch")
         report_sha = row["fixer_report_sha256"]
@@ -247,7 +260,7 @@ def validate_migration(repo, progress_relative, adoption_relative, signature_che
     by_subject = {}
     for event in events:
         if event.get("kind") == "fix":
-            by_subject.setdefault(event.get("subject"), []).append(int(event.get("ordinal", "0")))
+            by_subject.setdefault(event.get("subject"), []).append(ordinal_value(event))
     for event in accepted:
         if event["id"] not in by_id:
             by_subject.setdefault(event["subject"], []).append(event["ordinal"])

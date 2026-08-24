@@ -140,6 +140,14 @@ def canonical_artifact_key(value: str, role: str) -> str:
     return canonical
 
 
+def scoped_artifact_key(root: str, value: str, role: str) -> str:
+    path = PurePosixPath(value)
+    root_path = PurePosixPath(root)
+    if root_path in path.parents:
+        value = path.relative_to(root_path).as_posix()
+    return canonical_artifact_key(value, role)
+
+
 def validate_pending_row(pending: dict[str, str], owned: dict[str, str]) -> None:
     source = canonical_artifact_key(pending["source"], "source")
     target = canonical_artifact_key(pending["target"], "target")
@@ -233,8 +241,8 @@ def publish(repo: Path, progress_relative: str, source_relative: str, target_rel
     repo = repo.resolve(strict=True)
     _, values = validate_progress(repo, progress_relative)
     root = values["artifact_root"]
-    source_key = canonical_artifact_key(PurePosixPath(source_relative).relative_to(PurePosixPath(root)).as_posix() if PurePosixPath(root) in PurePosixPath(source_relative).parents else source_relative, "source")
-    target_key = canonical_artifact_key(PurePosixPath(target_relative).relative_to(PurePosixPath(root)).as_posix() if PurePosixPath(root) in PurePosixPath(target_relative).parents else target_relative, "target")
+    source_key = scoped_artifact_key(root, source_relative, "source")
+    target_key = scoped_artifact_key(root, target_relative, "target")
     if source_key == target_key:
         reject("artifact ownership", "source equals target")
     source = guard(repo, source_relative, root)

@@ -36,7 +36,7 @@ The standalone literal set is closed: `required-fields`, `schema`, `approved-sta
 
 ## Phases
 
-Before every phase dispatch, persist and send one invocation packet containing the literal field `progress_path: <repo-relative-progress-path>`. Never let a phase infer this value from cwd, a feature name, or a glob. The same packet carries the packaged publisher command for every phase artifact write: `python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" publish --repo . --progress-path <repo-relative-progress-path> --source <repo-relative-temporary-path> --target <repo-relative-final-path>`. The source is a transition-owned temporary regular file under `artifact_root`; the target is its final sibling path under that same root.
+Before every phase dispatch, persist and send one invocation packet containing the literal field `progress_path: <repo-relative-progress-path>`. Never let a phase infer this value from cwd, a feature name, or a glob. The same packet carries the packaged publisher command for every phase artifact write: `python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" publish --repo . --progress-path <repo-relative-progress-path> --source <repo-relative-temporary-path> --target <repo-relative-final-path>`. The source is a transition-owned temporary regular file under `<artifact_root>/.tmp/`; the target is its final sibling path under that same root.
 
 | # | Phase | Invokes | Gate |
 |---|-------|---------|------|

@@ -125,7 +125,7 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 
 ## Rules
 
-- `artifact_root` equals the exact repo-relative directory that contains the selected progress record. New scoped records require this field. A resumed legacy record can add `artifact_root: .release-loop`.
+- `artifact_root` equals the exact repo-relative directory that contains the selected progress record. New scoped records require this field. Legacy records require `artifact_root: .release-loop`. A legacy record without that field cannot resume.
 - The four closed physical-root families are scoped active state, legacy active state, terminal archives, and transition handoff.
 - Scoped active state permits only the selected `.release-loop/runs/<run_id>` root. Legacy active state permits the root progress file and its four known sibling directories.
 - Terminal archive state permits only the collision-resolved `.release-loop/archive/<destination>` root. Handoff state permits only `.release-loop/.handoff`.
@@ -151,7 +151,7 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - The manifest outcome is closed: `clean`, `actionable`, or `blocked`. Reject every other value before publication or recovery.
 - Derive wrapper outcome and inventory only from that body manifest. Callers cannot supply metadata separately.
 - Frame each `review-result/v1` wrapper as one JSON header line followed by the exact body bytes. The header records body byte length and SHA-256 plus event ID, head, `re_review_of`, outcome, and inventory. Validate length, digest, and equality with the body manifest. Delimiter-like bytes inside the body remain valid.
-- Publish the validated wrapper through the packaged phase publisher. Use one same-directory temporary path and the reserved create-once final path. Persist the publisher's final SHA-256 in the event.
+- Publish the validated wrapper through the packaged phase publisher. Use one temporary path under `<artifact_root>/.tmp/` and the reserved create-once final path. Persist the publisher's final SHA-256 in the event.
 - A started event without a final result re-dispatches under the same ID. A journal-owned final result completes that event only after wrapper validation. Persist its outcome and full inventory in the completion edit.
 - A foreign or different final result blocks with `review-event-conflict`. Never allocate another event to bypass the conflict.
 - A complete event must have its immutable result. A missing file blocks with `review-event-integrity: completed review result missing`. A digest mismatch blocks with `review-event-integrity: completed review digest mismatch`.

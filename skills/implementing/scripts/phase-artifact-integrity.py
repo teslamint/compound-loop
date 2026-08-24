@@ -19,6 +19,7 @@ from phase_artifact_core import validate_owned_finals
 from phase_artifact_core import validate_pending_files
 
 FEATURE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 class Blocked(RuntimeError):
@@ -202,6 +203,12 @@ def initialize(repo, plan_value):
     base_result = subprocess.run(("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"), cwd=str(repo), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     base_text = base_result.stdout.strip()
     base_branch = base_text[len("origin/"):] if base_result.returncode == 0 and base_text.startswith("origin/") else "main"
+    head_result = subprocess.run(("git", "rev-parse", "HEAD"), cwd=str(repo), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    head = head_result.stdout.strip()
+    range_result = subprocess.run(("git", "merge-base", base_branch, "HEAD"), cwd=str(repo), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    range_base = range_result.stdout.strip()
+    if head_result.returncode or range_result.returncode or not COMMIT_PATTERN.fullmatch(head) or not COMMIT_PATTERN.fullmatch(range_base):
+        reject("invalid repository", "current commit range unavailable")
     body = (
         "---\n"
         "schema: release-loop/v1\n"
@@ -234,6 +241,25 @@ def initialize(repo, plan_value):
         "pr: null\n"
         "merged: false\n"
         "blocked_reason: null\n"
+        "review_counts:\n"
+        "  completeness: exact\n"
+        "  counting_started_at: " + now + "\n"
+        "  unit_passes: 0\n"
+        "  fix_rounds: 0\n"
+        "  final_passes: 0\n"
+        "  standalone_passes: 0\n"
+        "  findings_fixed: 0\n"
+        "  findings_deferred: 0\n"
+        "review_events: []\n"
+        "finding_dispositions: []\n"
+        "current_commit_range:\n"
+        "  base: " + range_base + "\n"
+        "  head: " + head + "\n"
+        "review_gate:\n"
+        "  event_id: null\n"
+        "  head: null\n"
+        "rewrite_approvals: []\n"
+        "rewrite_results: []\n"
         "---\n\n## Log\n\n- standalone initialize: complete record published\n"
     )
     temporary.write_text(body, encoding="utf-8")

@@ -541,6 +541,8 @@ make_fixture_repo() {
   cp "$ROOT/skills/compound/scripts/validate-frontmatter.py" "$destination/skills/compound/scripts/validate-frontmatter.py"
   cp "$ROOT/skills/planning/scripts/validate-plan-frontmatter.py" "$destination/skills/planning/scripts/validate-plan-frontmatter.py"
   cp "$ROOT/skills/release-loop/scripts/run-artifact-integrity.py" "$destination/skills/release-loop/scripts/run-artifact-integrity.py"
+  cp "$ROOT/skills/release-loop/scripts/regenerate-matrix-evidence.py" "$destination/skills/release-loop/scripts/regenerate-matrix-evidence.py"
+  cp "$ROOT/skills/release-loop/scripts/validate-fix-event-migration.py" "$destination/skills/release-loop/scripts/validate-fix-event-migration.py"
   cp "$ROOT/skills/release-loop/scripts/phase_artifact_core.py" "$destination/skills/release-loop/scripts/phase_artifact_core.py"
   cp "$ROOT/skills/implementing/scripts/phase-artifact-integrity.py" "$destination/skills/implementing/scripts/phase-artifact-integrity.py"
   cp "$ROOT/skills/implementing/scripts/phase_artifact_core.py" "$destination/skills/implementing/scripts/phase_artifact_core.py"
@@ -549,7 +551,7 @@ make_fixture_repo() {
 
 make_validation_fixture_repo() {
   local destination="$1" rel
-  mkdir -p "$destination"
+  git clone -q --shared "$ROOT" "$destination" || return 1
   while IFS= read -r -d '' rel; do
     mkdir -p "$destination/$(dirname "$rel")"
     cp "$ROOT/$rel" "$destination/$rel"
@@ -605,7 +607,7 @@ case_real_artifacts_and_bytes() {
     out="$(compile_artifact "$line" "$path" 2>&1)"; rc=$?; [[ $rc -eq 0 ]] || { printf '%s\n' "$out"; result=1; }
     count=$((count + $(printf '%s\n' "$out" | grep -c 'status=pass')))
   done <<< "$entries"
-  [[ $count -eq 14 ]] || { echo "  expected fourteen artifact pass records, got $count"; result=1; }
+  [[ $count -eq 18 ]] || { echo "  expected eighteen artifact pass records, got $count"; result=1; }
   return "$result"
 }
 
@@ -705,7 +707,7 @@ case_validate_all_registered_artifacts() {
   [[ $rc -eq 0 ]] || { printf '%s\n' "$out"; return 1; }
   [[ $(printf '%s\n' "$out" | grep -c 'endpoint role=oldest') -eq 1 ]] || result=1
   [[ $(printf '%s\n' "$out" | grep -c 'endpoint role=newest') -eq 1 ]] || result=1
-  [[ $(printf '%s\n' "$out" | grep -c 'artifact class=.*status=pass') -eq 14 ]] || result=1
+  [[ $(printf '%s\n' "$out" | grep -c 'artifact class=.*status=pass') -eq 18 ]] || result=1
   [[ $(printf '%s\n' "$out" | grep -c '^ALL CHECKS PASSED$') -eq 1 ]] || result=1
   assert_contains "$out" 'label=compound-frontmatter-validator' 'registered committed artifact' || result=1
   assert_contains "$out" 'label=plan-frontmatter-validator' 'registered committed artifact' || result=1

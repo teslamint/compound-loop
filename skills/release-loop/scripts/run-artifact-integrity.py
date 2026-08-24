@@ -286,9 +286,8 @@ def archive(
     inject_after_journal = test_failure("archive-after-journal")
     progress_file, values, text = validate_progress(repo, progress_path)
     mode, stored = archive_evidence(text)
-    candidate = destination or stored
-    if candidate is not None:
-        destination_path = guard(repo, candidate, ".release-loop/archive")
+    if destination is not None:
+        guard(repo, destination, ".release-loop/archive")
     if stored is None:
         reject("archive destination conflict", "missing persisted destination")
     if mode == "completed":
