@@ -40,7 +40,7 @@ Recompute the inventory from the validated body manifest. Compare its full finge
 
 Join each sealed fingerprint and severity to the selected ledger's current `finding_dispositions` row. `fixed` satisfies the gate. A reasoned `deferred` row remains in accounting but satisfies clean only for P3. P0-P2 remain actionable unless fixed. A fix event cannot author either transition.
 
-Only an explicit `re_review_of` relationship may author `fixed`. Validate the source event, kind, subject, and sequential ordinal. Derive the current inventory from the sealed re-review wrapper; never trust caller-supplied before or after sets.
+The generic disposition operation may record only reasoned `deferred`; it rejects `fixed`. Only the verifying re-review operation authors `fixed`. Validate explicit `re_review_of`, source event, kind, subject, sequential ordinal, both sealed inventories, and finding absence. Recovery and adopted sources use this same path.
 
 If the source predates wrappers, require `review-legacy-source-adoption/v1`. Validate its immutable artifact digest, source event, exact legacy result path and SHA-256, reviewed head, outcome, and full severity inventory. Never rewrite the legacy result.
 

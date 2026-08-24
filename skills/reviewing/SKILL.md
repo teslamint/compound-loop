@@ -58,6 +58,8 @@ For a pre-wrapper source, accept only one immutable `review-legacy-source-adopti
 
 A standalone review without `progress_path` remains report-only. It returns the report to its caller and creates no run event or artifact.
 
+The generic disposition operation may record only reasoned `deferred`; it rejects every `fixed` request. Only `verify_re_review` writes `fixed` after validating the explicit source relationship, both sealed inventories, and finding absence. Legacy adoption and recovery enter that same verification path.
+
 ## Step 1: Scope Discovery
 
 Resolve `base`/`head`/`mode` with the 3-check test -- all three must hold for `local-aligned`; any failure means `pr-remote`/`branch-remote`, and workspace file contents for changed paths are not trusted:

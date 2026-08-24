@@ -129,7 +129,8 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - Phase-gate reuse requires sealed outcome `clean` and a successful exact inventory/disposition clean gate. `actionable` and `blocked` events never reuse.
 - Persist reviewer output verbatim. Parsing may validate its shape, but no caller may rewrite the authoritative result bytes.
 - Each finding uses the reviewing contract's stable fingerprint. `finding_dispositions` contains at most one current row per fingerprint.
-- A fix event cannot change a disposition. Only an explicit `re_review_of` relation may set `fixed`. Validate matching kind, subject, sequential ordinal, and source event, then derive closure from the sealed re-review wrapper.
+- The generic disposition operation records only reasoned `deferred`. It rejects `fixed` from every caller, including the source review itself and fix events.
+- Only the verifying re-review operation writes `fixed`. It first validates explicit `re_review_of`, matching kind and subject, sequential source, sealed source and current inventories, and finding absence. Recovery and adopted sources use the same path.
 - Terminal triage may set `deferred` only with a rationale. Record its original severity. Deferred findings remain in accounting, but only deferred P3 may satisfy a clean gate. P0-P2 require `fixed`.
 - Derive `review_counts` after every registry transition. Count complete events by kind. Derive finding totals from current disposition rows. Never increment these counters directly.
 - Write the event or disposition transition, derived counters, result pointer, and evidence Log line in one ledger edit. Replaying one event ID changes none of them.

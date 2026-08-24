@@ -162,6 +162,7 @@ REVIEW_CASES = (
     "invalid_review_outcome",
     "actionable_phase_reuse",
     "blocked_phase_reuse",
+    "source_review_self_fix",
 )
 
 
@@ -487,7 +488,7 @@ def require_review_contract() -> None:
         (SCHEMA, "completed review digest mismatch"),
         (IMPLEMENTING, "Allocate and persist the review event before dispatch"),
         (IMPLEMENTING, "reviewer body verbatim"),
-        (IMPLEMENTING, "Only the explicit source re-review may set `fixed`"),
+        (IMPLEMENTING, "Only the verifying re-review operation writes `fixed`"),
         (REVIEWING, "cheapest artifact that satisfies every written check"),
         (REVIEWING, "phase-gate reuse does not allocate another event"),
         (MERGE_PIPELINE, "review-body and outside-diff"),
@@ -820,6 +821,8 @@ class ReviewFixture:
             raise Blocked(f"disposition event incomplete: {event_id}")
         if event["kind"] == "fix":
             raise Blocked("fix event cannot change disposition")
+        if status != "deferred":
+            raise Blocked("fixed requires verifying re-review")
         if status == "deferred" and not rationale:
             raise Blocked(f"deferred finding requires rationale: {fingerprint}")
         row, introduced_by = self._sealed_finding(fingerprint)
@@ -851,7 +854,15 @@ class ReviewFixture:
             fingerprint = str(row["fingerprint"])
             if fingerprint in current:
                 raise Blocked(f"re-review finding still present: {fingerprint}")
-            self.set_disposition(fingerprint, "fixed", event_id)
+            prior = self.dispositions.get(fingerprint)
+            self.dispositions[fingerprint] = {
+                "status": "fixed",
+                "severity": row["severity"],
+                "introduced_by": prior["introduced_by"] if prior else source_id,
+                "resolved_by": event_id,
+                "rationale": None,
+            }
+        self._persist()
 
     def clean_gate(self, event_id: str) -> None:
         event = self.event(event_id)
@@ -2108,6 +2119,15 @@ def run_case(name: str) -> None:
                     assert "clean" in str(exc), str(exc)
                 else:
                     raise AssertionError(f"{name} reused a non-clean result")
+            elif name == "source_review_self_fix":
+                event = reviews.allocate("unit", "U1", head)
+                reviews.complete(str(event["id"]), reviewer_output("actionable", review_body=("fp-self",)))
+                try:
+                    reviews.set_disposition("fp-self", "fixed", str(event["id"]))
+                except Blocked as exc:
+                    assert "verifying re-review" in str(exc), str(exc)
+                else:
+                    raise AssertionError("source review marked its own finding fixed")
         else:
             raise AssertionError(f"unknown case: {name}")
 
