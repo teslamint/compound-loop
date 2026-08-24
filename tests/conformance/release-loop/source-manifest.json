@@ -1,0 +1,33 @@
+{
+  "schema": "release-loop-source-manifest/v1",
+  "clauses": [
+    {
+      "id": "design-user-gate",
+      "path": "skills/release-loop/SKILL.md",
+      "heading": "# Release Loop",
+      "text": "| 1 | Design | `designing` | **USER** — always human, never auto-skip |",
+      "sha256": "6448626ea1d8f4be17de589561aeb05b5b19458d0a67c1e85704f138b54fffee"
+    },
+    {
+      "id": "resume-after-merge",
+      "path": "skills/release-loop/SKILL.md",
+      "heading": "## Approved-plan transition hooks",
+      "text": "If the authoritative base ledger records `phase: ship` and `merged: true`, resume never re-enters pre-merge `shipping` or treats “nothing to ship” as completion.",
+      "sha256": "b7f9e2024a8da1e91be598f09e410801889fde7d9d5fdacdc1a055857a5a360c"
+    },
+    {
+      "id": "degraded-dispatch",
+      "path": "references/dispatch-degradation.md",
+      "heading": "## Tier 2 — sequential passes",
+      "text": "No parallel primitive (or the caller degraded deliberately): run the same work items one at a time, each in a fresh pass with the same prompt and the same output contract.",
+      "sha256": "c5ce7941b88592787e79ba170525d254fe42824fac3804ffca78061cdfceb4b7"
+    },
+    {
+      "id": "sc2-discrimination",
+      "path": "skills/planning/SKILL.md",
+      "heading": "## 14. Self-review",
+      "text": "- **Discrimination check** — for every step that compares two things, run the step's own comparison on two controlled fixture pairs.",
+      "sha256": "96af190021f0df06217e36986c37add62e13ba928d1bca7ff1ce00cfee594f19"
+    }
+  ]
+}

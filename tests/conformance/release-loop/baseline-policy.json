@@ -1,0 +1,8 @@
+{
+  "schema": "release-loop-baseline-policy/v1",
+  "state": "bootstrap",
+  "approved_spec": "docs/specs/2026-08-24-release-loop-conformance-fuzzing-design.md",
+  "approved_spec_sha256": "2cde033379b87d6c8eb92ea32ea3800a82625d86056da496343a91cf0bd8930b",
+  "source_generation": "d96606ddae0d923a3b5b0a64d06c2aee8201ee6535417bba3bbd32256c15c795",
+  "roadmap_item": "Conformance suite"
+}

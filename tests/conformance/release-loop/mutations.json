@@ -1,0 +1,125 @@
+{
+  "schema": "release-loop-mutations/v1",
+  "mutations": [
+    {
+      "id": "delete-design-user-gate",
+      "case_id": "L1-full-lifecycle",
+      "grader": "design-user-gate",
+      "expected": "expected-reject"
+    },
+    {
+      "id": "replay-completed-phase",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "no-phase-replay",
+      "expected": "expected-reject"
+    },
+    {
+      "id": "reenter-premerge-shipping",
+      "case_id": "L3-post-merge-resume",
+      "grader": "resume-after-merge",
+      "expected": "expected-reject"
+    },
+    {
+      "id": "drop-work-without-subagents",
+      "case_id": "L4-degraded-dispatch",
+      "grader": "no-coverage-drop",
+      "expected": "expected-reject"
+    },
+    {
+      "id": "different-artifact-kind",
+      "case_id": "SC2-reject-a-different-kind",
+      "grader": "sc2-comparison",
+      "expected": "expected-reject",
+      "fixture": {
+        "left_kind": "mlmodelc",
+        "right_kind": "mlpackage",
+        "invariance_equal": true,
+        "axis_relevant": true,
+        "effect_equal": false
+      }
+    },
+    {
+      "id": "unstable-invariance-output",
+      "case_id": "SC2-reject-b-unstable-invariance",
+      "grader": "sc2-comparison",
+      "expected": "expected-reject",
+      "fixture": {
+        "left_kind": "mlpackage",
+        "right_kind": "mlpackage",
+        "invariance_equal": false,
+        "axis_relevant": true,
+        "effect_equal": false
+      }
+    },
+    {
+      "id": "irrelevant-changed-axis",
+      "case_id": "SC2-reject-c-irrelevant-axis",
+      "grader": "sc2-comparison",
+      "expected": "expected-reject",
+      "fixture": {
+        "left_kind": "coremldata.bin",
+        "right_kind": "coremldata.bin",
+        "invariance_equal": true,
+        "axis_relevant": false,
+        "effect_equal": false
+      }
+    },
+    {
+      "id": "metadata-only-difference",
+      "case_id": "SC2-reject-d-metadata-only",
+      "grader": "sc2-comparison",
+      "expected": "expected-reject",
+      "fixture": {
+        "left_kind": "mlpackage",
+        "right_kind": "mlpackage",
+        "invariance_equal": true,
+        "axis_relevant": true,
+        "effect_equal": true,
+        "metadata_equal": false
+      }
+    },
+    {
+      "id": "always-passing-guard",
+      "case_id": "SC2-guard-reject",
+      "grader": "sc2-guard",
+      "expected": "expected-reject",
+      "fixture": {
+        "pass_fixture": true,
+        "fail_fixture": true
+      }
+    },
+    {
+      "id": "controlled-same-kind-pairs",
+      "case_id": "SC2-accept-controlled-pairs",
+      "grader": "sc2-comparison",
+      "expected": "pass",
+      "fixture": {
+        "left_kind": "weights.bin",
+        "right_kind": "weights.bin",
+        "invariance_equal": true,
+        "axis_relevant": true,
+        "effect_equal": false
+      }
+    },
+    {
+      "id": "contradictory-substitute-command",
+      "case_id": "parser-contradictory-substitute-command",
+      "grader": "operative-section-parser",
+      "expected": "expected-reject",
+      "fixture": {
+        "operative": "run canonical-command",
+        "substitute": "run substitute-command"
+      }
+    },
+    {
+      "id": "fence-relocation",
+      "case_id": "parser-fence-relocation",
+      "grader": "operative-section-parser",
+      "expected": "expected-reject",
+      "fixture": {
+        "fence": "~~~~markdown",
+        "operative": "run canonical-command"
+      }
+    }
+  ]
+}
