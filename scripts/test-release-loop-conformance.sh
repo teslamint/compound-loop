@@ -1046,6 +1046,7 @@ def validate_policy_files(fixture_root, feature_root=root):
     policy_root = data_root / "policies"
     claude_path = policy_root / "claude-settings.json"
     codex_path = policy_root / "codex.rules"
+    codex_profile_source = policy_root / "codex-profile.toml"
     claude = load_json(claude_path)
     guard_path = fixture_root / ".claude" / "hooks" / "conformance-path-guard"
     write_claude_path_guard(guard_path, fixture_root, feature_root)
@@ -1063,18 +1064,50 @@ def validate_policy_files(fixture_root, feature_root=root):
     ):
         if codex.count(literal) != 1:
             fail("Codex policy literal mismatch")
+    codex_executable = shutil.which("codex")
+    if not codex_executable:
+        fail("Codex profile executable unavailable")
+    codex_link = Path(codex_executable).absolute()
+    codex_bin_dir = codex_link.parent
+    codex_runtime_root = codex_link.resolve(strict=True).parent.parent
+    profile_template = codex_profile_source.read_text(encoding="utf-8")
+    required_profile_literals = {
+        'default_permissions = "conformance"',
+        'approval_policy = "on-request"',
+        'approvals_reviewer = "auto_review"',
+        '":minimal" = "read"',
+        '"__CODEX_BIN_DIR__" = "read"',
+        '"__CODEX_RUNTIME_ROOT__" = "read"',
+        '"__FEATURE_ROOT__" = "read"',
+        '[permissions.conformance.filesystem.":workspace_roots"]',
+        '"." = "write"',
+    }
+    if any(profile_template.count(literal) != 1 for literal in required_profile_literals):
+        fail("Codex permission profile template mismatch")
+    runtime_profile = profile_template
+    for placeholder, value in (
+        ("__CODEX_BIN_DIR__", str(codex_bin_dir)),
+        ("__CODEX_RUNTIME_ROOT__", str(codex_runtime_root)),
+        ("__FEATURE_ROOT__", str(feature_root.resolve(strict=True))),
+    ):
+        runtime_profile = runtime_profile.replace(placeholder, value)
+    if "__" in runtime_profile:
+        fail("Codex permission profile materialization mismatch")
     settings_target = fixture_root / ".claude" / "settings.json"
     rules_target = fixture_root / ".codex" / "rules" / "conformance.rules"
+    profile_target = fixture_root / ".codex" / "conformance.config.toml"
     settings_target.parent.mkdir(parents=True, exist_ok=True)
     rules_target.parent.mkdir(parents=True)
     write_json_atomic(settings_target, runtime_claude, fixture_root)
     shutil.copyfile(codex_path, rules_target)
+    profile_target.write_text(runtime_profile, encoding="utf-8")
+    profile_target.chmod(0o400)
     empty_mcp = fixture_root / "empty-mcp.json"
     empty_mcp.write_text('{"mcpServers": {}}\n', encoding="utf-8")
     for source, target in ((codex_path, rules_target),):
         if hashlib.sha256(source.read_bytes()).digest() != hashlib.sha256(target.read_bytes()).digest():
             fail("fixture policy copy digest mismatch")
-    return 4
+    return 5
 
 
 def validate_fixture():
@@ -1391,13 +1424,16 @@ def build_claude_resume(feature_root, model, settings_path, mcp_path, budget, pr
 def build_codex_initial(fixture_root, model, result_path):
     return [
         "codex", "exec", "--json", "--ignore-user-config",
-        "--model", model, "--approve-for-me",
+        "--model", model, "--profile", "conformance",
         "--cd", str(fixture_root), "--output-last-message", str(result_path), "-",
     ]
 
 
 def build_codex_resume(model, session_id):
-    return ["codex", "exec", "resume", "--json", "--ignore-user-config", "--model", model, session_id, "-"]
+    return [
+        "codex", "exec", "resume", "--json", "--ignore-user-config", "--model", model,
+        "--profile", "conformance", session_id, "-",
+    ]
 
 
 def require_adapter_array(actual, expected, label):
@@ -1631,12 +1667,15 @@ def validate_preflight():
         settings_path = fixture_root / ".claude" / "settings.json"
         guard_path = fixture_root / ".claude" / "hooks" / "conformance-path-guard"
         rules_path = fixture_root / ".codex" / "rules" / "conformance.rules"
+        codex_profile_path = fixture_root / ".codex" / "conformance.config.toml"
         mcp_path = fixture_root / "empty-mcp.json"
+        if not codex_profile_path.is_file() or "__" in codex_profile_path.read_text(encoding="utf-8"):
+            fail("Codex permission profile missing or unmaterialized")
         if mcp_path.read_bytes() != b'{"mcpServers": {}}\n':
             fail("Claude empty MCP contract mismatch")
         policy_digests = {
             path: hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in (settings_path, guard_path, rules_path, mcp_path)
+            for path in (settings_path, guard_path, rules_path, codex_profile_path, mcp_path)
         }
         real_claude = shutil.which("claude")
         if not real_claude:
@@ -1689,11 +1728,12 @@ def validate_preflight():
         ]
         expected_codex_initial = [
             "codex", "exec", "--json", "--ignore-user-config", "--model", codex_model,
-            "--approve-for-me", "--cd", str(fixture_root),
+            "--profile", "conformance", "--cd", str(fixture_root),
             "--output-last-message", str(codex_result), "-",
         ]
         expected_codex_resume = [
-            "codex", "exec", "resume", "--json", "--ignore-user-config", "--model", codex_model, codex_id, "-",
+            "codex", "exec", "resume", "--json", "--ignore-user-config", "--model", codex_model,
+            "--profile", "conformance", codex_id, "-",
         ]
         for label, actual, expected in (
             ("Claude initial", claude_initial, expected_claude_initial),
@@ -2618,6 +2658,7 @@ def generation_manifest(models, results, full_command, receipt, ledger, process_
         "mutations_sha256": hashlib.sha256((data_root / "mutations.json").read_bytes()).hexdigest(),
         "claude_settings_sha256": hashlib.sha256((data_root / "policies/claude-settings.json").read_bytes()).hexdigest(),
         "codex_rules_sha256": hashlib.sha256((data_root / "policies/codex.rules").read_bytes()).hexdigest(),
+        "codex_profile_sha256": hashlib.sha256((data_root / "policies/codex-profile.toml").read_bytes()).hexdigest(),
         "models": models,
         "cli_versions": {"claude": "fake-2.1.241", "codex": "fake-0.149.1"},
         "results_sha256": result_digest,
@@ -2633,7 +2674,8 @@ def generation_manifest(models, results, full_command, receipt, ledger, process_
 def validate_generation_manifest(manifest):
     required = {
         "schema", "plugin_sha256", "source_manifest_sha256", "corpus_sha256", "mutations_sha256",
-        "claude_settings_sha256", "codex_rules_sha256", "models", "cli_versions", "results_sha256",
+        "claude_settings_sha256", "codex_rules_sha256", "codex_profile_sha256",
+        "models", "cli_versions", "results_sha256",
         "command_sha256", "command_audit_sha256", "receipt_sha256", "caps_settlement_sha256",
         "process_proof_sha256", "codex_hard_dollar_cap",
     }
@@ -2897,6 +2939,7 @@ def finalize_generation_directory(
         "mutations_sha256": hashlib.sha256((data_root / "mutations.json").read_bytes()).hexdigest(),
         "claude_settings_sha256": hashlib.sha256((data_root / "policies/claude-settings.json").read_bytes()).hexdigest(),
         "codex_rules_sha256": hashlib.sha256((data_root / "policies/codex.rules").read_bytes()).hexdigest(),
+        "codex_profile_sha256": hashlib.sha256((data_root / "policies/codex-profile.toml").read_bytes()).hexdigest(),
         "models": models,
         "cli_versions": {"claude": "2.1.241", "codex": "0.149.1"},
         "command_sha256": paid_command_digest(exact_command),
@@ -4512,9 +4555,15 @@ def actual_paid_launcher(call_spec):
             repo_path / ".claude/settings.json",
             repo_path / ".claude/hooks/conformance-path-guard",
             repo_path / ".codex/rules/conformance.rules",
+            repo_path / ".codex/conformance.config.toml",
             repo_path / "empty-mcp.json",
         )
     }
+    codex_profile_path = repo_path / ".codex/conformance.config.toml"
+    env.update(
+        CONFORMANCE_CODEX_PROFILE_PATH=str(codex_profile_path),
+        CONFORMANCE_CODEX_PROFILE_SHA256=hashlib.sha256(codex_profile_path.read_bytes()).hexdigest(),
+    )
     gh_path = bin_path / "gh"
     write_gh_simulator(gh_path)
     validate_gh_simulator(gh_path)
