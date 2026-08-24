@@ -124,6 +124,21 @@
       }
     },
     {
+      "id": "skip-v1-before-ship",
+      "case_id": "L1-full-lifecycle",
+      "grader": "transition-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "review": "clean",
+        "next_phase": "ship",
+        "v1_status": "missing",
+        "v2_status": "missing",
+        "phase": "review",
+        "handoff_consumed": false,
+        "generation_digests": ["a", "a", "a", "a"]
+      }
+    },
+    {
       "id": "replay-completed-phase",
       "case_id": "L2-mid-loop-resume",
       "grader": "no-phase-replay",
@@ -210,6 +225,51 @@
       "case_id": "L3-post-merge-resume",
       "grader": "resume-after-merge",
       "expected": "expected-reject"
+    },
+    {
+      "id": "skip-v2-before-done",
+      "case_id": "L3-post-merge-resume",
+      "grader": "transition-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "review": "clean",
+        "next_phase": "done",
+        "v1_status": "accepted",
+        "v2_status": "started",
+        "phase": "retro",
+        "handoff_consumed": false,
+        "generation_digests": ["a", "a", "a", "a"]
+      }
+    },
+    {
+      "id": "mismatched-generation-chain",
+      "case_id": "L3-post-merge-resume",
+      "grader": "transition-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "review": "clean",
+        "next_phase": "retro",
+        "v1_status": "accepted",
+        "v2_status": "started",
+        "phase": "ship",
+        "handoff_consumed": false,
+        "generation_digests": ["a", "a", "b", "a"]
+      }
+    },
+    {
+      "id": "early-handoff-consumption",
+      "case_id": "L3-post-merge-resume",
+      "grader": "transition-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "review": "clean",
+        "next_phase": "retro",
+        "v1_status": "accepted",
+        "v2_status": "started",
+        "phase": "retro",
+        "handoff_consumed": true,
+        "generation_digests": ["a", "a", "a", "a"]
+      }
     },
     {
       "id": "drop-work-without-subagents",

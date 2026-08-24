@@ -24,6 +24,10 @@ retro: docs/retros/YYYY-MM-DD-<context>-retro.md
 design_approved: {by: user, at: <timestamp>}
 ship_approved: {by: user | auto, at: <timestamp>, conditions: "CI green, no open P0"}
 
+# Optional sealed verification evidence.
+pre_merge_verification: {id: V1, status: started | accepted, generation_sha256: <sha256>, updated: <timestamp>}
+archive_verification: {id: V2, status: started | accepted, generation_sha256: <sha256>, archive_root: <path>, updated: <timestamp>}
+
 # Optional pending USER gate. It exists only while one release-loop question waits.
 pending_gate:
   id: design-approval | ship-approval
@@ -75,6 +79,7 @@ blocked_reason: null                    # set when phase_status: blocked
 - Before sending one answer, atomically write `gate_answer_receipt` and a reservation Log line. A receipt is at-most-once delivery evidence, not proof that the answer reached the session. Resume never sends another answer while a receipt exists; it blocks for first-hand reconciliation.
 - After the owning phase observes the answer, it validates a timezone-bearing outcome timestamp at or after `issued_at`. It then atomically removes the gate and receipt, changes the status, writes approval when applicable, and appends the outcome Log line.
 - Resume sends one answer only when the gate ID, phase, answer class, issue timestamp, absent approval, and absent receipt match. Missing, duplicate, stale, mismatched, unknown, already-approved, or previously reserved state blocks without sending an answer.
+- V1 acceptance is required before `shipping` starts. V2 acceptance is required before `phase: done`. Each record uses the exact generation digest and transitions only from `started` to `accepted` with Log evidence.
 - Timestamps are ISO-8601 with timezone, **fetched fresh via command (`date -u +%Y-%m-%dT%H:%M:%SZ`) at each write — never estimated or interpolated** (pilot-proven: estimated timestamps produced a non-monotonic log).
 - **Status flips are atomic with their evidence**: changing `phase`/`phase_status` and writing the explaining Log line (plus `blocked_reason` when the status is blocked) happen in the same edit — a bare `blocked` with `blocked_reason: null` is a schema violation, not a placeholder.
 - Corrupt/unparsable file on resume → rebuild frontmatter from git evidence (branch, committed artifacts, PR state via `gh pr view`), keep the old file as `progress.md.corrupt-<timestamp>`, and note the rebuild in the Log. A stored `feature:` that fails the `feature_slug` invariant is the same class of corruption.

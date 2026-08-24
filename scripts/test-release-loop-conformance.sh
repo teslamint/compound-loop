@@ -6,9 +6,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-}"
 
 case "$MODE" in
-  static-inventory|static|fixture|gate|preflight|resource|prepare-pilot|install-full-approval|live-pilot|live) ;;
+  static-inventory|static|fixture|gate|preflight|resource|transition|prepare-pilot|install-full-approval|live-pilot|live|handoff|publish-baseline|verify-archive) ;;
   *)
-    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture|gate|preflight|resource|prepare-pilot|install-full-approval|live-pilot|live>" >&2
+    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture|gate|preflight|resource|transition|prepare-pilot|install-full-approval|live-pilot|live|handoff|publish-baseline|verify-archive>" >&2
     exit 2
     ;;
 esac
@@ -58,6 +58,7 @@ expected_graders = [
     "sc2-guard",
     "operative-section-parser",
     "pending-gate-state",
+    "transition-state",
 ]
 expected_results = ["conformant", "pass", "expected-reject"]
 expected_case_contracts = {
@@ -65,8 +66,8 @@ expected_case_contracts = {
         "live",
         ["design", "plan", "implement", "review", "ship", "retro", "archive"],
         "conformant",
-        ["delete-design-user-gate", "missing-pending-gate", "unknown-pending-gate", "already-approved-pending-gate", "unknown-pending-answer", "nonmonotonic-pending-answer", "nonmonotonic-pending-outcome", "malformed-pending-outcome", "missing-pending-outcome-log"],
-        ["design-user-gate", "phase-order", "final-action", "retro-required", "archive-complete", "pending-gate-state"],
+        ["delete-design-user-gate", "missing-pending-gate", "unknown-pending-gate", "already-approved-pending-gate", "unknown-pending-answer", "nonmonotonic-pending-answer", "nonmonotonic-pending-outcome", "malformed-pending-outcome", "missing-pending-outcome-log", "skip-v1-before-ship"],
+        ["design-user-gate", "phase-order", "final-action", "retro-required", "archive-complete", "pending-gate-state", "transition-state"],
     ),
     "L2-mid-loop-resume": (
         "live",
@@ -79,8 +80,8 @@ expected_case_contracts = {
         "live",
         ["resume", "post-ship-completion", "retro", "archive"],
         "conformant",
-        ["reenter-premerge-shipping"],
-        ["resume-after-merge", "no-premerge-reentry", "retro-required"],
+        ["reenter-premerge-shipping", "skip-v2-before-done", "mismatched-generation-chain", "early-handoff-consumption"],
+        ["resume-after-merge", "no-premerge-reentry", "retro-required", "transition-state"],
     ),
     "L4-degraded-dispatch": (
         "live",
@@ -2339,7 +2340,7 @@ def object_digest(value):
     return hashlib.sha256((json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()).hexdigest()
 
 
-def write_json_atomic(path, value, allowed_root):
+def write_json_atomic(path, value, allowed_root, mode_bits=0o600):
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         path.parent.resolve(strict=True).relative_to(allowed_root.resolve(strict=True))
@@ -2351,7 +2352,7 @@ def write_json_atomic(path, value, allowed_root):
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
     temporary_path = Path(temporary_name)
     try:
-        os.fchmod(descriptor, 0o600)
+        os.fchmod(descriptor, mode_bits)
         written = 0
         while written < len(payload):
             written += os.write(descriptor, payload[written:])
@@ -2920,6 +2921,577 @@ def install_full_approval(arguments, evidence_root, auth_brokers, source_identit
     if installed != payload or hashlib.sha256(installed).hexdigest() != digest:
         fail("full approval install bytes mismatch")
     return target, digest, packet["command"], packet
+
+
+def generation_allowed_names(manifest):
+    names = {
+        "results.json", "resource-ledger.json", "process-proofs.json", "command-audit.json",
+        "receipt-consumption.json", "manifest.json", "complete.json",
+    }
+    if manifest.get("mode") == "live-pilot":
+        names.add("full-run-approval.json")
+    return names
+
+
+def verified_generation_tree(generation_root, allowed_extra=frozenset()):
+    try:
+        generation_root = generation_root.resolve(strict=True)
+    except FileNotFoundError:
+        fail("generation missing")
+    if generation_root.is_symlink() or not generation_root.is_dir():
+        fail("generation root unsafe")
+    if verify_complete_generation(generation_root) is not None:
+        fail("generation incomplete")
+    manifest = json.loads(read_bounded_file(generation_root / "manifest.json", generation_root, 1048576))
+    actual_names = set()
+    rows = []
+    for path in generation_root.rglob("*"):
+        if path.is_symlink():
+            fail("generation symlink rejected")
+        if path.is_dir():
+            continue
+        relative = str(path.relative_to(generation_root))
+        if relative.startswith("../") or any(ord(character) < 32 for character in relative):
+            fail("generation path rejected")
+        actual_names.add(relative)
+        if relative in allowed_extra:
+            continue
+        rows.append(
+            {
+                "path": relative,
+                "size": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    if actual_names != generation_allowed_names(manifest) | set(allowed_extra):
+        fail("generation file inventory mismatch")
+    rows.sort(key=lambda row: row["path"])
+    manifest_digest = hashlib.sha256((generation_root / "manifest.json").read_bytes()).hexdigest()
+    tree_digest = object_digest(rows)
+    return {"root": generation_root, "manifest": manifest, "manifest_sha256": manifest_digest, "tree_sha256": tree_digest, "files": rows}
+
+
+def git_common_directory(repository_root):
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=str(repository_root),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        fail("transition repository identity unavailable")
+    common = Path(result.stdout.strip())
+    if not common.is_absolute():
+        common = repository_root / common
+    return common.resolve(strict=True)
+
+
+def verify_handoff_directory(handoff_root):
+    if not handoff_root.is_dir() or handoff_root.is_symlink():
+        fail("handoff missing or unsafe")
+    owner = json.loads(read_bounded_file(handoff_root / "owner.json", handoff_root, 65536))
+    handoff_manifest = json.loads(read_bounded_file(handoff_root / "handoff-manifest.json", handoff_root, 1048576))
+    if owner.get("schema") != "release-loop-handoff-owner/v1" or handoff_manifest.get("schema") != "release-loop-handoff/v1":
+        fail("handoff metadata invalid")
+    extras = {"owner.json", "handoff-manifest.json"}
+    if (handoff_root / "consumed.json").is_file():
+        extras.add("consumed.json")
+    generation = verified_generation_tree(handoff_root, extras)
+    if handoff_manifest.get("generation_manifest_sha256") != generation["manifest_sha256"]:
+        fail("handoff generation digest mismatch")
+    if handoff_manifest.get("generation_tree_sha256") != generation["tree_sha256"]:
+        fail("handoff tree digest mismatch")
+    if handoff_manifest.get("files") != generation["files"]:
+        fail("handoff file manifest mismatch")
+    return generation, owner, handoff_manifest
+
+
+def install_handoff(feature_root, base_root, generation_root, handoff_name, fail_at=None):
+    feature_root = feature_root.resolve(strict=True)
+    base_root = base_root.resolve(strict=True)
+    if feature_root.is_symlink() or base_root.is_symlink() or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", handoff_name):
+        fail("handoff root or name invalid")
+    if git_common_directory(feature_root) != git_common_directory(base_root):
+        fail("handoff foreign repository")
+    generation = verified_generation_tree(generation_root)
+    if generation["manifest"].get("mode") != "live":
+        fail("handoff requires full live generation")
+    handoff_parent = base_root / ".release-loop/.handoff"
+    handoff_parent.mkdir(parents=True, exist_ok=True)
+    target = handoff_parent / handoff_name
+    if target.exists():
+        existing, owner, _ = verify_handoff_directory(target)
+        if owner.get("handoff_name") != handoff_name or existing["manifest_sha256"] != generation["manifest_sha256"]:
+            fail("handoff existing target mismatch")
+        return target, generation["manifest_sha256"], "existing"
+    staging = handoff_parent / f".{handoff_name}.partial"
+    if staging.exists() and (staging.is_symlink() or not staging.is_dir()):
+        fail("handoff staging unsafe")
+    staging.mkdir(exist_ok=True)
+    owner_path = staging / "owner.json"
+    owner = {
+        "schema": "release-loop-handoff-owner/v1",
+        "handoff_name": handoff_name,
+        "feature_common_dir_sha256": hashlib.sha256(str(git_common_directory(feature_root)).encode()).hexdigest(),
+        "base_common_dir_sha256": hashlib.sha256(str(git_common_directory(base_root)).encode()).hexdigest(),
+    }
+    if owner_path.exists():
+        if json.loads(read_bounded_file(owner_path, staging, 65536)) != owner:
+            fail("handoff staging owner mismatch")
+    else:
+        write_json_atomic(owner_path, owner, staging)
+    for row in generation["files"]:
+        if row["path"] == "complete.json":
+            continue
+        source_path = generation["root"] / row["path"]
+        target_path = staging / row["path"]
+        write_bytes_atomic(target_path, source_path.read_bytes(), staging)
+    write_json_atomic(
+        staging / "handoff-manifest.json",
+        {
+            "schema": "release-loop-handoff/v1",
+            "generation_manifest_sha256": generation["manifest_sha256"],
+            "generation_tree_sha256": generation["tree_sha256"],
+            "files": generation["files"],
+        },
+        staging,
+    )
+    if fail_at == "after-copy-before-complete":
+        fail("injected handoff interruption")
+    write_bytes_atomic(staging / "complete.json", (generation["root"] / "complete.json").read_bytes(), staging)
+    os.replace(str(staging), str(target))
+    installed, _, _ = verify_handoff_directory(target)
+    if installed["manifest_sha256"] != generation["manifest_sha256"]:
+        fail("handoff installation mismatch")
+    return target, generation["manifest_sha256"], "installed"
+
+
+def tracked_tree_clean(repository_root, allowed_paths=()):
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(repository_root),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        return False
+    allowed = {str(path) for path in allowed_paths}
+    for line in result.stdout.splitlines():
+        path = line[3:]
+        if path not in allowed and not path.startswith(".release-loop/"):
+            return False
+    return True
+
+
+def publish_baseline_transition(base_root, handoff_root, archive_source, baseline_path, policy_path, roadmap_path, validator):
+    base_root = base_root.resolve(strict=True)
+    handoff_root = handoff_root.resolve(strict=True)
+    archive_source = archive_source.resolve(strict=True)
+    baseline_path = baseline_path.resolve(strict=False)
+    policy_path = policy_path.resolve(strict=True)
+    roadmap_path = roadmap_path.resolve(strict=True)
+    for path in (baseline_path, policy_path, roadmap_path):
+        try:
+            path.resolve(strict=False).relative_to(base_root)
+        except ValueError:
+            fail("baseline target outside base")
+    allowed_dirty = [
+        baseline_path.relative_to(base_root), policy_path.relative_to(base_root), roadmap_path.relative_to(base_root)
+    ]
+    if not tracked_tree_clean(base_root, allowed_dirty):
+        fail("baseline target tree dirty")
+    handoff_generation, _, handoff_manifest = verify_handoff_directory(handoff_root)
+    archive_generation = verified_generation_tree(archive_source)
+    if archive_generation["manifest_sha256"] != handoff_generation["manifest_sha256"]:
+        fail("baseline archive source mismatch")
+    policy = load_json(policy_path)
+    if policy.get("schema") != "release-loop-baseline-policy/v1":
+        fail("baseline bootstrap policy unavailable")
+    roadmap_text = roadmap_path.read_text(encoding="utf-8")
+    roadmap_row = "| Conformance suite |"
+    if policy.get("state") == "enforced":
+        baseline = load_json(baseline_path)
+        if (
+            hashlib.sha256(baseline_path.read_bytes()).hexdigest() != policy.get("baseline_sha256")
+            or baseline.get("generation_manifest_sha256") != handoff_generation["manifest_sha256"]
+            or roadmap_row in roadmap_text
+        ):
+            fail("baseline enforced state mismatch")
+        if validator(base_root) != "ALL CHECKS PASSED":
+            fail("baseline final validation failed")
+        return baseline["generation_manifest_sha256"], baseline
+    if policy.get("state") != "bootstrap" or roadmap_text.count(roadmap_row) != 1:
+        fail("baseline ROADMAP row missing or ambiguous")
+    corpus_value = load_json(base_root / "tests/conformance/release-loop/corpus.json")
+    baseline = {
+        "schema": "release-loop-baseline/v1",
+        "generation_manifest_sha256": handoff_generation["manifest_sha256"],
+        "generation_tree_sha256": handoff_generation["tree_sha256"],
+        "source_generation": corpus_value["source_generation"],
+        "corpus_sha256": hashlib.sha256((base_root / "tests/conformance/release-loop/corpus.json").read_bytes()).hexdigest(),
+        "mutations_sha256": hashlib.sha256((base_root / "tests/conformance/release-loop/mutations.json").read_bytes()).hexdigest(),
+        "handoff_manifest_sha256": hashlib.sha256((handoff_root / "handoff-manifest.json").read_bytes()).hexdigest(),
+    }
+    write_json_atomic(baseline_path, baseline, base_root, 0o644)
+    enforced_policy = {
+        "schema": "release-loop-baseline-policy/v1",
+        "state": "enforced",
+        "baseline": str(baseline_path.relative_to(base_root)),
+        "baseline_sha256": hashlib.sha256(baseline_path.read_bytes()).hexdigest(),
+        "source_generation": baseline["source_generation"],
+        "generation_manifest_sha256": baseline["generation_manifest_sha256"],
+        "roadmap_item": "Conformance suite",
+    }
+    write_json_atomic(policy_path, enforced_policy, base_root, 0o644)
+    new_roadmap_lines = [line for line in roadmap_text.splitlines() if not line.startswith(roadmap_row)]
+    write_bytes_atomic(roadmap_path, ("\n".join(new_roadmap_lines) + "\n").encode(), base_root, 0o644)
+    validation_result = validator(base_root)
+    if validation_result != "ALL CHECKS PASSED":
+        fail("baseline final validation failed")
+    return baseline["generation_manifest_sha256"], baseline
+
+
+def mark_v2_acceptance(progress_path, generation_digest, archive_root, observed_at):
+    text_value = progress_path.read_text(encoding="utf-8")
+    expected_destination = f"archive-destination: {archive_root}"
+    if text_value.count(expected_destination) != 1:
+        fail("archive destination evidence mismatch")
+    if "archive_verification:" in text_value and "status: accepted" in text_value:
+        if f"V2 accepted generation={generation_digest}" not in text_value:
+            fail("archive V2 accepted digest mismatch")
+        return
+    if "archive_verification:" not in text_value or "status: started" not in text_value:
+        fail("archive V2 start missing")
+    text_value = text_value.replace("status: started", "status: accepted", 1)
+    text_value = text_value.rstrip() + (
+        f"\n- {observed_at} archive: V2 accepted generation={generation_digest} archive_root={archive_root}\n"
+    )
+    write_bytes_atomic(progress_path, text_value.encode("utf-8"), progress_path.parent)
+
+
+def verify_archive_transition(base_root, archive_root, baseline_path, handoff_root, observed_at):
+    base_root = base_root.resolve(strict=True)
+    archive_root = archive_root.resolve(strict=True)
+    try:
+        archive_root.relative_to((base_root / ".release-loop/archive").resolve(strict=True))
+    except ValueError:
+        fail("archive root outside archive tree")
+    baseline = load_json(baseline_path)
+    handoff_generation, _, _ = verify_handoff_directory(handoff_root)
+    staged_generation = verified_generation_tree(archive_root / "evidence/live-generation")
+    digest = staged_generation["manifest_sha256"]
+    if baseline.get("generation_manifest_sha256") != digest or handoff_generation["manifest_sha256"] != digest:
+        fail("archive generation digest mismatch")
+    consumed_path = handoff_root / "consumed.json"
+    if consumed_path.is_file():
+        consumed = load_json(consumed_path)
+        if consumed.get("generation_manifest_sha256") != digest or consumed.get("archive_root") != str(archive_root.relative_to(base_root)):
+            fail("archive consumed marker mismatch")
+        mark_v2_acceptance(
+            base_root / ".release-loop/progress.md", digest, str(archive_root.relative_to(base_root)), observed_at
+        )
+        return digest
+    progress_path = base_root / ".release-loop/progress.md"
+    mark_v2_acceptance(progress_path, digest, str(archive_root.relative_to(base_root)), observed_at)
+    consumed = {
+        "schema": "release-loop-handoff-consumed/v1",
+        "generation_manifest_sha256": digest,
+        "archive_root": str(archive_root.relative_to(base_root)),
+        "consumed_at": observed_at,
+    }
+    write_json_atomic(consumed_path, consumed, handoff_root)
+    return digest
+
+
+def repository_validator(repository_root):
+    result = run_bounded(
+        ["bash", "scripts/validate.sh"],
+        repository_root,
+        {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", ""), "LC_ALL": "C"},
+        output_cap=1048576,
+        timeout=30,
+    )
+    if result.returncode == 0 and "ALL CHECKS PASSED" in result.stdout:
+        return "ALL CHECKS PASSED"
+    return "VALIDATION FAILED"
+
+
+def run_handoff_mode(arguments):
+    parsed = parse_flag_pairs(arguments, {"--feature-root", "--base-root", "--generation", "--handoff-name"})
+    feature_root = Path(parsed["--feature-root"])
+    base_root = Path(parsed["--base-root"])
+    if not feature_root.is_absolute():
+        feature_root = root / feature_root
+    if not base_root.is_absolute():
+        base_root = root / base_root
+    generation = Path(parsed["--generation"])
+    if not generation.is_absolute():
+        generation = feature_root / generation
+    return install_handoff(feature_root, base_root, generation, parsed["--handoff-name"])
+
+
+def run_publish_baseline_mode(arguments):
+    parsed = parse_flag_pairs(
+        arguments, {"--handoff", "--archive-source", "--baseline", "--policy", "--roadmap"}
+    )
+    def rooted(value):
+        path = Path(value)
+        return path if path.is_absolute() else root / path
+    return publish_baseline_transition(
+        root,
+        rooted(parsed["--handoff"]),
+        rooted(parsed["--archive-source"]),
+        rooted(parsed["--baseline"]),
+        rooted(parsed["--policy"]),
+        rooted(parsed["--roadmap"]),
+        repository_validator,
+    )
+
+
+def run_verify_archive_mode(arguments):
+    parsed = parse_flag_pairs(arguments, {"--archive-root", "--baseline", "--handoff"})
+    def rooted(value):
+        path = Path(value)
+        return path if path.is_absolute() else root / path
+    observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return verify_archive_transition(
+        root,
+        rooted(parsed["--archive-root"]),
+        rooted(parsed["--baseline"]),
+        rooted(parsed["--handoff"]),
+        observed_at,
+    )
+
+
+def validate_transition_group():
+    with tempfile.TemporaryDirectory(prefix="release-loop transition ;[] ") as temp_value:
+        temp_root = Path(temp_value)
+        base_root = temp_root / "base"
+        feature_root = temp_root / "feature"
+        base_root.mkdir()
+        git_env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(temp_root / "home"),
+            "LC_ALL": "C",
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+        (temp_root / "home").mkdir()
+
+        def git(cwd, *args):
+            result = run_bounded(["git", *args], cwd, git_env, output_cap=65536, timeout=20)
+            if result.returncode != 0:
+                fail(f"transition fixture Git failed: {args}: {result.stderr.strip()}")
+            return result.stdout.strip()
+
+        git(base_root, "init")
+        for key, value in (
+            ("user.name", "Transition Fixture"), ("user.email", "fixture@example.invalid"),
+            ("commit.gpgsign", "false"), ("core.autocrlf", "false"), ("core.safecrlf", "false"),
+        ):
+            git(base_root, "config", key, value)
+        data_dir = base_root / "tests/conformance/release-loop"
+        data_dir.mkdir(parents=True)
+        for name in ("corpus.json", "mutations.json", "baseline-policy.json"):
+            shutil.copyfile(data_root / name, data_dir / name)
+        shutil.copyfile(root / "ROADMAP.md", base_root / "ROADMAP.md")
+        (base_root / "unrelated.txt").write_text("clean\n", encoding="utf-8")
+        (base_root / ".gitignore").write_text(".release-loop/\n", encoding="utf-8")
+        git(base_root, "add", ".")
+        git(base_root, "commit", "-m", "fixture base")
+        git(base_root, "worktree", "add", "-b", "feat-transition", str(feature_root))
+
+        caps = {
+            "max_turns_per_session": 2, "per_turn_timeout": 1, "session_timeout": 2,
+            "max_infrastructure_retries": 0, "max_concurrency": 1,
+            "codex_observed_token_cap": 5000, "total_wall_time": 60,
+            "claude_total_budget_usd": "2.00", "claude_max_invocation_usd": "0.25",
+        }
+        models = {"claude": "fixture-claude", "codex": "fixture-codex"}
+        results, ledger, proofs, audit = execute_paid_schedule("live", caps, models, fake_paid_launcher)
+        generation_root = feature_root / ".release-loop/evidence/live-generation"
+        receipt = {"caps": caps, "nonce": "a" * 32}
+        finalize_generation_directory(
+            generation_root,
+            "live",
+            models,
+            full_run_command(caps, models),
+            receipt,
+            {"nonce": receipt["nonce"], "consumed_at": "2026-08-24T07:00:00Z"},
+            results,
+            ledger,
+            proofs,
+            audit,
+        )
+        generation = verified_generation_tree(generation_root)
+        controls = 0
+        negatives = 0
+        try:
+            install_handoff(
+                feature_root,
+                base_root,
+                generation_root,
+                "fuzz-testing",
+                fail_at="after-copy-before-complete",
+            )
+        except ValueError as exc:
+            if "injected handoff interruption" not in str(exc):
+                fail(f"transition handoff interruption diagnostic mismatch: {exc}")
+        else:
+            fail("transition handoff interruption accepted")
+        negatives += 1
+        handoff_root, handoff_digest, disposition = install_handoff(
+            feature_root, base_root, generation_root, "fuzz-testing"
+        )
+        if disposition != "installed" or handoff_digest != generation["manifest_sha256"]:
+            fail("transition handoff control failed")
+        controls += 1
+        _, repeated_digest, repeated_disposition = install_handoff(
+            feature_root, base_root, generation_root, "fuzz-testing"
+        )
+        if repeated_disposition != "existing" or repeated_digest != handoff_digest:
+            fail("transition handoff idempotence failed")
+        controls += 1
+        archive_source = base_root / ".release-loop/evidence/live-generation"
+        archive_source.parent.mkdir(parents=True)
+        shutil.copytree(generation_root, archive_source)
+        baseline_path = data_dir / "baseline.json"
+        policy_path = data_dir / "baseline-policy.json"
+        roadmap_path = base_root / "ROADMAP.md"
+        published_digest, baseline = publish_baseline_transition(
+            base_root,
+            handoff_root,
+            archive_source,
+            baseline_path,
+            policy_path,
+            roadmap_path,
+            lambda _root: "ALL CHECKS PASSED",
+        )
+        if published_digest != handoff_digest or baseline["generation_manifest_sha256"] != handoff_digest:
+            fail("transition baseline publication failed")
+        controls += 1
+        repeated_publish, _ = publish_baseline_transition(
+            base_root,
+            handoff_root,
+            archive_source,
+            baseline_path,
+            policy_path,
+            roadmap_path,
+            lambda _root: "ALL CHECKS PASSED",
+        )
+        if repeated_publish != handoff_digest:
+            fail("transition baseline idempotence failed")
+        controls += 1
+        unrelated_path = base_root / "unrelated.txt"
+        unrelated_path.write_text("dirty\n", encoding="utf-8")
+        try:
+            publish_baseline_transition(
+                base_root, handoff_root, archive_source, baseline_path, policy_path, roadmap_path,
+                lambda _root: "ALL CHECKS PASSED",
+            )
+        except ValueError as exc:
+            if "baseline target tree dirty" not in str(exc):
+                fail(f"transition dirty target diagnostic mismatch: {exc}")
+        else:
+            fail("transition dirty baseline target accepted")
+        unrelated_path.write_text("clean\n", encoding="utf-8")
+        negatives += 1
+        try:
+            publish_baseline_transition(
+                base_root, handoff_root, archive_source, baseline_path, policy_path, roadmap_path,
+                lambda _root: "VALIDATION FAILED",
+            )
+        except ValueError as exc:
+            if "baseline final validation failed" not in str(exc):
+                fail(f"transition validation failure diagnostic mismatch: {exc}")
+        else:
+            fail("transition failed validation accepted")
+        negatives += 1
+        archive_root = base_root / ".release-loop/archive/2026-08-24-fuzz-testing"
+        staged_generation = archive_root / "evidence/live-generation"
+        staged_generation.parent.mkdir(parents=True)
+        shutil.copytree(archive_source, staged_generation)
+        progress_path = base_root / ".release-loop/progress.md"
+        progress_path.write_text(
+            "---\nphase: retro\nphase_status: in-progress\n"
+            "archive_verification:\n  id: V2\n  status: started\n"
+            f"  generation_sha256: {handoff_digest}\n  archive_root: {archive_root.relative_to(base_root)}\n"
+            "  updated: 2026-08-24T07:00:00Z\n---\n\n## Log\n"
+            f"- 2026-08-24T07:00:00Z retro: archive-destination: {archive_root.relative_to(base_root)}\n",
+            encoding="utf-8",
+        )
+        wrong_baseline_path = data_dir / "wrong-baseline.json"
+        wrong_baseline = copy.deepcopy(baseline)
+        wrong_baseline["generation_manifest_sha256"] = "0" * 64
+        write_json_atomic(wrong_baseline_path, wrong_baseline, base_root, 0o644)
+        try:
+            verify_archive_transition(
+                base_root, archive_root, wrong_baseline_path, handoff_root, "2026-08-24T07:00:01Z"
+            )
+        except ValueError as exc:
+            if "archive generation digest mismatch" not in str(exc):
+                fail(f"transition archive mismatch diagnostic mismatch: {exc}")
+        else:
+            fail("transition archive digest mismatch accepted")
+        negatives += 1
+        verified_digest = verify_archive_transition(
+            base_root,
+            archive_root,
+            baseline_path,
+            handoff_root,
+            "2026-08-24T07:00:01Z",
+        )
+        if verified_digest != handoff_digest:
+            fail("transition archive verification failed")
+        controls += 1
+        if verify_archive_transition(
+            base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:02Z"
+        ) != handoff_digest:
+            fail("transition archive idempotence failed")
+        controls += 1
+
+        extra_generation = temp_root / "extra-generation"
+        shutil.copytree(generation_root, extra_generation)
+        (extra_generation / "unexpected.txt").write_text("unexpected\n", encoding="utf-8")
+        try:
+            verified_generation_tree(extra_generation)
+        except ValueError as exc:
+            if "inventory mismatch" not in str(exc):
+                fail(f"transition extra-file diagnostic mismatch: {exc}")
+        else:
+            fail("transition extra generation file accepted")
+        negatives += 1
+        symlink_generation = temp_root / "symlink-generation"
+        shutil.copytree(generation_root, symlink_generation)
+        (symlink_generation / "alias").symlink_to(symlink_generation / "manifest.json")
+        try:
+            verified_generation_tree(symlink_generation)
+        except ValueError as exc:
+            if "symlink rejected" not in str(exc):
+                fail(f"transition symlink diagnostic mismatch: {exc}")
+        else:
+            fail("transition generation symlink accepted")
+        negatives += 1
+        foreign_root = temp_root / "foreign"
+        foreign_root.mkdir()
+        git(foreign_root, "init")
+        try:
+            install_handoff(feature_root, foreign_root, generation_root, "foreign")
+        except ValueError as exc:
+            if "foreign repository" not in str(exc):
+                fail(f"transition foreign repository diagnostic mismatch: {exc}")
+        else:
+            fail("transition foreign repository accepted")
+        negatives += 1
+        if generation["manifest_sha256"] == hashlib.sha256(
+            ((generation_root / "manifest.json").read_bytes() + b"changed")
+        ).hexdigest():
+            fail("transition changed manifest comparison failed")
+        controls += 1
+        return controls, negatives, handoff_digest
 
 
 def write_adapter_supervisor(path):
@@ -4404,6 +4976,19 @@ def grade_gate_fixture(mutation_id, fixture):
     return pending_gate_invariant(fixture)
 
 
+def transition_state_invariant(state):
+    if state.get("review") == "clean" and state.get("next_phase") == "ship" and state.get("v1_status") != "accepted":
+        return "v1-required-before-ship"
+    if state.get("next_phase") == "done" and state.get("v2_status") != "accepted":
+        return "v2-required-before-done"
+    digests = state.get("generation_digests")
+    if not isinstance(digests, list) or len(digests) != 4 or len(set(digests)) != 1:
+        return "generation-chain-mismatch"
+    if state.get("handoff_consumed") is True and state.get("v2_status") != "accepted":
+        return "handoff-consumed-before-v2"
+    return None
+
+
 def validate_gate_group(mutation_rows):
     gate_rows = [row for row in mutation_rows if row.get("grader") == "pending-gate-state"]
     expected = {
@@ -4486,6 +5071,11 @@ def grade_mutation(mutation, cases_by_id, clauses_by_id, disabled_graders=frozen
         rejected = set(values) - set(mutated) == {"implement-degraded"}
         return ("expected-reject", "no-coverage-drop", "no-coverage-drop") if rejected else ("unexpected-pass", "no-coverage-drop", "none")
     fixture = mutation.get("fixture", {})
+    if mutation["grader"] == "transition-state":
+        invariant = transition_state_invariant(fixture)
+        return ("expected-reject", "transition-state", invariant) if invariant else (
+            "unexpected-pass", "transition-state", "none"
+        )
     if mutation["grader"] == "pending-gate-state":
         invariant = grade_gate_fixture(mutation_id, fixture)
         return ("expected-reject", "pending-gate-state", invariant) if invariant else ("unexpected-pass", "pending-gate-state", "none")
@@ -4523,21 +5113,35 @@ def validate_static(cases):
         fail("unknown source manifest schema")
     if policy.get("schema") != "release-loop-baseline-policy/v1":
         fail("unknown baseline policy schema")
-    if policy.get("state") != "bootstrap":
-        fail("bootstrap policy state mismatch")
-    if policy.get("approved_spec") != "docs/specs/2026-08-24-release-loop-conformance-fuzzing-design.md":
-        fail("bootstrap spec path mismatch")
-    if policy.get("roadmap_item") != "Conformance suite":
-        fail("bootstrap ROADMAP item mismatch")
-    spec_path = root / policy["approved_spec"]
-    approved_spec_digest = "2cde033379b87d6c8eb92ea32ea3800a82625d86056da496343a91cf0bd8930b"
-    if policy.get("approved_spec_sha256") != approved_spec_digest:
-        fail("bootstrap policy spec digest mismatch")
-    if hashlib.sha256(spec_path.read_bytes()).hexdigest() != approved_spec_digest:
-        fail("bootstrap spec digest mismatch")
+    policy_state = policy.get("state")
     roadmap = (root / "ROADMAP.md").read_text(encoding="utf-8")
-    if f"| {policy.get('roadmap_item')} |" not in roadmap:
-        fail("bootstrap ROADMAP item missing")
+    if policy_state == "bootstrap":
+        if set(policy) != {
+            "schema", "state", "approved_spec", "approved_spec_sha256", "source_generation", "roadmap_item"
+        }:
+            fail("bootstrap policy shape mismatch")
+        if policy.get("approved_spec") != "docs/specs/2026-08-24-release-loop-conformance-fuzzing-design.md":
+            fail("bootstrap spec path mismatch")
+        if policy.get("roadmap_item") != "Conformance suite":
+            fail("bootstrap ROADMAP item mismatch")
+        spec_path = root / policy["approved_spec"]
+        approved_spec_digest = "2cde033379b87d6c8eb92ea32ea3800a82625d86056da496343a91cf0bd8930b"
+        if policy.get("approved_spec_sha256") != approved_spec_digest:
+            fail("bootstrap policy spec digest mismatch")
+        if hashlib.sha256(spec_path.read_bytes()).hexdigest() != approved_spec_digest:
+            fail("bootstrap spec digest mismatch")
+        if f"| {policy.get('roadmap_item')} |" not in roadmap:
+            fail("bootstrap ROADMAP item missing")
+    elif policy_state == "enforced":
+        if set(policy) != {
+            "schema", "state", "baseline", "baseline_sha256", "source_generation",
+            "generation_manifest_sha256", "roadmap_item",
+        }:
+            fail("enforced policy shape mismatch")
+        if policy.get("roadmap_item") != "Conformance suite" or "| Conformance suite |" in roadmap:
+            fail("enforced ROADMAP state mismatch")
+    else:
+        fail("baseline policy state mismatch")
 
     clauses = manifest.get("clauses")
     if not isinstance(clauses, list) or not clauses:
@@ -4571,6 +5175,10 @@ def validate_static(cases):
         "delete-design-user-gate": "design-user-gate",
         "replay-completed-phase": "no-phase-replay",
         "reenter-premerge-shipping": "resume-after-merge",
+        "skip-v1-before-ship": "v1-required-before-ship",
+        "skip-v2-before-done": "v2-required-before-done",
+        "mismatched-generation-chain": "generation-chain-mismatch",
+        "early-handoff-consumption": "handoff-consumed-before-v2",
         "drop-work-without-subagents": "no-coverage-drop",
         "missing-pending-gate": "pending-gate-missing",
         "unknown-pending-gate": "pending-gate-unknown",
@@ -4618,6 +5226,26 @@ def validate_static(cases):
         fail("static grader reachability mismatch")
     generation = hashlib.sha256(("\n".join(sorted(generation_rows)) + "\n").encode()).hexdigest()
     validate_source_generation(generation, policy.get("source_generation"), corpus.get("source_generation"))
+    if policy_state == "enforced":
+        baseline_path = root / policy.get("baseline", "")
+        baseline = load_json(baseline_path)
+        if baseline.get("schema") != "release-loop-baseline/v1":
+            fail("enforced baseline schema mismatch")
+        if set(baseline) != {
+            "schema", "generation_manifest_sha256", "generation_tree_sha256", "source_generation",
+            "corpus_sha256", "mutations_sha256", "handoff_manifest_sha256",
+        }:
+            fail("enforced baseline shape mismatch")
+        if hashlib.sha256(baseline_path.read_bytes()).hexdigest() != policy.get("baseline_sha256"):
+            fail("enforced baseline digest mismatch")
+        if baseline.get("source_generation") != generation:
+            fail("enforced baseline source generation mismatch")
+        if baseline.get("generation_manifest_sha256") != policy.get("generation_manifest_sha256"):
+            fail("enforced baseline generation mismatch")
+        if baseline.get("corpus_sha256") != hashlib.sha256(corpus_path.read_bytes()).hexdigest():
+            fail("enforced baseline corpus mismatch")
+        if baseline.get("mutations_sha256") != hashlib.sha256(mutations_path.read_bytes()).hexdigest():
+            fail("enforced baseline mutations mismatch")
 
     static_negative_probes = []
     unrelated = copy.deepcopy(next(row for row in mutation_rows if row["id"] == "different-artifact-kind"))
@@ -4717,6 +5345,14 @@ if mode == "resource":
         resource_full_command,
         resource_manifest,
     ) = validate_resource_group()
+if mode == "transition":
+    transition_controls, transition_negatives, transition_digest = validate_transition_group()
+if mode == "handoff":
+    handoff_path, handoff_digest, handoff_disposition = run_handoff_mode(mode_args)
+if mode == "publish-baseline":
+    baseline_digest, _ = run_publish_baseline_mode(mode_args)
+if mode == "verify-archive":
+    archive_digest = run_verify_archive_mode(mode_args)
 if mode == "prepare-pilot":
     prepare_source = paid_source_preflight()
     prepare_auth = paid_auth_preflight()
@@ -4909,6 +5545,19 @@ if mode == "resource":
     )
     print(f"full-run-command: {resource_full_command}")
     print("codex-hard-dollar-cap: unavailable; observed-token cap enforced")
+if mode == "transition":
+    print(
+        "ok:   release-loop transitions "
+        f"controls={transition_controls} negative={transition_negatives} generation={transition_digest}"
+    )
+if mode == "handoff":
+    print(
+        f"ok:   handoff path={handoff_path} generation={handoff_digest} disposition={handoff_disposition}"
+    )
+if mode == "publish-baseline":
+    print(f"ok:   baseline published generation={baseline_digest}")
+if mode == "verify-archive":
+    print(f"ok:   archive verified generation={archive_digest}")
 if mode == "prepare-pilot":
     print(f"pilot-approval-packet: path={prepare_path} sha256={prepare_digest}")
     print(f"pilot-command: {prepare_command}")

@@ -1,6 +1,6 @@
 {
   "schema": "release-loop-conformance-corpus/v1",
-  "source_generation": "43e3e311bd420d50dac8141818ed915d1a06f650f3fada6bd8aa55baedcfa347",
+  "source_generation": "f32ec7b4a26e3b1c4a1de60cb2e762ba83999388592f7837fa76d50b437756b5",
   "harnesses": [
     "claude",
     "codex"
@@ -22,7 +22,8 @@
     "sc2-comparison",
     "sc2-guard",
     "operative-section-parser",
-    "pending-gate-state"
+    "pending-gate-state",
+    "transition-state"
   ],
   "result_classes": [
     "conformant",
@@ -81,7 +82,8 @@
         "nonmonotonic-pending-answer",
         "nonmonotonic-pending-outcome",
         "malformed-pending-outcome",
-        "missing-pending-outcome-log"
+        "missing-pending-outcome-log",
+        "skip-v1-before-ship"
       ],
       "required_graders": [
         "design-user-gate",
@@ -89,7 +91,8 @@
         "final-action",
         "retro-required",
         "archive-complete",
-        "pending-gate-state"
+        "pending-gate-state",
+        "transition-state"
       ]
     },
     {
@@ -172,12 +175,16 @@
       ],
       "expected_outcome": "conformant",
       "eligible_mutations": [
-        "reenter-premerge-shipping"
+        "reenter-premerge-shipping",
+        "skip-v2-before-done",
+        "mismatched-generation-chain",
+        "early-handoff-consumption"
       ],
       "required_graders": [
         "resume-after-merge",
         "no-premerge-reentry",
-        "retro-required"
+        "retro-required",
+        "transition-state"
       ]
     },
     {

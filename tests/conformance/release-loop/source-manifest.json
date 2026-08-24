@@ -7,7 +7,7 @@
       "path": "skills/release-loop/SKILL.md",
       "heading": "# Release Loop",
       "text": "| 1 | Design | `designing` | **USER** — always human, never auto-skip |",
-      "sha256": "24f8515ee9e0531e7ddcad8250e70d3a8f975be34e5556cbb2e9add75108dd23"
+      "sha256": "d9f08b44cd6aeffb9339d69a986cb3a8ddbff4113d1feff2dbd91db664e0fa6b"
     },
     {
       "id": "resume-after-merge",
@@ -42,7 +42,7 @@
       "path": "skills/release-loop/references/progress-schema.md",
       "heading": "## Rules",
       "text": "- Resume sends one answer only when the gate ID, phase, answer class, issue timestamp, absent approval, and absent receipt match.",
-      "sha256": "d5bdfe7b1bc899367d2f4019de2b0ca69460cf4fa3c2bc4bca4996b645cf14e2"
+      "sha256": "f88692ef2a6be906988e9721d55cd6c5b3bb707abf5bdc3204a25c4232ac6725"
     },
     {
       "id": "design-pending-gate",
@@ -57,6 +57,27 @@
       "heading": "### Release-loop pending disposition",
       "text": "For an interactive final disposition invoked by `release-loop`, atomically set `phase_status: waiting-user` and issue `pending_gate.id: ship-approval` before asking.",
       "sha256": "189186385075041cb9c38d76922867ea2443fc7f43f412ff4c6bce326df07405"
+    },
+    {
+      "id": "pre-merge-verification-v1",
+      "path": "skills/release-loop/references/transition-hooks.md",
+      "heading": "## Release-loop pre-merge verification V1: Produce the approved generation",
+      "text": "After Review returns `clean`, the first-hand release-loop orchestrator runs the approved plan's V1 section before invoking `shipping`.",
+      "sha256": "d01a1b431783c0d996701d1e5ad9cfccdcb518c2160dcf13fadab70766964131"
+    },
+    {
+      "id": "pre-archive-verification-v2",
+      "path": "skills/release-loop/references/transition-hooks.md",
+      "heading": "## Release-loop pre-archive verification V2: Verify the archived generation",
+      "text": "After Retro commits and archive evidence is staged, keep the live progress record nonterminal.",
+      "sha256": "4023aeb3167240b02b09836e2ae212cf7f209845420c44aa5d43b9ba921bf36b"
+    },
+    {
+      "id": "archive-v2-ordering",
+      "path": "skills/release-loop/references/resume-and-archive.md",
+      "heading": "### Archive procedure",
+      "text": "3. Move remaining contents from `briefs/`, `reports/`, `reviews/`, and `evidence/` into the destination first, but keep `progress.md` live and nonterminal.",
+      "sha256": "310cd4d15aac100e3e79cf61f0a7297b9075252577f2512800fec953cbcbcba3"
     }
   ]
 }

@@ -4,7 +4,7 @@
   "case_id": "L2-mid-loop-resume",
   "payload_mode": "exact-current-skill-bytes",
   "skill_source": "skills/release-loop/SKILL.md",
-  "skill_sha256": "66fff4bcecdacb0013754365434674d1577b5a93b930e5eefdd7e49f8ce3a40c",
+  "skill_sha256": "f2985db6ad73f27066f2d842f6985d5682ef6525d68c01cb3685fe9fe29c4e71",
   "skill_materialization": {
     "read_mode": "bytes",
     "digest": "sha256",

@@ -45,6 +45,8 @@ The standalone literal set is closed: `required-fields`, `schema`, `approved-sta
 
 Phase transitions fire only when the invoked skill's exit condition holds — read its terminal state (commit, `mode:agent` envelope, or terminal signal line per `schemas/headless-contract.md`), never assume success from silence. `enforces: P3`
 
+After Review is clean and before `shipping` starts, run the approved plan's `## Release-loop pre-merge verification V1:` contract from `references/transition-hooks.md`. Ship remains blocked until one complete generation digest is accepted and persisted. Resume never infers V1 completion from partial calls or an approval packet.
+
 Ship without Retro is an incomplete release: after merge, the loop always enters Retro before reporting done.
 
 ## Approved-plan transition hooks
