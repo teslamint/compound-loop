@@ -907,13 +907,16 @@ def validate_claude_policy_document(claude, fixture_root, feature_root, template
         fail("Claude policy raw command denial mismatch")
     sandbox = claude.get("sandbox", {})
     if set(sandbox) != {
-        "enabled", "failIfUnavailable", "allowUnsandboxedCommands", "filesystem", "credentials"
+        "enabled", "failIfUnavailable", "autoAllowBashIfSandboxed",
+        "allowUnsandboxedCommands", "filesystem", "credentials"
     }:
         fail("Claude policy sandbox shape mismatch")
     if sandbox.get("enabled") is not True or sandbox.get("failIfUnavailable") is not True:
         fail("Claude policy sandbox enforcement mismatch")
     if sandbox.get("allowUnsandboxedCommands") is not False:
         fail("Claude policy unsandboxed escape enabled")
+    if sandbox.get("autoAllowBashIfSandboxed") is not False:
+        fail("Claude policy sandbox Bash auto-allow enabled")
     filesystem = sandbox.get("filesystem", {})
     if filesystem != {
         "denyRead": ["~/"],
@@ -4639,6 +4642,8 @@ def actual_paid_launcher(call_spec):
 
 def validate_resource_group():
     claude_policy_template = load_json(data_root / "policies/claude-settings.json")
+    if claude_policy_template.get("sandbox", {}).get("autoAllowBashIfSandboxed") is not False:
+        fail("resource Claude policy permits sandbox Bash auto-allow")
     policy_fixture_root = Path("/private/tmp/conformance-policy-fixture")
     policy_feature_root = Path("/private/tmp/conformance-policy-feature")
     policy_control = copy.deepcopy(claude_policy_template)
@@ -4647,6 +4652,7 @@ def validate_resource_group():
         ("sandbox-disabled", lambda value: value["sandbox"].__setitem__("enabled", False)),
         ("sandbox-fallback", lambda value: value["sandbox"].__setitem__("failIfUnavailable", False)),
         ("unsandboxed-escape", lambda value: value["sandbox"].__setitem__("allowUnsandboxedCommands", True)),
+        ("sandbox-bash-auto-allow", lambda value: value["sandbox"].__setitem__("autoAllowBashIfSandboxed", True)),
         ("home-readable", lambda value: value["sandbox"]["filesystem"].__setitem__("denyRead", [])),
         ("home-writable", lambda value: value["sandbox"]["filesystem"].__setitem__("denyWrite", [])),
         ("credential-file-readable", lambda value: value["sandbox"]["credentials"].__setitem__("files", [])),
