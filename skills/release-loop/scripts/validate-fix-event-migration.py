@@ -47,7 +47,11 @@ def progress_values(path):
 
 
 def scalar(value):
-    return None if value == "null" else value
+    if value == "null":
+        return None
+    if value == "[]":
+        return []
+    return value
 
 
 def parse_review_events(text):
@@ -122,6 +126,7 @@ def normalized_existing(event):
         "result_path": event.get("result_path"),
         "result_sha256": event.get("result_sha256"),
         "outcome": event.get("outcome"),
+        "finding_inventory": event.get("finding_inventory"),
         "source_review_event": event.get("source_review_event"),
         "re_review_of": event.get("re_review_of"),
         "source_adoption_path": event.get("source_adoption_path"),
@@ -215,6 +220,7 @@ def validate_migration(repo, progress_relative, adoption_relative, signature_che
             "result_path": row["fixer_report_path"],
             "result_sha256": report_sha,
             "outcome": "clean",
+            "finding_inventory": [],
             "source_review_event": row["source_review_event"],
             "re_review_of": None,
             "source_adoption_path": adoption_relative,

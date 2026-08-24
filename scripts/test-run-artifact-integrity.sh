@@ -3308,6 +3308,7 @@ def run_case(name: str) -> None:
                 f"    result_path: {event['result_path']}\n"
                 f"    result_sha256: {event['result_sha256']}\n"
                 "    outcome: clean\n"
+                "    finding_inventory: []\n"
                 f"    source_review_event: {event['source_review_event']}\n"
                 "    re_review_of: null\n"
                 f"    source_adoption_path: {event['source_adoption_path']}\n"
