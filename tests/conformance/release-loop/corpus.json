@@ -1,6 +1,6 @@
 {
   "schema": "release-loop-conformance-corpus/v1",
-  "source_generation": "7d079fa48876ae484297efdc501d165e47b3a3384f2bc69c590d48b8d78bfd83",
+  "source_generation": "43e3e311bd420d50dac8141818ed915d1a06f650f3fada6bd8aa55baedcfa347",
   "harnesses": [
     "claude",
     "codex"
@@ -77,7 +77,11 @@
         "missing-pending-gate",
         "unknown-pending-gate",
         "already-approved-pending-gate",
-        "unknown-pending-answer"
+        "unknown-pending-answer",
+        "nonmonotonic-pending-answer",
+        "nonmonotonic-pending-outcome",
+        "malformed-pending-outcome",
+        "missing-pending-outcome-log"
       ],
       "required_graders": [
         "design-user-gate",

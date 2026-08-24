@@ -57,7 +57,7 @@ expected_case_contracts = {
         "live",
         ["design", "plan", "implement", "review", "ship", "retro", "archive"],
         "conformant",
-        ["delete-design-user-gate", "missing-pending-gate", "unknown-pending-gate", "already-approved-pending-gate", "unknown-pending-answer"],
+        ["delete-design-user-gate", "missing-pending-gate", "unknown-pending-gate", "already-approved-pending-gate", "unknown-pending-answer", "nonmonotonic-pending-answer", "nonmonotonic-pending-outcome", "malformed-pending-outcome", "missing-pending-outcome-log"],
         ["design-user-gate", "phase-order", "final-action", "retro-required", "archive-complete", "pending-gate-state"],
     ),
     "L2-mid-loop-resume": (
@@ -1179,6 +1179,14 @@ gate_contracts = {
 }
 
 
+def parse_gate_timestamp(value):
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
 def pending_gate_invariant(state):
     pending = state.get("pending_gate")
     if pending is None:
@@ -1203,11 +1211,8 @@ def pending_gate_invariant(state):
     timestamp = pending.get("issued_at")
     phase_entered = state.get("phase_entered_at")
     observed = state.get("observed_at")
-    try:
-        times = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in (timestamp, phase_entered, observed)]
-    except (AttributeError, TypeError, ValueError):
-        return "pending-gate-timestamp"
-    if any(value.tzinfo is None for value in times):
+    times = [parse_gate_timestamp(value) for value in (timestamp, phase_entered, observed)]
+    if any(value is None for value in times):
         return "pending-gate-timestamp"
     issued_time, entered_time, observed_time = times
     if not entered_time <= issued_time <= observed_time:
@@ -1217,11 +1222,8 @@ def pending_gate_invariant(state):
         return "pending-gate-approvals"
     if approval_field in approvals:
         return "pending-gate-already-approved"
-    answer_count = state.get("answer_count")
-    if not isinstance(answer_count, int) or answer_count < 0:
-        return "pending-gate-answer-count"
-    if answer_count > 1:
-        return "pending-gate-duplicate-answer"
+    if state.get("gate_answer_receipt") is not None:
+        return "pending-gate-answer-reserved"
     return None
 
 
@@ -1238,26 +1240,109 @@ def issue_pending_gate(phase, issued_at):
         "pending_gate": {"id": gate_id, "issued_at": issued_at, "expected_answer_class": answer_class},
         "gate_record_count": 1,
         "approvals": {},
-        "answer_count": 0,
+        "gate_answer_receipt": None,
+        "gate_log": [{"event": "issued", "gate_id": gate_id, "at": issued_at}],
     }
 
 
-def resolve_pending_gate(state, answer, answered_at):
+def reserve_pending_answer(state, answer, reserved_at):
     invariant = pending_gate_invariant(state)
     if invariant is not None:
         return None, invariant
     gate_id = state["pending_gate"]["id"]
-    _, _, approval_field, answers = gate_contracts[gate_id]
+    _, _, _, answers = gate_contracts[gate_id]
     if answer not in answers:
         return None, "pending-gate-answer"
+    issued_time = parse_gate_timestamp(state["pending_gate"]["issued_at"])
+    reserved_time = parse_gate_timestamp(reserved_at)
+    if issued_time is None or reserved_time is None or reserved_time < issued_time:
+        return None, "pending-gate-answer-timestamp"
+    reserved = copy.deepcopy(state)
+    reserved["gate_answer_receipt"] = {
+        "gate_id": gate_id,
+        "gate_issued_at": state["pending_gate"]["issued_at"],
+        "answer": answer,
+        "reserved_at": reserved_at,
+    }
+    reserved.setdefault("gate_log", []).append(
+        {"event": "answer-reserved", "gate_id": gate_id, "answer": answer, "at": reserved_at}
+    )
+    return reserved, None
+
+
+def resolve_pending_gate(state, answered_at):
+    pending = state.get("pending_gate")
+    receipt = state.get("gate_answer_receipt")
+    if not isinstance(pending, dict) or not isinstance(receipt, dict):
+        return None, "pending-gate-answer-receipt"
+    unreserved = copy.deepcopy(state)
+    unreserved["gate_answer_receipt"] = None
+    invariant = pending_gate_invariant(unreserved)
+    if invariant is not None:
+        return None, invariant
+    gate_id = pending["id"]
+    _, _, approval_field, answers = gate_contracts[gate_id]
+    if set(receipt) != {"gate_id", "gate_issued_at", "answer", "reserved_at"}:
+        return None, "pending-gate-answer-receipt"
+    answer = receipt.get("answer")
+    if receipt.get("gate_id") != gate_id or receipt.get("gate_issued_at") != pending.get("issued_at") or answer not in answers:
+        return None, "pending-gate-answer-receipt"
+    issued_time = parse_gate_timestamp(pending["issued_at"])
+    reserved_time = parse_gate_timestamp(receipt["reserved_at"])
+    answered_time = parse_gate_timestamp(answered_at)
+    if None in {issued_time, reserved_time, answered_time} or not issued_time <= reserved_time <= answered_time:
+        return None, "pending-gate-outcome-timestamp"
     resolved = copy.deepcopy(state)
     resolved["pending_gate"] = None
     resolved["gate_record_count"] = 0
+    resolved["gate_answer_receipt"] = None
     resolved["phase_status"] = "in-progress"
-    resolved["answer_count"] = 1
     if answer in {"approve", "merge"}:
         resolved["approvals"][approval_field] = {"by": "user", "at": answered_at}
+    resolved.setdefault("gate_log", []).append(
+        {"event": "resolved", "gate_id": gate_id, "answer": answer, "at": answered_at}
+    )
     return resolved, None
+
+
+def resolved_gate_invariant(state, gate_id, answer):
+    if state.get("pending_gate") is not None or state.get("gate_answer_receipt") is not None:
+        return "pending-gate-outcome-clear"
+    gate_log = state.get("gate_log")
+    if not isinstance(gate_log, list) or len(gate_log) < 3:
+        return "pending-gate-outcome-log"
+    expected_events = ["issued", "answer-reserved", "resolved"]
+    if [row.get("event") for row in gate_log[-3:]] != expected_events:
+        return "pending-gate-outcome-log"
+    outcome = gate_log[-1]
+    if outcome.get("gate_id") != gate_id or outcome.get("answer") != answer or parse_gate_timestamp(outcome.get("at")) is None:
+        return "pending-gate-outcome-log"
+    return None
+
+
+def grade_gate_fixture(mutation_id, fixture):
+    if mutation_id == "unknown-pending-answer":
+        return reserve_pending_answer(fixture, fixture["answer"], fixture["observed_at"])[1]
+    if mutation_id == "nonmonotonic-pending-answer":
+        issued = issue_pending_gate(fixture["phase"], fixture["issued_at"])
+        return reserve_pending_answer(issued, fixture["answer"], fixture["reserved_at"])[1]
+    if mutation_id in {"nonmonotonic-pending-outcome", "malformed-pending-outcome"}:
+        issued = issue_pending_gate(fixture["phase"], fixture["issued_at"])
+        reserved, invariant = reserve_pending_answer(issued, fixture["answer"], fixture["reserved_at"])
+        if invariant is not None:
+            return invariant
+        return resolve_pending_gate(reserved, fixture["answered_at"])[1]
+    if mutation_id == "missing-pending-outcome-log":
+        issued = issue_pending_gate(fixture["phase"], fixture["issued_at"])
+        reserved, invariant = reserve_pending_answer(issued, fixture["answer"], fixture["reserved_at"])
+        if invariant is not None:
+            return invariant
+        resolved, invariant = resolve_pending_gate(reserved, fixture["answered_at"])
+        if invariant is not None:
+            return invariant
+        resolved["gate_log"].pop()
+        return resolved_gate_invariant(resolved, issued["pending_gate"]["id"], fixture["answer"])
+    return pending_gate_invariant(fixture)
 
 
 def validate_gate_group(mutation_rows):
@@ -1267,19 +1352,20 @@ def validate_gate_group(mutation_rows):
         "unknown-pending-gate": "pending-gate-unknown",
         "already-approved-pending-gate": "pending-gate-already-approved",
         "unknown-pending-answer": "pending-gate-answer",
+        "nonmonotonic-pending-answer": "pending-gate-answer-timestamp",
+        "nonmonotonic-pending-outcome": "pending-gate-outcome-timestamp",
+        "malformed-pending-outcome": "pending-gate-outcome-timestamp",
+        "missing-pending-outcome-log": "pending-gate-outcome-log",
         "mismatched-pending-gate": "pending-gate-phase",
         "mismatched-pending-answer-class": "pending-gate-answer-class",
         "stale-pending-gate": "pending-gate-stale",
-        "duplicate-pending-answer": "pending-gate-duplicate-answer",
+        "duplicate-pending-answer": "pending-gate-answer-reserved",
         "duplicate-pending-gate-record": "pending-gate-duplicate-record",
     }
     if {row["id"] for row in gate_rows} != set(expected):
         fail("pending gate mutation inventory mismatch")
     for row in gate_rows:
-        if row["id"] == "unknown-pending-answer":
-            _, actual = resolve_pending_gate(row["fixture"], row["fixture"]["answer"], "2026-08-24T04:01:01Z")
-        else:
-            actual = pending_gate_invariant(row["fixture"])
+        actual = grade_gate_fixture(row["id"], row["fixture"])
         if actual != expected[row["id"]]:
             fail(f"pending gate mutation diagnostic mismatch: {row['id']}")
     controls = 0
@@ -1289,14 +1375,26 @@ def validate_gate_group(mutation_rows):
             fail(f"pending gate issue control failed: {phase}")
         controls += 1
         for answer in answers:
-            resolved, invariant = resolve_pending_gate(issued, answer, "2026-08-24T04:00:01Z")
-            if invariant is not None or resolved["pending_gate"] is not None or resolved["phase_status"] != "in-progress":
+            reserved, invariant = reserve_pending_answer(issued, answer, "2026-08-24T04:00:01Z")
+            if invariant is not None or pending_gate_invariant(reserved) != "pending-gate-answer-reserved":
+                fail(f"pending gate reservation control failed: {phase}/{answer}")
+            resolved, invariant = resolve_pending_gate(reserved, "2026-08-24T04:00:02Z")
+            if (
+                invariant is not None
+                or resolved["pending_gate"] is not None
+                or resolved["phase_status"] != "in-progress"
+                or resolved_gate_invariant(resolved, issued["pending_gate"]["id"], answer) is not None
+            ):
                 fail(f"pending gate resolution control failed: {phase}/{answer}")
             controls += 1
     resume = issue_pending_gate("ship", "2026-08-24T04:00:00Z")
     resume["observed_at"] = "2026-08-24T04:01:00Z"
     if pending_gate_invariant(resume) is not None:
         fail("pending gate resume control failed")
+    controls += 1
+    reserved_resume, invariant = reserve_pending_answer(resume, "merge", "2026-08-24T04:00:01Z")
+    if invariant is not None or pending_gate_invariant(reserved_resume) != "pending-gate-answer-reserved":
+        fail("pending gate reserved resume control failed")
     controls += 1
     return len(gate_rows), controls
 
@@ -1330,10 +1428,7 @@ def grade_mutation(mutation, cases_by_id, clauses_by_id, disabled_graders=frozen
         return ("expected-reject", "no-coverage-drop", "no-coverage-drop") if rejected else ("unexpected-pass", "no-coverage-drop", "none")
     fixture = mutation.get("fixture", {})
     if mutation["grader"] == "pending-gate-state":
-        if mutation_id == "unknown-pending-answer":
-            _, invariant = resolve_pending_gate(fixture, fixture.get("answer"), fixture.get("observed_at"))
-        else:
-            invariant = pending_gate_invariant(fixture)
+        invariant = grade_gate_fixture(mutation_id, fixture)
         return ("expected-reject", "pending-gate-state", invariant) if invariant else ("unexpected-pass", "pending-gate-state", "none")
     if mutation["grader"] == "sc2-comparison":
         invariant = sc2_invariant(fixture)
@@ -1422,10 +1517,14 @@ def validate_static(cases):
         "unknown-pending-gate": "pending-gate-unknown",
         "already-approved-pending-gate": "pending-gate-already-approved",
         "unknown-pending-answer": "pending-gate-answer",
+        "nonmonotonic-pending-answer": "pending-gate-answer-timestamp",
+        "nonmonotonic-pending-outcome": "pending-gate-outcome-timestamp",
+        "malformed-pending-outcome": "pending-gate-outcome-timestamp",
+        "missing-pending-outcome-log": "pending-gate-outcome-log",
         "mismatched-pending-gate": "pending-gate-phase",
         "mismatched-pending-answer-class": "pending-gate-answer-class",
         "stale-pending-gate": "pending-gate-stale",
-        "duplicate-pending-answer": "pending-gate-duplicate-answer",
+        "duplicate-pending-answer": "pending-gate-answer-reserved",
         "duplicate-pending-gate-record": "pending-gate-duplicate-record",
         "different-artifact-kind": "sc2-same-kind",
         "unstable-invariance-output": "sc2-invariance",
@@ -1540,7 +1639,7 @@ if mode == "gate":
         fail("pending_gate is undefined")
     gate_source_literals = {
         "skills/release-loop/SKILL.md": "Before answering a pending USER gate, require exactly one valid `pending_gate`",
-        "skills/release-loop/references/progress-schema.md": "Missing, duplicate, stale, mismatched, unknown, or already-approved gate state blocks",
+        "skills/release-loop/references/progress-schema.md": "already-approved, or previously reserved state blocks without sending an answer",
         "skills/designing/SKILL.md": "pending_gate.id: design-approval",
         "skills/shipping/SKILL.md": "pending_gate.id: ship-approval",
     }

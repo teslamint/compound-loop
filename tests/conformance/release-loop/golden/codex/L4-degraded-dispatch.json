@@ -4,7 +4,7 @@
   "case_id": "L4-degraded-dispatch",
   "payload_mode": "exact-current-skill-bytes",
   "skill_source": "skills/release-loop/SKILL.md",
-  "skill_sha256": "336f8e064902b15c92508789d8da3f069827260144ac7f96cef9a58aa2eb0aea",
+  "skill_sha256": "66fff4bcecdacb0013754365434674d1577b5a93b930e5eefdd7e49f8ce3a40c",
   "skill_materialization": {
     "read_mode": "bytes",
     "digest": "sha256",

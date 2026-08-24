@@ -200,7 +200,7 @@ Default: present the PR (CI status, comments fixed/deferred, any deferred items)
 
 ### Release-loop pending disposition
 
-For an interactive final disposition invoked by `release-loop`, atomically set `phase_status: waiting-user` and issue `pending_gate.id: ship-approval` before asking. Record a fresh `issued_at` and `expected_answer_class: merge-or-nonmerge-disposition`. Merge or non-merge disposition atomically removes `pending_gate`, changes `phase_status`, and logs the outcome. Standalone and `--auto` paths do not issue this record.
+For an interactive final disposition invoked by `release-loop`, atomically set `phase_status: waiting-user` and issue `pending_gate.id: ship-approval` before asking. Record a fresh `issued_at` and `expected_answer_class: merge-or-nonmerge-disposition`. After observing the disposition, validate its timestamp and reserved receipt. Then atomically remove `pending_gate` and `gate_answer_receipt`, change `phase_status`, and log the outcome. Standalone and `--auto` paths do not issue these records.
 
 ```bash
 gh pr merge <number> --squash --delete-branch [--auto]
