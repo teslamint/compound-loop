@@ -3263,14 +3263,27 @@ def publish_baseline_transition(base_root, handoff_root, archive_source, baselin
     return baseline["generation_manifest_sha256"], baseline
 
 
+def progress_frontmatter_scalar(text_value, key):
+    if not text_value.startswith("---\n"):
+        fail("archive progress frontmatter missing")
+    end = text_value.find("\n---", 4)
+    if end < 0:
+        fail("archive progress frontmatter missing")
+    frontmatter = text_value[4:end]
+    matches = re.findall(rf"(?m)^{re.escape(key)}: ([^\n]+)$", frontmatter)
+    if len(matches) != 1:
+        fail(f"archive progress duplicate or missing field: {key}")
+    return matches[0]
+
+
 def mark_v2_acceptance(progress_path, generation_digest, archive_root, observed_at):
     text_value = progress_path.read_text(encoding="utf-8")
     expected_destination = f"archive-destination: {archive_root}"
     if text_value.count(expected_destination) != 1:
         fail("archive destination evidence mismatch")
-    phase = re.search(r"(?m)^phase: ([^\n]+)$", text_value)
-    phase_status = re.search(r"(?m)^phase_status: ([^\n]+)$", text_value)
-    if not phase or phase.group(1) not in {"retro", "done"} or not phase_status:
+    phase = progress_frontmatter_scalar(text_value, "phase")
+    phase_status = progress_frontmatter_scalar(text_value, "phase_status")
+    if phase not in {"retro", "done"}:
         fail("archive V2 phase mismatch")
     record_pattern = re.compile(
         r"(?m)^archive_verification:\n"
@@ -3295,7 +3308,7 @@ def mark_v2_acceptance(progress_path, generation_digest, archive_root, observed_
         if f"V2 accepted generation={generation_digest}" not in text_value:
             fail("archive V2 accepted digest mismatch")
         return
-    if record.group("status") != "started" or phase.group(1) != "retro" or phase_status.group(1) != "in-progress":
+    if record.group("status") != "started" or phase != "retro" or phase_status != "in-progress":
         fail("archive V2 nonterminal state mismatch")
     replacement = record.group(0).replace("  status: started\n", "  status: accepted\n", 1)
     text_value = text_value[:record.start()] + replacement + text_value[record.end():]
@@ -3310,8 +3323,8 @@ def require_terminal_archived_progress(archive_root, digest, relative_archive):
     mark_v2_acceptance(archived_progress, digest, relative_archive, "")
     text_value = archived_progress.read_text(encoding="utf-8")
     if (
-        not re.search(r"(?m)^phase: done$", text_value)
-        or not re.search(r"(?m)^phase_status: complete$", text_value)
+        progress_frontmatter_scalar(text_value, "phase") != "done"
+        or progress_frontmatter_scalar(text_value, "phase_status") != "complete"
         or f"V2 accepted generation={digest}" not in text_value
     ):
         fail("handoff cleanup terminal progress missing")
@@ -3407,11 +3420,15 @@ def verify_archive_transition(base_root, archive_root, baseline_path, handoff_ro
         fail("archive root outside archive tree")
     handoff_argument = Path(handoff_root)
     expected_handoff_parent = (base_root / ".release-loop/.handoff").resolve(strict=True)
+    if handoff_argument.is_symlink() or existing_path_has_symlink(
+        base_root, handoff_argument.absolute()
+    ):
+        fail("archive handoff path mismatch")
     try:
         handoff_parent = handoff_argument.parent.resolve(strict=True)
     except FileNotFoundError:
         fail("archive handoff path mismatch")
-    if handoff_parent != expected_handoff_parent:
+    if handoff_parent != expected_handoff_parent or handoff_argument.parent != base_root / ".release-loop/.handoff":
         fail("archive handoff path mismatch")
     baseline = load_json(baseline_path)
     staged_generation = verified_generation_tree(archive_root / "evidence/live-generation")
@@ -3797,6 +3814,33 @@ def validate_transition_group():
                 fail(f"transition absent handoff terminal diagnostic mismatch: {exc}")
         else:
             fail("transition absent handoff nonterminal progress accepted")
+        archived_progress.write_text(terminal_progress_text, encoding="utf-8")
+        negatives += 1
+        handoff_root.symlink_to(archive_source, target_is_directory=True)
+        try:
+            verify_archive_transition(
+                base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:04Z"
+            )
+        except ValueError as exc:
+            if "archive handoff path mismatch" not in str(exc):
+                fail(f"transition V2 handoff symlink diagnostic mismatch: {exc}")
+        else:
+            fail("transition V2 handoff symlink accepted")
+        handoff_root.unlink()
+        negatives += 1
+        duplicate_terminal = terminal_progress_text.replace(
+            "phase_status: complete", "phase_status: complete\nphase: retro"
+        )
+        archived_progress.write_text(duplicate_terminal, encoding="utf-8")
+        try:
+            verify_archive_transition(
+                base_root, archive_root, baseline_path, handoff_root, "2026-08-24T07:00:04Z"
+            )
+        except ValueError as exc:
+            if "archive progress duplicate or missing field: phase" not in str(exc):
+                fail(f"transition duplicate terminal diagnostic mismatch: {exc}")
+        else:
+            fail("transition duplicate terminal phase accepted")
         archived_progress.write_text(terminal_progress_text, encoding="utf-8")
         negatives += 1
         if verify_archive_transition(
