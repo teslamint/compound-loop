@@ -6,9 +6,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-}"
 
 case "$MODE" in
-  static-inventory|static|fixture|gate|preflight|resource|live-pilot|live) ;;
+  static-inventory|static|fixture|gate|preflight|resource|prepare-pilot|install-full-approval|live-pilot|live) ;;
   *)
-    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture|gate|preflight|resource|live-pilot|live>" >&2
+    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture|gate|preflight|resource|prepare-pilot|install-full-approval|live-pilot|live>" >&2
     exit 2
     ;;
 esac
@@ -2371,6 +2371,37 @@ def write_json_atomic(path, value, allowed_root):
             temporary_path.unlink()
 
 
+def write_bytes_atomic(path, payload, allowed_root, mode_bits=0o600):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.resolve(strict=True).relative_to(allowed_root.resolve(strict=True))
+    except (FileNotFoundError, ValueError):
+        fail("atomic bytes path outside allowed root")
+    if path.is_symlink():
+        fail("atomic bytes target is symlink")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    temporary_path = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, mode_bits)
+        written = 0
+        while written < len(payload):
+            written += os.write(descriptor, payload[written:])
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(str(temporary_path), str(path))
+        directory_descriptor = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
 def artifact_has_secret(value):
     serialized = json.dumps(value, sort_keys=True)
     return bool(re.search(r"(api[_-]?key|access[_-]?token|refresh[_-]?token|password|credential|ghp_[A-Za-z0-9])", serialized, re.IGNORECASE))
@@ -2801,6 +2832,57 @@ def run_paid_mode_entry(
         "generation_sha256": generation_digest,
         "full_command": shlex.join(derived_full_command) if derived_full_command is not None else None,
     }
+
+
+def prepare_pilot_approval(arguments, evidence_root, auth_brokers, source_identity):
+    command, models, caps = parse_paid_mode("live-pilot", arguments)
+    packet = build_paid_approval_packet(
+        "live-pilot", command, models, caps, auth_brokers, source_identity
+    )
+    path = evidence_root / "live-pilot-approval.json"
+    payload = (json.dumps(packet, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    write_bytes_atomic(path, payload, evidence_root)
+    verified_packet, digest = read_paid_approval_packet(
+        path, evidence_root, "live-pilot", command, models, caps, auth_brokers, source_identity
+    )
+    if verified_packet != packet:
+        fail("pilot approval packet persistence mismatch")
+    return path, digest, shlex.join(command), packet
+
+
+def install_full_approval(arguments, evidence_root, auth_brokers, source_identity):
+    parsed = parse_flag_pairs(arguments, {"--generation", "--approved-sha256"})
+    generation_path = Path(parsed["--generation"])
+    if not generation_path.is_absolute():
+        generation_path = root / generation_path
+    try:
+        generation_path = generation_path.resolve(strict=True)
+        generation_path.relative_to(evidence_root.resolve(strict=True))
+    except (FileNotFoundError, ValueError):
+        fail("full approval generation outside evidence")
+    if verify_complete_generation(generation_path) is not None:
+        fail("full approval generation incomplete")
+    source_path = generation_path / "full-run-approval.json"
+    payload = read_bounded_file(source_path, generation_path, 1048576).encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()
+    if digest != parsed["--approved-sha256"]:
+        fail("full approval USER digest mismatch")
+    packet = json.loads(payload)
+    command = shlex.split(packet.get("command", ""))
+    if command[:3] != ["bash", "scripts/test-release-loop-conformance.sh", "live"]:
+        fail("full approval command mismatch")
+    exact_command, models, caps = parse_paid_mode("live", command[3:])
+    invariant = validate_paid_approval_packet(
+        packet, "live", exact_command, models, caps, auth_brokers, source_identity
+    )
+    if invariant is not None:
+        fail(invariant)
+    target = evidence_root / "live-approval.json"
+    write_bytes_atomic(target, payload, evidence_root)
+    installed = read_bounded_file(target, evidence_root, 1048576).encode("utf-8")
+    if installed != payload or hashlib.sha256(installed).hexdigest() != digest:
+        fail("full approval install bytes mismatch")
+    return target, digest, packet["command"], packet
 
 
 def write_adapter_supervisor(path):
@@ -3727,10 +3809,18 @@ def validate_resource_group():
 
     with tempfile.TemporaryDirectory(prefix="paid-entry-test-", dir=str(receipt_test_root)) as paid_temp:
         paid_root = Path(paid_temp)
-        pilot_entry_receipt = {**receipt, "nonce": "2" * 32}
+        prepared_path, prepared_digest, prepared_command, _ = prepare_pilot_approval(
+            pilot[3:], paid_root, auth_brokers, source_identity
+        )
+        if prepared_digest != pilot_approval_sha256 or prepared_command != shlex.join(pilot):
+            fail("resource pilot approval preparation mismatch")
+        pilot_entry_receipt = {
+            **receipt,
+            "nonce": "2" * 32,
+            "approval_packet_sha256": prepared_digest,
+        }
         write_json_atomic(paid_root / "live-pilot-receipt.json", pilot_entry_receipt, paid_root)
-        pilot_entry_approval = paid_root / "live-pilot-approval.json"
-        pilot_entry_approval.write_bytes(pilot_approval_payload)
+        pilot_entry_approval = prepared_path
         pilot_entry = run_paid_mode_entry(
             "live-pilot",
             pilot[3:],
@@ -3810,19 +3900,36 @@ def validate_resource_group():
                 fail(f"resource paid entry reuse diagnostic mismatch: {exc}")
         else:
             fail("resource paid pilot entry reused receipt")
-        full_entry_receipt = {**full_receipt, "nonce": "3" * 32}
+        generated_approval = Path(pilot_entry["generation_path"]) / "full-run-approval.json"
+        generated_approval_digest = hashlib.sha256(generated_approval.read_bytes()).hexdigest()
+        full_entry_approval, installed_digest, installed_command, installed_packet = install_full_approval(
+            ["--generation", pilot_entry["generation_path"], "--approved-sha256", generated_approval_digest],
+            paid_root,
+            auth_brokers,
+            source_identity,
+        )
+        if installed_digest != generated_approval_digest or installed_command != pilot_entry["full_command"]:
+            fail("resource full approval installation mismatch")
+        installed_command_array = shlex.split(installed_command)
+        installed_caps = installed_packet["caps"]
+        full_entry_receipt = {
+            **receipt,
+            "gate_kind": "live",
+            "command_sha256": paid_command_digest(installed_command_array),
+            "caps": installed_caps,
+            "approval_packet_sha256": installed_digest,
+            "nonce": "3" * 32,
+        }
         write_json_atomic(paid_root / "live-receipt.json", full_entry_receipt, paid_root)
-        full_entry_approval = paid_root / "live-approval.json"
-        full_entry_approval.write_bytes(full_approval_payload)
         full_entry = run_paid_mode_entry(
             "live",
-            full_command[3:],
+            installed_command_array[3:],
             fake_paid_launcher,
             paid_root,
             auth_brokers,
             source_identity,
             lambda: source_identity,
-            full_approval_sha256,
+            installed_digest,
             lambda: hashlib.sha256(full_entry_approval.read_bytes()).hexdigest(),
             session_marker,
             session_started,
@@ -4466,6 +4573,26 @@ if mode == "resource":
         resource_full_command,
         resource_manifest,
     ) = validate_resource_group()
+if mode == "prepare-pilot":
+    prepare_source = paid_source_preflight()
+    prepare_auth = paid_auth_preflight()
+    prepare_auth_digests = {harness: row["sha256"] for harness, row in prepare_auth.items()}
+    prepare_path, prepare_digest, prepare_command, _ = prepare_pilot_approval(
+        mode_args,
+        root / ".release-loop/evidence",
+        prepare_auth_digests,
+        prepare_source["receipt"],
+    )
+if mode == "install-full-approval":
+    install_source = paid_source_preflight()
+    install_auth = paid_auth_preflight()
+    install_auth_digests = {harness: row["sha256"] for harness, row in install_auth.items()}
+    install_path, install_digest, install_command, _ = install_full_approval(
+        mode_args,
+        root / ".release-loop/evidence",
+        install_auth_digests,
+        install_source["receipt"],
+    )
 if mode in {"live-pilot", "live"}:
     live_command, live_models, live_caps = parse_paid_mode(mode, mode_args)
     live_evidence_root = root / ".release-loop/evidence"
@@ -4638,6 +4765,13 @@ if mode == "resource":
     )
     print(f"full-run-command: {resource_full_command}")
     print("codex-hard-dollar-cap: unavailable; observed-token cap enforced")
+if mode == "prepare-pilot":
+    print(f"pilot-approval-packet: path={prepare_path} sha256={prepare_digest}")
+    print(f"pilot-command: {prepare_command}")
+    print("codex-hard-dollar-cap: unavailable; observed-token cap enforced")
+if mode == "install-full-approval":
+    print(f"full-approval-installed: path={install_path} sha256={install_digest}")
+    print(f"full-command: {install_command}")
 if mode in {"live-pilot", "live"}:
     print(
         f"ok:   release-loop {mode} results={len(live_result['results'])} "
