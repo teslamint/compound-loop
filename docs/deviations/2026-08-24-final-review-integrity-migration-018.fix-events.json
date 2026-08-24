@@ -1,0 +1,67 @@
+{
+  "counting_started_at": "2026-08-24T00:09:21Z",
+  "progress_path": ".release-loop/progress.md",
+  "rows": [
+    {
+      "fix_commit": "42cfea78fa9921240c2292c5e4742c18f2f0c831",
+      "fixer_report_path": ".release-loop/evidence/U3/review-fix-round1.md",
+      "fixer_report_sha256": "fab3e2dd2a9bf4e5a4268cfe918d102ba099d5486a7d5b3cef600212ed070fcf",
+      "id": "fix:U3:1",
+      "ordinal": 1,
+      "reviewed_head": "d0bf74dd3e45e93b19f0859645a3be5989eb177a",
+      "source_review_event": "unit:U3:1",
+      "subject": "U3"
+    },
+    {
+      "fix_commit": "26358849db7264ff2affd842f39c4d122f6ff2b1",
+      "fixer_report_path": ".release-loop/evidence/U3/round2-fix.md",
+      "fixer_report_sha256": "ca06de509aa87dd3b1cb1ff1086dfcd57fda5ae60d2b8859680e8f39186e73de",
+      "id": "fix:U3:2",
+      "ordinal": 2,
+      "reviewed_head": "42cfea78fa9921240c2292c5e4742c18f2f0c831",
+      "source_review_event": "unit:U3:2",
+      "subject": "U3"
+    },
+    {
+      "fix_commit": "3ccb930aa939f9eaeb92846b005301a2e784c054",
+      "fixer_report_path": ".release-loop/evidence/U3/post-cap.md",
+      "fixer_report_sha256": "fd4d64466ad1c56a12f57abafc5d42c4526aef9c37176cea1f25a766f35af77a",
+      "id": "fix:U3:3",
+      "ordinal": 3,
+      "reviewed_head": "26358849db7264ff2affd842f39c4d122f6ff2b1",
+      "source_review_event": "unit:U3:3",
+      "subject": "U3"
+    },
+    {
+      "fix_commit": "37525927afe02bd0d919112447b62e31a815139e",
+      "fixer_report_path": ".release-loop/evidence/U3/fresh-fix.md",
+      "fixer_report_sha256": "17bb6be61ec018bea663bae39338a894120953673a5fb5d11e02dc50283c8b09",
+      "id": "fix:U3:4",
+      "ordinal": 4,
+      "reviewed_head": "3ccb930aa939f9eaeb92846b005301a2e784c054",
+      "source_review_event": "unit:U3:4",
+      "subject": "U3"
+    },
+    {
+      "fix_commit": "2ca4b970f0ea77ad5dfb701101121e509f99c363",
+      "fixer_report_path": ".release-loop/reports/U4-round2-report.md",
+      "fixer_report_sha256": "4891b1f3e34f36e4e097421e960503fc6a4573a88480cac89a28e24a9a55c86c",
+      "id": "fix:U4:1",
+      "ordinal": 1,
+      "reviewed_head": "a8b85dfd196b40dd446600c55fac6f5ac842b5a5",
+      "source_review_event": "unit:U4:1",
+      "subject": "U4"
+    },
+    {
+      "fix_commit": "3f6157c42e84709d2761e4f4ef6ad51b866fc24a",
+      "fixer_report_path": ".release-loop/reports/U5-round1-fix-report.md",
+      "fixer_report_sha256": "80aa6d832c07221dfcabcd0be97373d9e0fa561994c20850e006e782a54fa246",
+      "id": "fix:U5:1",
+      "ordinal": 1,
+      "reviewed_head": "864ad8dece73410cc71a9410426c2ddcab7bf63b",
+      "source_review_event": "unit:U5:1",
+      "subject": "U5"
+    }
+  ],
+  "schema": "review-fix-event-migration/v1"
+}

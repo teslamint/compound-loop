@@ -10,6 +10,7 @@ python3 - "$case_name" "$ROOT" <<'PY'
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ import tempfile
 
 CASE = sys.argv[1]
 ROOT = Path(sys.argv[2])
+COMMAND_TRACE: list[dict[str, object]] = []
 
 
 def read_contract(relative: str) -> str:
@@ -41,6 +43,8 @@ CLI = ROOT / "skills/release-loop/scripts/run-artifact-integrity.py"
 IMPLEMENTING_CLI = ROOT / "skills/implementing/scripts/phase-artifact-integrity.py"
 RELEASE_CORE = ROOT / "skills/release-loop/scripts/phase_artifact_core.py"
 IMPLEMENTING_CORE = ROOT / "skills/implementing/scripts/phase_artifact_core.py"
+EVIDENCE_CLI = ROOT / "skills/release-loop/scripts/regenerate-matrix-evidence.py"
+FIX_MIGRATION_CLI = ROOT / "skills/release-loop/scripts/validate-fix-event-migration.py"
 PHASE_CONSUMERS = {
     name: read_contract(f"skills/{name}/SKILL.md")
     for name in ("planning", "implementing", "reviewing", "shipping", "retrospective")
@@ -55,6 +59,9 @@ CASES = (
     "new_scoped_run",
     "scope_preparation_crash",
     "archive_scoped_run",
+    "legacy_publish_then_archive",
+    "archive_pending_publication",
+    "interrupted_legacy_published_archive",
     "archive_requires_persisted_destination",
     "archive_incomplete_run",
     "archive_incomplete_missing_phase",
@@ -119,6 +126,8 @@ CASES = (
     "publisher_target_prefix_attacks",
     "publish_cancellation",
     "stateful_scoped_lifecycle",
+    "matrix_evidence_regeneration",
+    "fix_event_migration_validation",
 )
 
 CONSUMER_CASES = (
@@ -416,6 +425,13 @@ def run_cli(
         stderr=subprocess.PIPE,
         check=False,
     )
+    COMMAND_TRACE.append({
+        "argv": [sys.executable, str(cli), command, *args],
+        "cwd": str(cwd),
+        "exit_status": result.returncode,
+        "stdout": result.stdout[-1000:],
+        "stderr": result.stderr[-1000:],
+    })
     if result.returncode != 0:
         assert result.stdout == "", f"blocked CLI wrote stdout: {result.stdout!r}"
         diagnostic = result.stderr.rstrip("\n")
@@ -427,6 +443,69 @@ def run_cli(
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     assert result.stdout == canonical, f"non-canonical JSON: {result.stdout!r}"
     return payload
+
+
+def matrix_fixture_snapshot(repo: Path) -> dict[str, object]:
+    inventory = []
+    for path in sorted(repo.rglob("*")):
+        if ".git" in path.relative_to(repo).parts:
+            continue
+        relative = path.relative_to(repo).as_posix()
+        inventory.append({
+            "path": relative,
+            "kind": "symlink" if path.is_symlink() else "file" if path.is_file() else "directory",
+            "sha256_or_target": (
+                os.readlink(path) if path.is_symlink()
+                else hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file()
+                else None
+            ),
+        })
+    return {
+        "head": git(repo, "rev-parse", "HEAD"),
+        "index": git(repo, "write-tree"),
+        "status": git(repo, "status", "--short"),
+        "inventory": inventory,
+    }
+
+
+def write_matrix_observation(
+    case: str,
+    repo: Path,
+    pre_state: dict[str, object],
+    sent: Path,
+    before: bytes,
+) -> None:
+    selected = os.environ.get("RUN_ARTIFACT_MATRIX_OBSERVATION")
+    if selected is None:
+        return
+    target = Path(selected)
+    after = sent.read_bytes()
+    roots = sorted(
+        path.relative_to(repo).as_posix()
+        for path in (repo / ".release-loop").glob("**/progress.md")
+        if path.is_file()
+    ) if (repo / ".release-loop").is_dir() else []
+    observation = {
+        "schema": "matrix-fixture-observation/v1",
+        "case": case,
+        "disposable_root": str(repo),
+        "progress_records": roots,
+        "pre_state": pre_state,
+        "post_state": matrix_fixture_snapshot(repo),
+        "command_trace": COMMAND_TRACE,
+        "boundary_sentinel": {
+            "path": str(sent),
+            "pre_sha256": hashlib.sha256(before).hexdigest(),
+            "post_sha256": hashlib.sha256(after).hexdigest(),
+            "unchanged": after == before,
+        },
+        "stub_identity": "not applicable; disposable local Git and filesystem only",
+        "next_invocation": ["bash", "scripts/test-run-artifact-integrity.sh", case],
+        "mechanism_check": "all case assertions completed and the boundary sentinel stayed byte-identical",
+        "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(observation, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 
 
 def prepare_scope(repo: Path, feature: str, selected: str | None = None) -> tuple[Path, str]:
@@ -1899,6 +1978,7 @@ def run_case(name: str) -> None:
             repo = new_history_repo(tmp, conflict=conflict)
             path = initialize(repo, "alpha")
             history = HistoryFixture(repo, path, "main", "fixture-session")
+            matrix_pre_state = matrix_fixture_snapshot(repo)
             command = 'git rebase --onto "origin/main" "main" "feat/fixture"'
             counts_before = dict(history.review_counts)
             old_range = dict(history.current_commit_range)
@@ -2012,8 +2092,10 @@ def run_case(name: str) -> None:
                     assert observed_commands["cleanup"] == baseline_commands["cleanup"]
             assert sent.read_bytes() == before
             write_history_evidence(name, repo, history, pre_observation, sent, before, command)
+            write_matrix_observation(name, repo, matrix_pre_state, sent, before)
             return
         repo = new_repo(tmp)
+        matrix_pre_state = matrix_fixture_snapshot(repo)
 
         if name == "new_scoped_run":
             path = initialize(repo, "alpha")
@@ -2036,6 +2118,85 @@ def run_case(name: str) -> None:
             order = archive_scope(repo, str(path.relative_to(repo)), ".release-loop/archive/2026-08-23-alpha")
             assert order[-1] == "progress.md"
             assert not path.exists()
+        elif name == "legacy_publish_then_archive":
+            legacy = repo / ".release-loop/progress.md"
+            legacy.parent.mkdir()
+            legacy.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+            payload = publish_from_cli(repo, legacy, "reports/U1.md", b"owned\n", CLI)
+            assert payload["state"] == "published"
+            journal = legacy.parent / ".phase-artifact-ownership.json"
+            temporary = legacy.parent / ".tmp"
+            assert journal.is_file() and temporary.is_dir()
+            destination = ".release-loop/archive/2026-08-23-legacy-owned"
+            order = archive_scope(repo, str(legacy.relative_to(repo)), destination)
+            archived = repo / destination
+            assert order[-1] == "progress.md"
+            assert (archived / ".phase-artifact-ownership.json").is_file()
+            assert (archived / ".tmp").is_dir()
+            assert not journal.exists() and not temporary.exists()
+            assert not any(
+                child.name in {".phase-artifact-ownership.json", ".phase-artifact-ownership.json.tmp", ".tmp"}
+                for child in (repo / ".release-loop").iterdir()
+            )
+        elif name == "archive_pending_publication":
+            legacy = repo / ".release-loop/progress.md"
+            legacy.parent.mkdir()
+            legacy.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+            source = legacy.parent / ".tmp/reports-U1.md.tmp"
+            try:
+                publish_from_cli(
+                    repo,
+                    legacy,
+                    "reports/U1.md",
+                    b"pending\n",
+                    CLI,
+                    "publish-after-prepare",
+                )
+            except Blocked as exc:
+                assert "injected publish interruption" in str(exc), str(exc)
+            else:
+                raise AssertionError("publisher did not leave a pending transaction")
+            destination = ".release-loop/archive/2026-08-23-legacy-pending"
+            persist_archive_evidence(legacy, destination, "completed")
+            before_progress = legacy.read_bytes()
+            assert_blocked_preserves(
+                lambda: archive_scope(
+                    repo,
+                    str(legacy.relative_to(repo)),
+                    destination,
+                    persist_authority=False,
+                ),
+                sent,
+                before,
+                "pending publication",
+            )
+            assert legacy.read_bytes() == before_progress
+            assert source.is_file()
+            assert not (repo / destination).exists()
+        elif name == "interrupted_legacy_published_archive":
+            legacy = repo / ".release-loop/progress.md"
+            legacy.parent.mkdir()
+            legacy.write_text(progress("legacy", ".release-loop"), encoding="utf-8")
+            publish_from_cli(repo, legacy, "reports/U1.md", b"owned\n", CLI)
+            destination = ".release-loop/archive/2026-08-23-legacy-published-interrupted"
+            persist_archive_evidence(legacy, destination, "completed")
+            try:
+                archive_scope(
+                    repo,
+                    str(legacy.relative_to(repo)),
+                    destination,
+                    fail_after_first=True,
+                    persist_authority=False,
+                )
+            except Blocked as exc:
+                assert "injected archive interruption" in str(exc)
+            else:
+                raise AssertionError("published legacy archive did not interrupt")
+            assert not (legacy.parent / ".tmp").exists()
+            assert archive_scope(repo, str(legacy.relative_to(repo)), None)[-1] == "progress.md"
+            archived = repo / destination
+            assert (archived / ".phase-artifact-ownership.json").is_file()
+            assert (archived / "reports/U1.md").is_file()
         elif name == "archive_requires_persisted_destination":
             path = initialize(repo, "alpha")
             before_progress = path.read_bytes()
@@ -2946,6 +3107,217 @@ def run_case(name: str) -> None:
             archive_scope(base, str(base_progress.relative_to(base)), ".release-loop/archive/2026-08-23-alpha")
             assert not (base / ".release-loop/progress.md").exists()
             assert (base / ".release-loop/archive/2026-08-23-alpha/progress.md").is_file()
+        elif name == "matrix_evidence_regeneration":
+            path = initialize(repo, "alpha")
+            stale = (
+                "evidence/U1/matrix.md",
+                *(f"evidence/U2/T6-{outcome}.md" for outcome in ("success", "forced-failure", "rerun", "compensation", "headless", "cancellation")),
+                *(f"evidence/U4/T3-{outcome}.md" for outcome in ("success", "forced-failure", "rerun", "compensation", "headless", "cancellation")),
+                *(f"evidence/U4/round2/T3-{outcome}.md" for outcome in ("success", "forced-failure", "rerun", "compensation", "headless", "cancellation")),
+            )
+            for index, relative in enumerate(stale):
+                target = path.parent / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(f"stale-{index}\n", encoding="utf-8")
+            result = subprocess.run(
+                (
+                    sys.executable,
+                    str(EVIDENCE_CLI),
+                    "--repo", str(repo),
+                    "--progress-path", path.relative_to(repo).as_posix(),
+                ),
+                cwd=ROOT,
+                env={**os.environ, "RUN_ARTIFACT_INTEGRITY_TEST_ADDENDUM_COMMIT": git(ROOT, "rev-parse", "HEAD")},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            assert result.returncode == 0, result.stderr
+            payload = json.loads(result.stdout)
+            assert payload["state"] == "published" and payload["record_count"] == 36
+            manifest = path.parent / "evidence/matrix-authority-v2.json"
+            authority = json.loads(manifest.read_text(encoding="utf-8"))
+            assert len(authority["records"]) == 36 and len(authority["supersedes"]) == len(stale)
+            before_manifest = manifest.read_bytes()
+
+            def assert_authority_blocked(label: str, diagnostic: str) -> None:
+                attack = subprocess.run(
+                    (
+                        sys.executable,
+                        str(EVIDENCE_CLI),
+                        "--repo", str(repo),
+                        "--progress-path", path.relative_to(repo).as_posix(),
+                    ),
+                    cwd=ROOT,
+                    env={**os.environ, "RUN_ARTIFACT_INTEGRITY_TEST_ADDENDUM_COMMIT": git(ROOT, "rev-parse", "HEAD")},
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                assert attack.returncode != 0 and diagnostic in attack.stderr, (label, attack.stderr)
+
+            missing = json.loads(before_manifest)
+            missing["records"].pop()
+            manifest.write_text(json.dumps(missing, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            assert_authority_blocked("missing", "record count")
+            duplicate = json.loads(before_manifest)
+            duplicate["records"][1] = dict(duplicate["records"][0])
+            manifest.write_text(json.dumps(duplicate, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            assert_authority_blocked("duplicate", "duplicate")
+            chained = json.loads(before_manifest)
+            chained["supersedes"][0]["stale_path"] = chained["records"][0]["path"]
+            manifest.write_text(json.dumps(chained, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            assert_authority_blocked("chained", "chained")
+            mismatch = json.loads(before_manifest)
+            mismatch["records"][0]["sha256"] = "0" * 64
+            manifest.write_text(json.dumps(mismatch, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            assert_authority_blocked("manifest-digest", "digest mismatch")
+            manifest.write_bytes(before_manifest)
+            dirty_record = repo / authority["records"][0]["path"]
+            record_bytes = dirty_record.read_bytes()
+            dirty_payload = json.loads(record_bytes)
+            dirty_payload["bounded_output"] += "dirty"
+            dirty_record.write_text(json.dumps(dirty_payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+            assert_authority_blocked("dirty-record", "publisher-owned")
+            dirty_record.write_bytes(record_bytes)
+            dirty_stale = path.parent / stale[0]
+            stale_bytes = dirty_stale.read_bytes()
+            dirty_stale.write_bytes(stale_bytes + b"dirty\n")
+            assert_authority_blocked("dirty-stale", "stale digest mismatch")
+            dirty_stale.write_bytes(stale_bytes)
+            manifest.write_bytes(before_manifest)
+            replay = subprocess.run(
+                (
+                    sys.executable,
+                    str(EVIDENCE_CLI),
+                    "--repo", str(repo),
+                    "--progress-path", path.relative_to(repo).as_posix(),
+                ),
+                cwd=ROOT,
+                env={**os.environ, "RUN_ARTIFACT_INTEGRITY_TEST_ADDENDUM_COMMIT": git(ROOT, "rev-parse", "HEAD")},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            assert replay.returncode == 0, replay.stderr
+            assert json.loads(replay.stdout)["state"] == "reused"
+            assert manifest.read_bytes() == before_manifest
+        elif name == "fix_event_migration_validation":
+            path = initialize(repo, "alpha")
+            head = git(repo, "rev-parse", "HEAD")
+            source_result = publish_from_cli(repo, path, "reviews/events/U3-round1.md", b"source-review\n", CLI)
+            fixer_report = publish_from_cli(repo, path, "reports/U3-fix-migration.md", b"fixer-report\n", CLI)
+            progress_text = path.read_text(encoding="utf-8") + (
+                "\nreview_counts:\n"
+                "  completeness: partial\n"
+                "  counting_started_at: 2026-08-24T00:00:00Z\n"
+                "  unit_passes: 1\n"
+                "  fix_rounds: 0\n"
+                "  final_passes: 0\n"
+                "  standalone_passes: 0\n"
+                "  findings_fixed: 0\n"
+                "  findings_deferred: 0\n"
+                "review_events:\n"
+                "  - id: unit:U3:1\n"
+                "    kind: unit\n"
+                "    subject: U3\n"
+                "    ordinal: 1\n"
+                "    state: complete\n"
+                f"    reviewed_head: {head}\n"
+                f"    result_path: {source_result['target']}\n"
+                f"    result_sha256: {source_result['sha256']}\n"
+                "    outcome: blocked\n"
+                "    source_review_event: null\n"
+                "    re_review_of: null\n"
+                "    source_adoption_path: null\n"
+                "    source_adoption_sha256: null\n"
+            )
+            path.write_text(progress_text, encoding="utf-8")
+            spec = importlib.util.spec_from_file_location("fix_event_migration", FIX_MIGRATION_CLI)
+            assert spec is not None and spec.loader is not None
+            migration = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(migration)
+
+            base_row = {
+                "fix_commit": head,
+                "fixer_report_path": fixer_report["target"],
+                "fixer_report_sha256": fixer_report["sha256"],
+                "id": "fix:U3:1",
+                "ordinal": 1,
+                "reviewed_head": head,
+                "source_review_event": "unit:U3:1",
+                "subject": "U3",
+            }
+
+            def publish_adoption(label: str, rows: list[dict[str, object]]) -> str:
+                adoption = {
+                    "counting_started_at": "2026-08-24T00:00:00Z",
+                    "progress_path": path.relative_to(repo).as_posix(),
+                    "rows": rows,
+                    "schema": "review-fix-event-migration/v1",
+                }
+                payload = publish_from_cli(
+                    repo,
+                    path,
+                    f"reviews/adoptions/{label}.json",
+                    json.dumps(adoption, sort_keys=True, separators=(",", ":")).encode() + b"\n",
+                    CLI,
+                )
+                return str(payload["target"])
+
+            adoption_path = publish_adoption("fix-history-valid", [base_row])
+            accepted = migration.validate_migration(repo, path.relative_to(repo).as_posix(), adoption_path, lambda _: "G")
+            assert accepted["state"] == "new" and accepted["events"][0]["id"] == "fix:U3:1"
+            assert accepted["review_counts"]["fix_rounds"] == 1
+
+            attacks = []
+            wrong_source = dict(base_row)
+            wrong_source["source_review_event"] = "unit:U9:1"
+            attacks.append(("wrong-source", [wrong_source], lambda _: "G", "source review"))
+            wrong_digest = dict(base_row)
+            wrong_digest["fixer_report_sha256"] = "0" * 64
+            attacks.append(("wrong-digest", [wrong_digest], lambda _: "G", "digest"))
+            missing_report = dict(base_row)
+            missing_report["fixer_report_path"] = ".release-loop/runs/alpha/reports/missing.md"
+            attacks.append(("missing-report", [missing_report], lambda _: "G", "fixer report"))
+            attacks.append(("unsigned", [base_row], lambda _: "U", "signed"))
+            attacks.append(("duplicate", [base_row, dict(base_row)], lambda _: "G", "duplicate"))
+            for label, rows, signature, diagnostic in attacks:
+                candidate = publish_adoption("fix-history-" + label, rows)
+                try:
+                    migration.validate_migration(repo, path.relative_to(repo).as_posix(), candidate, signature)
+                except migration.Blocked as exc:
+                    assert diagnostic in str(exc), (label, str(exc))
+                else:
+                    raise AssertionError(label + " migration attack passed")
+            try:
+                migration.validate_migration(repo, path.relative_to(repo).as_posix(), "reviews/adoptions/missing.json", lambda _: "G")
+            except migration.Blocked as exc:
+                assert "adoption" in str(exc)
+            else:
+                raise AssertionError("missing migration adoption passed")
+
+            event = accepted["events"][0]
+            path.write_text(path.read_text(encoding="utf-8") + (
+                f"  - id: {event['id']}\n"
+                "    kind: fix\n"
+                f"    subject: {event['subject']}\n"
+                f"    ordinal: {event['ordinal']}\n"
+                "    state: complete\n"
+                f"    reviewed_head: {event['reviewed_head']}\n"
+                f"    result_path: {event['result_path']}\n"
+                f"    result_sha256: {event['result_sha256']}\n"
+                "    outcome: clean\n"
+                f"    source_review_event: {event['source_review_event']}\n"
+                "    re_review_of: null\n"
+                f"    source_adoption_path: {event['source_adoption_path']}\n"
+                f"    source_adoption_sha256: {event['source_adoption_sha256']}\n"
+            ), encoding="utf-8")
+            replay = migration.validate_migration(repo, path.relative_to(repo).as_posix(), adoption_path, lambda _: "G")
+            assert replay["state"] == "reused" and replay["review_counts"]["fix_rounds"] == 1
         elif name in REVIEW_CASES:
             require_review_contract()
             path = initialize(repo, "alpha")
@@ -3232,6 +3604,7 @@ def run_case(name: str) -> None:
                     raise AssertionError("source review marked its own finding fixed")
         else:
             raise AssertionError(f"unknown case: {name}")
+        write_matrix_observation(name, repo, matrix_pre_state, sent, before)
 
 
 if CASE == "scope":

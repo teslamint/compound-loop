@@ -200,6 +200,8 @@ artifact_registry() {
 committed|compound-frontmatter-validator|skills/compound/scripts/validate-frontmatter.py
 committed|plan-frontmatter-validator|skills/planning/scripts/validate-plan-frontmatter.py
 committed|run-artifact-integrity-cli|skills/release-loop/scripts/run-artifact-integrity.py
+committed|matrix-evidence-regenerator|skills/release-loop/scripts/regenerate-matrix-evidence.py
+committed|fix-event-migration-validator|skills/release-loop/scripts/validate-fix-event-migration.py
 committed|phase-artifact-integrity-cli|skills/implementing/scripts/phase-artifact-integrity.py
 committed|release-phase-artifact-core|skills/release-loop/scripts/phase_artifact_core.py
 committed|implementing-phase-artifact-core|skills/implementing/scripts/phase_artifact_core.py
@@ -588,6 +590,8 @@ case_real_artifacts_and_bytes() {
   run_endpoints || return 1
   entries="$(registry_entries)" || return 1
   [[ "$entries" == *'committed|run-artifact-integrity-cli|skills/release-loop/scripts/run-artifact-integrity.py'* ]] || result=1
+  [[ "$entries" == *'committed|matrix-evidence-regenerator|skills/release-loop/scripts/regenerate-matrix-evidence.py'* ]] || result=1
+  [[ "$entries" == *'committed|fix-event-migration-validator|skills/release-loop/scripts/validate-fix-event-migration.py'* ]] || result=1
   [[ "$entries" == *'committed|phase-artifact-integrity-cli|skills/implementing/scripts/phase-artifact-integrity.py'* ]] || result=1
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue; class="${line%%|*}"; path="$(materialize_entry "$line")" || return 1
@@ -706,6 +710,8 @@ case_validate_all_registered_artifacts() {
   assert_contains "$out" 'label=compound-frontmatter-validator' 'registered committed artifact' || result=1
   assert_contains "$out" 'label=plan-frontmatter-validator' 'registered committed artifact' || result=1
   assert_contains "$out" 'label=run-artifact-integrity-cli' 'registered committed artifact' || result=1
+  assert_contains "$out" 'label=matrix-evidence-regenerator' 'registered matrix evidence regenerator' || result=1
+  assert_contains "$out" 'label=fix-event-migration-validator' 'registered fix event migration validator' || result=1
   assert_contains "$out" 'label=phase-artifact-integrity-cli' 'registered standalone implementing artifact' || result=1
   assert_contains "$out" 'label=release-phase-artifact-core' 'registered release publisher core' || result=1
   assert_contains "$out" 'label=implementing-phase-artifact-core' 'registered standalone publisher core' || result=1

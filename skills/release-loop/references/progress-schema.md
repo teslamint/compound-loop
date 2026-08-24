@@ -142,6 +142,11 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - `review_events`, `finding_dispositions`, and `review_counts` are additive. New ledgers include all three. A legacy ledger may add them only with `completeness: partial` and a fresh `counting_started_at`.
 - `review_events` is append-only. Derive the next ordinal from the ledger: the first is 1, then each kind and subject advances without gaps. Only a matching started row replays. Duplicate, conflicting, or gapped rows block.
 - Reserve one round-specific `result_path` in the started row. Persist `outcome: null` before dispatch. A `fix` row names `source_review_event`; a source re-review names `re_review_of`. A completed row never dispatches again.
+- Persist a started `fix` row before each fixer dispatch. A fixer invocation without that durable row blocks before dispatch.
+- A historical fix-event migration uses one publisher-owned `review-fix-event-migration/v1` adoption. Validate it with `validate-fix-event-migration.py` before editing the ledger.
+- Each migrated row binds one source review, one signed full fix commit, and one publisher-owned fixer report. The adoption binds all rows by path and SHA-256.
+- Reject a missing adoption, a wrong source, an unsigned commit, a report mismatch, a duplicate row, an ordinal gap, and a conflicting replay.
+- An exact migration replay changes no row or count. New migrated rows increase the `partial` lower-bound `fix_rounds`; they never make legacy totals exact.
 - The reviewer body starts with one canonical `review-body/v1` JSON manifest line. It declares outcome and the full P0-P3 inventory. Arbitrary verbatim reviewer bytes follow that first line.
 - The manifest outcome is closed: `clean`, `actionable`, or `blocked`. Reject every other value before publication or recovery.
 - Derive wrapper outcome and inventory only from that body manifest. Callers cannot supply metadata separately.
@@ -176,4 +181,6 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - Exactly one archive-evidence mode may exist. Duplicate, mixed-mode, phase-mismatched, or destination-mismatched evidence blocks.
 - A completed record's terminal home is `.release-loop/archive/<YYYY-MM-DD>-<feature_slug>/`. The canonical archive Log line must name that containing directory. One qualifying record reports completion. Zero records trigger reconstruction. Multiple records block as ambiguous.
 - Move all remaining children from the selected artifact root before the selected progress record. Move `progress.md` last as the commit point. An interrupted archive reuses its logged destination and moves only remaining children.
+- Before an archive move, validate the phase-artifact journal and every owned final. A pending publication blocks until recovery or compensation.
+- Archive the ownership journal and applicable `.tmp` state with the selected run. Leave no live publisher authority outside the terminal archive.
 - **The `final_action` record is preparation evidence, never approval**: possession of the command is not authorization to run it. Approval evidence lives only in `ship_approved`. `enforces: P7`

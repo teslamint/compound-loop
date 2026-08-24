@@ -15,6 +15,9 @@ from pathlib import Path, PurePosixPath
 from phase_artifact_core import ArtifactBlocked
 from phase_artifact_core import compensate as compensate_phase_artifact
 from phase_artifact_core import publish as publish_phase_artifact
+from phase_artifact_core import read_journal as read_phase_artifact_journal
+from phase_artifact_core import validate_owned_finals as validate_phase_artifact_finals
+from phase_artifact_core import validate_pending_files as validate_phase_artifact_pending
 
 SCHEMA_VERSION = "release-loop/v1"
 FEATURE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -267,10 +270,19 @@ def archive(
     selected = stored
     destination_path = guard(repo, selected, ".release-loop/archive")
     source_rel = values["artifact_root"]
+    journal, _, publication = read_phase_artifact_journal(repo, source_rel)
+    validate_phase_artifact_finals(repo, source_rel, publication)
+    validate_phase_artifact_pending(repo, source_rel, publication)
+    if publication["pending"] is not None:
+        reject("archive destination conflict", "pending publication requires recovery or compensation")
     if source_rel == ".release-loop":
         guard(repo, progress_path, ".release-loop")
         source = repo / ".release-loop"
         children = []
+        for child in (source / ".tmp", journal):
+            if child.exists() or child.is_symlink():
+                guard(repo, child.relative_to(repo).as_posix(), ".release-loop")
+                children.append(child)
         for name in ("briefs", "reports", "reviews", "evidence"):
             child = source / name
             if child.exists() or child.is_symlink():
