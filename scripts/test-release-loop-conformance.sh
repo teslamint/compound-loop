@@ -1786,6 +1786,7 @@ def validate_paid_receipt(
     gate_kind,
     expected_models,
     expected_caps,
+    expected_auth_brokers,
     session_marker,
     session_started,
     observed_at,
@@ -1793,7 +1794,7 @@ def validate_paid_receipt(
 ):
     required = {
         "schema", "gate_kind", "command_sha256", "models", "caps", "approved_at",
-        "session_marker", "nonce", "status",
+        "auth_brokers", "session_marker", "nonce", "status",
     }
     if not isinstance(receipt, dict) or set(receipt) != required:
         return "paid-receipt-shape"
@@ -1816,6 +1817,12 @@ def validate_paid_receipt(
         return cap_invariant
     if receipt["caps"] != expected_caps:
         return "paid-receipt-caps"
+    if receipt["auth_brokers"] != expected_auth_brokers:
+        return "paid-receipt-auth-brokers"
+    if not isinstance(expected_auth_brokers, dict) or set(expected_auth_brokers) != {"claude", "codex"}:
+        return "paid-receipt-auth-brokers"
+    if any(not re.fullmatch(r"[0-9a-f]{64}", str(value)) for value in expected_auth_brokers.values()):
+        return "paid-receipt-auth-brokers"
     approved = parse_gate_timestamp(receipt["approved_at"])
     started = parse_gate_timestamp(session_started)
     observed = parse_gate_timestamp(observed_at)
@@ -1910,6 +1917,7 @@ def consume_paid_receipt_file(
     gate_kind,
     models,
     caps,
+    auth_brokers,
     session_marker,
     session_started,
     observed_at,
@@ -1946,6 +1954,7 @@ def consume_paid_receipt_file(
             gate_kind,
             models,
             caps,
+            auth_brokers,
             session_marker,
             session_started,
             observed_at,
@@ -2191,10 +2200,14 @@ def derive_full_run_caps(pilot_caps, pilot_results, pilot_ledger):
     max_turns = max(int(row.get("turns") or 0) for row in pilot_results)
     max_elapsed = max(float(row.get("elapsed_seconds") or 0) for row in pilot_results)
     codex_tokens = sum(int(row.get("observed_tokens") or 0) for row in pilot_results if row["harness"] == "codex")
-    claude_costs = [Decimal(str(row["observed_cost"])) for row in pilot_results if row["harness"] == "claude" and row.get("observed_cost") is not None]
-    observed_claude = max(claude_costs) if claude_costs else Decimal(pilot_caps["claude_max_invocation_usd"])
     expected_per_harness = 12
-    full_total_budget = observed_claude * expected_per_harness * 2
+    pilot_claude_sessions = sum(1 for row in pilot_results if row["harness"] == "claude")
+    if pilot_claude_sessions != 1:
+        fail("pilot Claude session count mismatch")
+    settled_per_session = pilot_ledger["claude_spent"] / pilot_claude_sessions
+    full_total_budget = settled_per_session * expected_per_harness * 2
+    if full_total_budget < Decimal(pilot_caps["claude_max_invocation_usd"]):
+        full_total_budget = Decimal(pilot_caps["claude_max_invocation_usd"])
     return {
         "max_turns_per_session": max(1, max_turns + 1),
         "per_turn_timeout": max(1, int(max_elapsed * 2) + 1),
@@ -2630,6 +2643,7 @@ def run_paid_mode_entry(
     arguments,
     launcher,
     evidence_root,
+    auth_brokers,
     session_marker,
     session_started,
     observed_at,
@@ -2644,6 +2658,7 @@ def run_paid_mode_entry(
         mode_name,
         models,
         caps,
+        auth_brokers,
         session_marker,
         session_started,
         observed_at,
@@ -2893,6 +2908,80 @@ def extract_usage(output, harness):
     return (str(cost) if cost else None), tokens
 
 
+def paid_auth_preflight():
+    broker_variables = {
+        "claude": "CONFORMANCE_CLAUDE_AUTH_BROKER",
+        "codex": "CONFORMANCE_CODEX_AUTH_BROKER",
+    }
+    readiness = {}
+    with tempfile.TemporaryDirectory(prefix="paid-auth-preflight-") as auth_temp:
+        auth_root = Path(auth_temp)
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(auth_root),
+            "TMPDIR": str(auth_root),
+            "LC_ALL": "C",
+            "LANG": "C",
+        }
+        for harness, variable in broker_variables.items():
+            configured = os.environ.get(variable)
+            if not configured:
+                fail("auth-isolation-unavailable")
+            configured_path = Path(configured)
+            if not configured_path.is_absolute() or configured_path.is_symlink():
+                fail("auth-isolation-unavailable")
+            try:
+                broker_path = configured_path.resolve(strict=True)
+            except FileNotFoundError:
+                fail("auth-isolation-unavailable")
+            if not broker_path.is_file() or not os.access(str(broker_path), os.X_OK):
+                fail("auth-isolation-unavailable")
+            result = run_bounded(
+                [str(broker_path), "status", "--json", "--harness", harness],
+                auth_root,
+                env,
+                output_cap=8192,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                fail("auth-isolation-unavailable")
+            try:
+                status = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                fail("auth-isolation-unavailable")
+            if status != {"authenticated": True, "harness": harness, "method": "brokered"}:
+                fail("auth-isolation-unavailable")
+            readiness[harness] = {
+                "path": str(broker_path),
+                "sha256": hashlib.sha256(broker_path.read_bytes()).hexdigest(),
+            }
+    return readiness
+
+
+def paid_source_preflight():
+    governed = [
+        "scripts/test-release-loop-conformance.sh",
+        ".claude-plugin/plugin.json",
+        ".codex-plugin/plugin.json",
+        "PRINCIPLES.md",
+        "skills",
+        "references",
+        "schemas",
+        "tests/conformance/release-loop",
+    ]
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", *governed],
+        cwd=str(root),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if status.returncode != 0 or status.stdout.strip():
+        fail("paid-source-preflight-dirty")
+    return adapter_source_snapshot(root)
+
+
 def actual_paid_launcher(call_spec):
     run_root = root / ".release-loop/evidence/live-runs" / uuid.uuid4().hex
     run_root.mkdir(parents=True)
@@ -2925,7 +3014,8 @@ def actual_paid_launcher(call_spec):
     ):
         git_fixture_command(git_path, env, repo_path, "config", key, value)
     validate_policy_files(repo_path)
-    source_snapshot = adapter_source_snapshot(root)
+    source_snapshot = call_spec["expected_source_snapshot"]
+    verify_preflight_inputs(root, source_snapshot, {})
     policy_digests = {
         path: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in (
@@ -2950,11 +3040,6 @@ def actual_paid_launcher(call_spec):
         CONFORMANCE_PYTHON=sys.executable,
         CONFORMANCE_WRAPPER_SHA256=hashlib.sha256(wrapper_path.read_bytes()).hexdigest(),
     )
-    for harness in ("claude", "codex"):
-        auth_command = [claude_path, "auth", "status"] if harness == "claude" else [codex_path, "login", "status"]
-        auth = run_bounded(auth_command, repo_path, env, output_cap=8192, timeout=10)
-        if auth.returncode != 0 or ("false" in auth.stdout.lower()) or ("not logged" in auth.stdout.lower()):
-            fail("auth-isolation-unavailable")
     harness = call_spec["harness"]
     case_id = call_spec["case_id"]
     golden = load_json(data_root / f"golden/{harness}/{case_id}.json")
@@ -2973,6 +3058,8 @@ def actual_paid_launcher(call_spec):
         command = build_codex_initial(repo_path, call_spec["models"]["codex"], result_path)
         command[0] = codex_path
         stdin_bytes = adapter_packet(golden, root)
+    broker_path = call_spec["auth_broker_paths"][harness]
+    command = [broker_path, "--", *command]
     outputs = []
     proofs = []
     actual_session_started = time.monotonic()
@@ -3021,6 +3108,7 @@ def actual_paid_launcher(call_spec):
             resume = build_codex_resume(call_spec["models"]["codex"], parsed_id)
             resume[0] = codex_path
             resume_input = (answer["answer"] + "\n").encode()
+        resume = [broker_path, "--", *resume]
         resume_turn_id = f"{call_spec['call_id']}:turn-{turns}"
         call_spec["before_invocation"](resume_turn_id, time.monotonic() - actual_session_started)
         try:
@@ -3089,6 +3177,51 @@ def validate_resource_group():
         "claude_max_invocation_usd": "0.25",
     }
     models = {"claude": "claude-fixture-model", "codex": "codex-fixture-model"}
+    auth_brokers = {"claude": "c" * 64, "codex": "d" * 64}
+    broker_test_root = root / ".release-loop/evidence/U6"
+    broker_test_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="broker-test-", dir=str(broker_test_root)) as broker_temp:
+        broker_root = Path(broker_temp)
+        broker_paths = {}
+        for harness in ("claude", "codex"):
+            broker_path = broker_root / f"{harness}-broker"
+            broker_path.write_text(
+                f"#!{sys.executable}\nimport json,os,sys\n"
+                f"harness={harness!r}\n"
+                "if sys.argv[1:3] == ['status','--json']:\n"
+                " print(json.dumps({'authenticated':True,'harness':harness,'method':'brokered'})); raise SystemExit(0)\n"
+                "if len(sys.argv)>1 and sys.argv[1]=='--': os.execv(sys.argv[2],[sys.argv[2],*sys.argv[3:]])\n"
+                "raise SystemExit(2)\n",
+                encoding="utf-8",
+            )
+            broker_path.chmod(0o755)
+            broker_paths[harness] = broker_path
+        old_brokers = {
+            "CONFORMANCE_CLAUDE_AUTH_BROKER": os.environ.get("CONFORMANCE_CLAUDE_AUTH_BROKER"),
+            "CONFORMANCE_CODEX_AUTH_BROKER": os.environ.get("CONFORMANCE_CODEX_AUTH_BROKER"),
+        }
+        os.environ["CONFORMANCE_CLAUDE_AUTH_BROKER"] = str(broker_paths["claude"])
+        os.environ["CONFORMANCE_CODEX_AUTH_BROKER"] = str(broker_paths["codex"])
+        try:
+            broker_readiness = paid_auth_preflight()
+            if {key: row["sha256"] for key, row in broker_readiness.items()} != {
+                key: hashlib.sha256(path.read_bytes()).hexdigest() for key, path in broker_paths.items()
+            }:
+                fail("resource broker readiness mismatch")
+            del os.environ["CONFORMANCE_CLAUDE_AUTH_BROKER"]
+            try:
+                paid_auth_preflight()
+            except ValueError as exc:
+                if "auth-isolation-unavailable" not in str(exc):
+                    fail(f"resource missing broker diagnostic mismatch: {exc}")
+            else:
+                fail("resource missing broker accepted")
+        finally:
+            for key, value in old_brokers.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
     session_marker = "resource-session"
     session_started = "2026-08-24T06:00:00Z"
     observed_at = "2026-08-24T06:01:00Z"
@@ -3104,13 +3237,14 @@ def validate_resource_group():
         "command_sha256": paid_command_digest(pilot),
         "models": models,
         "caps": pilot_caps,
+        "auth_brokers": auth_brokers,
         "approved_at": "2026-08-24T06:00:30Z",
         "session_marker": session_marker,
         "nonce": "a" * 32,
         "status": "approved",
     }
     if validate_paid_receipt(
-        receipt, pilot, "live-pilot", models, pilot_caps, session_marker, session_started, observed_at, used_nonces
+        receipt, pilot, "live-pilot", models, pilot_caps, auth_brokers, session_marker, session_started, observed_at, used_nonces
     ) is not None:
         fail("resource pilot receipt control failed")
     consumed, invariant = consume_paid_receipt(receipt, used_nonces)
@@ -3130,6 +3264,7 @@ def validate_resource_group():
             "live-pilot",
             models,
             pilot_caps,
+            auth_brokers,
             session_marker,
             session_started,
             observed_at,
@@ -3145,6 +3280,7 @@ def validate_resource_group():
                 "live-pilot",
                 models,
                 pilot_caps,
+                auth_brokers,
                 session_marker,
                 session_started,
                 observed_at,
@@ -3171,6 +3307,7 @@ def validate_resource_group():
                         "live-pilot",
                         models,
                         pilot_caps,
+                        auth_brokers,
                         session_marker,
                         session_started,
                         observed_at,
@@ -3214,7 +3351,7 @@ def validate_resource_group():
         nonce="b" * 32,
     )
     if validate_paid_receipt(
-        full_receipt, full_command, "live", models, caps, session_marker, session_started, observed_at, used_nonces
+        full_receipt, full_command, "live", models, caps, auth_brokers, session_marker, session_started, observed_at, used_nonces
     ) is not None:
         fail("resource full receipt control failed")
     consume_paid_receipt(full_receipt, used_nonces)
@@ -3352,6 +3489,7 @@ def validate_resource_group():
             pilot[3:],
             fake_paid_launcher,
             paid_root,
+            auth_brokers,
             session_marker,
             session_started,
             observed_at,
@@ -3364,12 +3502,50 @@ def validate_resource_group():
         approval_packet = json.loads(read_bounded_file(approval_packet_path, approval_packet_path.parent, 1048576))
         if approval_packet.get("full_command") != pilot_entry["full_command"]:
             fail("resource full-run approval packet mismatch")
+
+        def missing_telemetry_launcher(call_spec):
+            if call_spec["harness"] == "codex":
+                return fake_paid_launcher(call_spec)
+            last_proof = None
+            for turn in range(1, 4):
+                turn_id = f"{call_spec['call_id']}:turn-{turn}"
+                call_spec["before_invocation"](turn_id, 0)
+                raw_proof = managed_process(
+                    [sys.executable, "-c", "raise SystemExit(0)"],
+                    2,
+                    table_reader=empty_process_table,
+                )
+                last_proof = {
+                    "leader_waited": raw_proof["reaped"],
+                    "pgid_absent": raw_proof["process_group_reaped"],
+                    "descendants_absent": raw_proof["descendants_absent"],
+                    "escaped_descendants_absent": raw_proof["descendants_absent"],
+                }
+                call_spec["after_invocation"](turn_id, last_proof, None, None, 0)
+            return {
+                "infrastructure_status": "pass",
+                "verdict": "conformant",
+                "observed_cost": None,
+                "observed_tokens": None,
+                "turns": 3,
+                "elapsed_seconds": 0.1,
+                "process_proof": last_proof,
+                "command_audit": {"invocation_id": call_spec["call_id"], "harness": "claude", "turns": 3},
+            }
+
+        missing_results, missing_ledger, _, _ = execute_paid_schedule(
+            "live-pilot", pilot_caps, models, missing_telemetry_launcher
+        )
+        missing_caps = derive_full_run_caps(pilot_caps, missing_results, missing_ledger)
+        if missing_caps["claude_total_budget_usd"] != "18.00":
+            fail("resource missing-telemetry multi-turn budget mismatch")
         try:
             run_paid_mode_entry(
                 "live-pilot",
                 pilot[3:],
                 fake_paid_launcher,
                 paid_root,
+                auth_brokers,
                 session_marker,
                 session_started,
                 observed_at,
@@ -3386,6 +3562,7 @@ def validate_resource_group():
             full_command[3:],
             fake_paid_launcher,
             paid_root,
+            auth_brokers,
             session_marker,
             session_started,
             observed_at,
@@ -3410,7 +3587,7 @@ def validate_resource_group():
         fail("resource unavailable process table accepted")
     negatives += 1
     if validate_paid_receipt(
-        None, pilot, "live-pilot", models, pilot_caps, session_marker, session_started, observed_at, used_nonces
+        None, pilot, "live-pilot", models, pilot_caps, auth_brokers, session_marker, session_started, observed_at, used_nonces
     ) != "paid-receipt-shape":
         fail("resource missing receipt accepted")
     negatives += 1
@@ -3420,9 +3597,10 @@ def validate_resource_group():
         ("session", {**receipt, "session_marker": "other", "nonce": "e" * 32}, "paid-receipt-session"),
         ("models", {**receipt, "models": {"claude": "other", "codex": models["codex"]}, "nonce": "f" * 32}, "paid-receipt-models"),
         ("caps", {**receipt, "caps": {**caps, "max_turns_per_session": 5}, "nonce": "1" * 32}, "paid-receipt-caps"),
+        ("broker", {**receipt, "auth_brokers": {"claude": "0" * 64, "codex": auth_brokers["codex"]}, "nonce": "5" * 32}, "paid-receipt-auth-brokers"),
     ):
         actual = validate_paid_receipt(
-            mutant, pilot, "live-pilot", models, pilot_caps, session_marker, session_started, observed_at, used_nonces
+            mutant, pilot, "live-pilot", models, pilot_caps, auth_brokers, session_marker, session_started, observed_at, used_nonces
         )
         if actual != expected:
             fail(f"resource receipt mutant mismatch: {label}")
@@ -4036,12 +4214,25 @@ if mode in {"live-pilot", "live"}:
     if not live_session_marker or parse_gate_timestamp(live_session_started) is None:
         fail("paid-call-session-identity missing")
     process_table()
+    live_source_snapshot = paid_source_preflight()
+    live_auth_readiness = paid_auth_preflight()
+    live_auth_brokers = {harness: row["sha256"] for harness, row in live_auth_readiness.items()}
+
+    def live_launcher(call_spec):
+        enriched = copy.copy(call_spec)
+        enriched["auth_broker_paths"] = {
+            harness: row["path"] for harness, row in live_auth_readiness.items()
+        }
+        enriched["expected_source_snapshot"] = live_source_snapshot
+        return actual_paid_launcher(enriched)
+
     live_observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     live_result = run_paid_mode_entry(
         mode,
         mode_args,
-        actual_paid_launcher,
+        live_launcher,
         live_evidence_root,
+        live_auth_brokers,
         live_session_marker,
         live_session_started,
         live_observed_at,
