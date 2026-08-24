@@ -6,23 +6,26 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-}"
 
 case "$MODE" in
-  static-inventory|static|fixture|gate|preflight) ;;
+  static-inventory|static|fixture|gate|preflight|resource|live-pilot|live) ;;
   *)
-    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture|gate|preflight>" >&2
+    echo "usage: bash scripts/test-release-loop-conformance.sh <static-inventory|static|fixture|gate|preflight|resource|live-pilot|live>" >&2
     exit 2
     ;;
 esac
 
-python3 - "$ROOT" "$MODE" <<'PY'
+python3 - "$ROOT" "$MODE" "${@:2}" <<'PY'
 import copy
 from datetime import datetime
+from decimal import Decimal
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import selectors
+import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -31,6 +34,7 @@ import time
 
 root = Path(sys.argv[1])
 mode = sys.argv[2]
+mode_args = sys.argv[3:]
 data_root = root / "tests/conformance/release-loop"
 corpus_path = data_root / "corpus.json"
 expected_graders = [
@@ -1738,6 +1742,482 @@ def validate_preflight():
     return summary
 
 
+resource_cap_keys = {
+    "max_turns_per_session",
+    "per_turn_timeout",
+    "session_timeout",
+    "max_infrastructure_retries",
+    "max_concurrency",
+    "codex_observed_token_cap",
+    "total_wall_time",
+    "claude_total_budget_usd",
+    "claude_max_invocation_usd",
+}
+
+
+def paid_command_digest(command):
+    return hashlib.sha256((json.dumps(command, separators=(",", ":")) + "\n").encode()).hexdigest()
+
+
+def validate_resource_caps(caps):
+    if not isinstance(caps, dict) or set(caps) != resource_cap_keys:
+        return "resource-cap-shape"
+    integer_keys = resource_cap_keys - {"claude_total_budget_usd", "claude_max_invocation_usd"}
+    if any(not isinstance(caps[key], int) or caps[key] <= 0 for key in integer_keys - {"max_infrastructure_retries"}):
+        return "resource-cap-value"
+    if not isinstance(caps["max_infrastructure_retries"], int) or caps["max_infrastructure_retries"] < 0:
+        return "resource-cap-value"
+    try:
+        total = Decimal(caps["claude_total_budget_usd"])
+        maximum = Decimal(caps["claude_max_invocation_usd"])
+    except Exception:
+        return "resource-cap-value"
+    if total <= 0 or maximum <= 0 or maximum > total:
+        return "resource-cap-value"
+    return None
+
+
+def validate_paid_receipt(receipt, command, gate_kind, session_marker, session_started, observed_at, used_nonces):
+    required = {
+        "schema", "gate_kind", "command_sha256", "models", "caps", "approved_at",
+        "session_marker", "nonce", "status",
+    }
+    if not isinstance(receipt, dict) or set(receipt) != required:
+        return "paid-receipt-shape"
+    if receipt["schema"] != "release-loop-paid-receipt/v1" or receipt["gate_kind"] != gate_kind:
+        return "paid-receipt-gate"
+    if receipt["status"] != "approved":
+        return "paid-receipt-consumed"
+    if receipt["command_sha256"] != paid_command_digest(command):
+        return "paid-receipt-command"
+    if receipt["session_marker"] != session_marker:
+        return "paid-receipt-session"
+    if not isinstance(receipt["models"], dict) or set(receipt["models"]) != {"claude", "codex"}:
+        return "paid-receipt-models"
+    if not all(isinstance(value, str) and value for value in receipt["models"].values()):
+        return "paid-receipt-models"
+    cap_invariant = validate_resource_caps(receipt["caps"])
+    if cap_invariant is not None:
+        return cap_invariant
+    approved = parse_gate_timestamp(receipt["approved_at"])
+    started = parse_gate_timestamp(session_started)
+    observed = parse_gate_timestamp(observed_at)
+    if None in {approved, started, observed} or not started <= approved <= observed:
+        return "paid-receipt-stale"
+    nonce = receipt["nonce"]
+    if not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        return "paid-receipt-nonce"
+    if nonce in used_nonces:
+        return "paid-receipt-reused"
+    return None
+
+
+def consume_paid_receipt(receipt, used_nonces):
+    if receipt.get("status") != "approved" or receipt.get("nonce") in used_nonces:
+        return None, "paid-receipt-reused"
+    consumed = copy.deepcopy(receipt)
+    consumed["status"] = "consumed"
+    used_nonces.add(consumed["nonce"])
+    return consumed, None
+
+
+def new_resource_ledger(caps):
+    invariant = validate_resource_caps(caps)
+    if invariant is not None:
+        fail(invariant)
+    return {
+        "claude_remaining": Decimal(caps["claude_total_budget_usd"]),
+        "claude_spent": Decimal("0"),
+        "claude_active": None,
+        "codex_tokens": 0,
+        "active_process": None,
+        "calls": [],
+    }
+
+
+def reserve_claude(ledger, caps, call_id):
+    if ledger["claude_active"] is not None:
+        return "claude-reservation-overlap"
+    amount = Decimal(caps["claude_max_invocation_usd"])
+    if ledger["claude_remaining"] < amount:
+        return "claude-budget-exhausted"
+    ledger["claude_remaining"] -= amount
+    ledger["claude_active"] = {"call_id": call_id, "reserved": amount}
+    return None
+
+
+def settle_claude(ledger, call_id, observed_cost):
+    active = ledger.get("claude_active")
+    if not active or active["call_id"] != call_id:
+        return "claude-reservation-missing"
+    reserved = active["reserved"]
+    charge = reserved if observed_cost is None else Decimal(str(observed_cost))
+    if charge < 0 or charge > reserved:
+        return "claude-settlement-invalid"
+    ledger["claude_spent"] += charge
+    ledger["claude_remaining"] += reserved - charge
+    ledger["claude_active"] = None
+    ledger["calls"].append({"harness": "claude", "call_id": call_id, "charge": str(charge)})
+    return None
+
+
+def record_codex_usage(ledger, caps, call_id, observed_tokens):
+    if not isinstance(observed_tokens, int) or observed_tokens < 0:
+        return "codex-token-observation-invalid"
+    if ledger["codex_tokens"] + observed_tokens > caps["codex_observed_token_cap"]:
+        return "codex-token-cap-exhausted"
+    ledger["codex_tokens"] += observed_tokens
+    ledger["calls"].append({"harness": "codex", "call_id": call_id, "tokens": observed_tokens})
+    return None
+
+
+def invocation_start_invariant(
+    ledger,
+    caps,
+    harness,
+    turns,
+    session_elapsed,
+    total_elapsed,
+    retry_count=0,
+    prior_failure=None,
+):
+    if ledger.get("active_process") is not None:
+        return "process-still-active"
+    if harness == "claude" and ledger.get("claude_active") is not None:
+        return "claude-reservation-unsettled"
+    if harness == "codex" and ledger.get("active_codex", 0) >= caps["max_concurrency"]:
+        return "codex-concurrency-cap"
+    if turns > caps["max_turns_per_session"]:
+        return "turn-cap-exhausted"
+    if session_elapsed > caps["session_timeout"]:
+        return "session-timeout-exhausted"
+    if total_elapsed > caps["total_wall_time"]:
+        return "total-wall-time-exhausted"
+    if retry_count:
+        if prior_failure != "infrastructure":
+            return "conformance-retry-forbidden"
+        if retry_count > caps["max_infrastructure_retries"]:
+            return "infrastructure-retry-cap"
+    return None
+
+
+def managed_process(command, timeout_seconds, term_grace=0.2):
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    started = time.monotonic()
+    term_sent = False
+    kill_sent = False
+    while process.poll() is None and time.monotonic() - started < timeout_seconds:
+        time.sleep(0.01)
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGTERM)
+        term_sent = True
+        deadline = time.monotonic() + term_grace
+        while process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            kill_sent = True
+        except ProcessLookupError:
+            pass
+    returncode = process.wait(timeout=2)
+    return {
+        "pid": process.pid,
+        "returncode": returncode,
+        "timed_out": term_sent,
+        "term_sent": term_sent,
+        "kill_sent": kill_sent,
+        "reaped": process.poll() is not None,
+        "process_group_reaped": term_sent or process.poll() is not None,
+    }
+
+
+def pilot_command(caps, models):
+    return [
+        "bash", "scripts/test-release-loop-conformance.sh", "live-pilot",
+        "--harness", "all", "--case", "L1-full-lifecycle",
+        "--claude-model", models["claude"], "--codex-model", models["codex"],
+        "--claude-total-budget-usd", caps["claude_total_budget_usd"],
+        "--claude-max-invocation-usd", caps["claude_max_invocation_usd"],
+        "--max-turns", str(caps["max_turns_per_session"]),
+        "--per-turn-timeout", str(caps["per_turn_timeout"]),
+        "--codex-observed-token-cap", str(caps["codex_observed_token_cap"]),
+        "--max-infrastructure-retries", str(caps["max_infrastructure_retries"]),
+        "--session-timeout", str(caps["session_timeout"]),
+    ]
+
+
+def full_run_command(caps, models):
+    return [
+        "bash", "scripts/test-release-loop-conformance.sh", "live",
+        "--cases", "L1-full-lifecycle,L2-mid-loop-resume,L3-post-merge-resume,L4-degraded-dispatch",
+        "--repetitions", "3", "--claude-model", models["claude"], "--codex-model", models["codex"],
+        "--max-turns-per-session", str(caps["max_turns_per_session"]),
+        "--per-turn-timeout", str(caps["per_turn_timeout"]),
+        "--session-timeout", str(caps["session_timeout"]),
+        "--max-infrastructure-retries", str(caps["max_infrastructure_retries"]),
+        "--max-concurrency", str(caps["max_concurrency"]),
+        "--codex-observed-token-cap", str(caps["codex_observed_token_cap"]),
+        "--total-wall-time", str(caps["total_wall_time"]),
+        "--claude-total-budget-usd", caps["claude_total_budget_usd"],
+        "--claude-max-invocation-usd", caps["claude_max_invocation_usd"],
+    ]
+
+
+def validate_strata(results):
+    expected = {
+        (harness, case_id, repetition)
+        for harness in ("claude", "codex")
+        for case_id in ("L1-full-lifecycle", "L2-mid-loop-resume", "L3-post-merge-resume", "L4-degraded-dispatch")
+        for repetition in range(1, 4)
+    }
+    identities = {(row.get("harness"), row.get("case_id"), row.get("repetition")) for row in results}
+    if identities != expected or len(results) != 24:
+        return "live-strata-incomplete"
+    for row in results:
+        if row.get("infrastructure_status") != "pass":
+            return "live-infrastructure-failure"
+        if row.get("verdict") not in {"conformant", "nonconformant"}:
+            return "live-verdict-unknown"
+        if row["verdict"] != "conformant":
+            return "live-conformance-failure"
+    return None
+
+
+def generation_manifest(models, results, full_command):
+    source_snapshot = adapter_source_snapshot(root)
+    plugin_digest = hashlib.sha256(
+        (json.dumps(source_snapshot, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    result_digest = hashlib.sha256(
+        (json.dumps(results, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    return {
+        "schema": "release-loop-generation/v1",
+        "plugin_sha256": plugin_digest,
+        "source_manifest_sha256": hashlib.sha256((data_root / "source-manifest.json").read_bytes()).hexdigest(),
+        "corpus_sha256": hashlib.sha256((data_root / "corpus.json").read_bytes()).hexdigest(),
+        "mutations_sha256": hashlib.sha256((data_root / "mutations.json").read_bytes()).hexdigest(),
+        "claude_settings_sha256": hashlib.sha256((data_root / "policies/claude-settings.json").read_bytes()).hexdigest(),
+        "codex_rules_sha256": hashlib.sha256((data_root / "policies/codex.rules").read_bytes()).hexdigest(),
+        "models": models,
+        "cli_versions": {"claude": "fake-2.1.241", "codex": "fake-0.149.1"},
+        "results_sha256": result_digest,
+        "command_sha256": paid_command_digest(full_command),
+    }
+
+
+def validate_generation_manifest(manifest):
+    required = {
+        "schema", "plugin_sha256", "source_manifest_sha256", "corpus_sha256", "mutations_sha256",
+        "claude_settings_sha256", "codex_rules_sha256", "models", "cli_versions", "results_sha256",
+        "command_sha256",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != required:
+        return "generation-manifest-shape"
+    if manifest["schema"] != "release-loop-generation/v1":
+        return "generation-manifest-schema"
+    digest_keys = {key for key in required if key.endswith("sha256")}
+    if any(not re.fullmatch(r"[0-9a-f]{64}", str(manifest[key])) for key in digest_keys):
+        return "generation-manifest-digest"
+    serialized = json.dumps(manifest, sort_keys=True)
+    if re.search(r"(token|secret|password|credential)", serialized, re.IGNORECASE):
+        return "generation-manifest-secret"
+    return None
+
+
+def validate_resource_group():
+    caps = {
+        "max_turns_per_session": 4,
+        "per_turn_timeout": 30,
+        "session_timeout": 120,
+        "max_infrastructure_retries": 0,
+        "max_concurrency": 2,
+        "codex_observed_token_cap": 5000,
+        "total_wall_time": 3600,
+        "claude_total_budget_usd": "5.00",
+        "claude_max_invocation_usd": "0.25",
+    }
+    models = {"claude": "claude-fixture-model", "codex": "codex-fixture-model"}
+    session_marker = "resource-session"
+    session_started = "2026-08-24T06:00:00Z"
+    observed_at = "2026-08-24T06:01:00Z"
+    used_nonces = set()
+    pilot = pilot_command(caps, models)
+    receipt = {
+        "schema": "release-loop-paid-receipt/v1",
+        "gate_kind": "live-pilot",
+        "command_sha256": paid_command_digest(pilot),
+        "models": models,
+        "caps": caps,
+        "approved_at": "2026-08-24T06:00:30Z",
+        "session_marker": session_marker,
+        "nonce": "a" * 32,
+        "status": "approved",
+    }
+    if validate_paid_receipt(receipt, pilot, "live-pilot", session_marker, session_started, observed_at, used_nonces) is not None:
+        fail("resource pilot receipt control failed")
+    consumed, invariant = consume_paid_receipt(receipt, used_nonces)
+    if invariant is not None or consumed["status"] != "consumed":
+        fail("resource pilot receipt consumption failed")
+    ledger = new_resource_ledger(caps)
+    if reserve_claude(ledger, caps, "pilot-claude") is not None:
+        fail("resource Claude pilot reservation failed")
+    if settle_claude(ledger, "pilot-claude", "0.10") is not None:
+        fail("resource Claude pilot settlement failed")
+    if record_codex_usage(ledger, caps, "pilot-codex", 100) is not None:
+        fail("resource Codex pilot settlement failed")
+    full_command = full_run_command(caps, models)
+    expected_flags = {
+        "--cases", "--repetitions", "--claude-model", "--codex-model", "--max-turns-per-session",
+        "--per-turn-timeout", "--session-timeout", "--max-infrastructure-retries", "--max-concurrency",
+        "--codex-observed-token-cap", "--total-wall-time", "--claude-total-budget-usd",
+        "--claude-max-invocation-usd",
+    }
+    if not expected_flags <= set(full_command):
+        fail("resource full command flags missing")
+
+    full_receipt = copy.deepcopy(receipt)
+    full_receipt.update(
+        gate_kind="live",
+        command_sha256=paid_command_digest(full_command),
+        nonce="b" * 32,
+    )
+    if validate_paid_receipt(
+        full_receipt, full_command, "live", session_marker, session_started, observed_at, used_nonces
+    ) is not None:
+        fail("resource full receipt control failed")
+    consume_paid_receipt(full_receipt, used_nonces)
+    results = []
+    full_ledger = new_resource_ledger(caps)
+    for harness in ("claude", "codex"):
+        for case_id in ("L1-full-lifecycle", "L2-mid-loop-resume", "L3-post-merge-resume", "L4-degraded-dispatch"):
+            for repetition in range(1, 4):
+                call_id = f"{harness}:{case_id}:{repetition}"
+                if harness == "claude":
+                    if reserve_claude(full_ledger, caps, call_id) is not None:
+                        fail("resource full Claude reservation failed")
+                    if settle_claude(full_ledger, call_id, "0.05") is not None:
+                        fail("resource full Claude settlement failed")
+                elif record_codex_usage(full_ledger, caps, call_id, 100) is not None:
+                    fail("resource full Codex settlement failed")
+                results.append(
+                    {
+                        "harness": harness,
+                        "case_id": case_id,
+                        "repetition": repetition,
+                        "infrastructure_status": "pass",
+                        "verdict": "conformant",
+                    }
+                )
+    if validate_strata(results) is not None:
+        fail("resource full strata control failed")
+    manifest = generation_manifest(models, results, full_command)
+    if validate_generation_manifest(manifest) is not None:
+        fail("resource generation manifest control failed")
+
+    process_controls = 0
+    normal = managed_process([sys.executable, "-c", "raise SystemExit(0)"], 1)
+    if normal["returncode"] != 0 or not normal["reaped"] or normal["timed_out"] or not normal["process_group_reaped"]:
+        fail("resource normal process control failed")
+    process_controls += 1
+    timeout = managed_process([sys.executable, "-c", "import time; time.sleep(5)"], 0.05)
+    if not timeout["timed_out"] or not timeout["reaped"] or not timeout["process_group_reaped"]:
+        fail("resource timeout process control failed")
+    process_controls += 1
+    resistant = managed_process(
+        [sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(5)"],
+        0.05,
+        0.05,
+    )
+    if not resistant["kill_sent"] or not resistant["reaped"] or not resistant["process_group_reaped"]:
+        fail("resource resistant process control failed")
+    process_controls += 1
+
+    negatives = 0
+    if validate_paid_receipt(None, pilot, "live-pilot", session_marker, session_started, observed_at, used_nonces) != "paid-receipt-shape":
+        fail("resource missing receipt accepted")
+    negatives += 1
+    for label, mutant, expected in (
+        ("stale", {**receipt, "approved_at": "2026-08-24T05:59:59Z", "nonce": "c" * 32}, "paid-receipt-stale"),
+        ("command", {**receipt, "command_sha256": "0" * 64, "nonce": "d" * 32}, "paid-receipt-command"),
+        ("session", {**receipt, "session_marker": "other", "nonce": "e" * 32}, "paid-receipt-session"),
+    ):
+        actual = validate_paid_receipt(mutant, pilot, "live-pilot", session_marker, session_started, observed_at, used_nonces)
+        if actual != expected:
+            fail(f"resource receipt mutant mismatch: {label}")
+        negatives += 1
+    if consume_paid_receipt(receipt, used_nonces)[1] != "paid-receipt-reused":
+        fail("resource reused receipt accepted")
+    negatives += 1
+    overlap = new_resource_ledger(caps)
+    reserve_claude(overlap, caps, "one")
+    if reserve_claude(overlap, caps, "two") != "claude-reservation-overlap":
+        fail("resource overlapping Claude call accepted")
+    negatives += 1
+    exhausted = new_resource_ledger(caps)
+    exhausted["claude_remaining"] = Decimal("0")
+    if reserve_claude(exhausted, caps, "exhausted") != "claude-budget-exhausted":
+        fail("resource exhausted Claude budget accepted")
+    negatives += 1
+    missing_telemetry = new_resource_ledger(caps)
+    reserve_claude(missing_telemetry, caps, "missing")
+    settle_claude(missing_telemetry, "missing", None)
+    if missing_telemetry["claude_spent"] != Decimal(caps["claude_max_invocation_usd"]):
+        fail("resource missing telemetry did not consume reservation")
+    codex_cap = new_resource_ledger(caps)
+    if record_codex_usage(codex_cap, caps, "too-many", caps["codex_observed_token_cap"] + 1) != "codex-token-cap-exhausted":
+        fail("resource Codex token overflow accepted")
+    negatives += 1
+    scheduler_mutants = (
+        ("orphan", {"active_process": {"pid": 9}}, "claude", 1, 0, 0, 0, None, "process-still-active"),
+        ("turns", {}, "codex", caps["max_turns_per_session"] + 1, 0, 0, 0, None, "turn-cap-exhausted"),
+        ("session", {}, "codex", 1, caps["session_timeout"] + 1, 0, 0, None, "session-timeout-exhausted"),
+        ("wall", {}, "codex", 1, 0, caps["total_wall_time"] + 1, 0, None, "total-wall-time-exhausted"),
+        ("retry", {}, "codex", 1, 0, 0, 1, "infrastructure", "infrastructure-retry-cap"),
+        ("conformance-retry", {}, "codex", 1, 0, 0, 1, "conformance", "conformance-retry-forbidden"),
+        ("concurrency", {"active_codex": caps["max_concurrency"]}, "codex", 1, 0, 0, 0, None, "codex-concurrency-cap"),
+    )
+    for label, updates, harness, turns, session_elapsed, total_elapsed, retry_count, prior_failure, expected in scheduler_mutants:
+        scheduler_ledger = new_resource_ledger(caps)
+        scheduler_ledger.update(updates)
+        actual = invocation_start_invariant(
+            scheduler_ledger,
+            caps,
+            harness,
+            turns,
+            session_elapsed,
+            total_elapsed,
+            retry_count,
+            prior_failure,
+        )
+        if actual != expected:
+            fail(f"resource scheduler mutant mismatch: {label}")
+        negatives += 1
+    for label, mutate, expected in (
+        ("incomplete", lambda value: value.pop(), "live-strata-incomplete"),
+        ("infrastructure", lambda value: value[0].__setitem__("infrastructure_status", "failed"), "live-infrastructure-failure"),
+        ("conformance", lambda value: value[0].__setitem__("verdict", "nonconformant"), "live-conformance-failure"),
+        ("unknown", lambda value: value[0].__setitem__("verdict", "unknown"), "live-verdict-unknown"),
+    ):
+        mutant_results = copy.deepcopy(results)
+        mutate(mutant_results)
+        if validate_strata(mutant_results) != expected:
+            fail(f"resource result mutant mismatch: {label}")
+        negatives += 1
+    manifest_mutant = copy.deepcopy(manifest)
+    manifest_mutant.pop("results_sha256")
+    if validate_generation_manifest(manifest_mutant) != "generation-manifest-shape":
+        fail("resource manifest mutant accepted")
+    negatives += 1
+    return 24, negatives, process_controls, len(full_ledger["calls"]), shlex.join(full_command), manifest
+
+
 gate_contracts = {
     "design-approval": ("design", "approve-spec-or-request-revision", "design_approved", {"approve", "revise"}),
     "ship-approval": ("ship", "merge-or-nonmerge-disposition", "ship_approved", {"merge", "nonmerge"}),
@@ -2214,6 +2694,17 @@ if mode == "gate":
     gate_mutations, gate_controls = validate_gate_group(load_json(data_root / "mutations.json")["mutations"])
 if mode == "preflight":
     preflight_adapters, preflight_calls, preflight_negatives, preflight_auth_events = validate_preflight()
+if mode == "resource":
+    (
+        resource_sessions,
+        resource_negatives,
+        resource_process_controls,
+        resource_calls,
+        resource_full_command,
+        resource_manifest,
+    ) = validate_resource_group()
+if mode in {"live-pilot", "live"}:
+    fail("paid-call-receipt missing")
 
 if mode == "static":
     mutation_count, static_grader_count, source_generation, static_negative_count = validate_static(cases)
@@ -2317,4 +2808,12 @@ if mode == "preflight":
         f"adapters={preflight_adapters} calls={preflight_calls} "
         f"negative={preflight_negatives} auth_events={preflight_auth_events}"
     )
+if mode == "resource":
+    print(
+        "ok:   release-loop resource engine "
+        f"sessions={resource_sessions} calls={resource_calls} negative={resource_negatives} "
+        f"process_controls={resource_process_controls} manifest={resource_manifest['results_sha256']}"
+    )
+    print(f"full-run-command: {resource_full_command}")
+    print("codex-hard-dollar-cap: unavailable; observed-token cap enforced")
 PY
