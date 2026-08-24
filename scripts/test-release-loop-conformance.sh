@@ -18,6 +18,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 
 root = Path(sys.argv[1])
@@ -348,57 +349,120 @@ def section_text(text, heading):
     return "\n".join(lines[start:end])
 
 
-def grade_mutation(mutation, cases_by_id, clauses_by_id):
+def sc2_invariant(fixture):
+    pairs = []
+    for pair_name in ("invariance", "changed"):
+        pair = fixture.get(pair_name)
+        if not isinstance(pair, dict):
+            return "sc2-fixture"
+        artifacts = []
+        for side in ("left", "right"):
+            artifact = pair.get(side)
+            if not isinstance(artifact, dict):
+                return "sc2-fixture"
+            if set(artifact) != {"kind", "comparison", "effect", "metadata"}:
+                return "sc2-fixture"
+            artifacts.append(artifact)
+        pairs.append(artifacts)
+
+    artifacts = [artifact for pair in pairs for artifact in pair]
+    if len({artifact["kind"] for artifact in artifacts}) != 1:
+        return "sc2-same-kind"
+    if pairs[0][0]["comparison"] != pairs[0][1]["comparison"]:
+        return "sc2-invariance"
+    if fixture.get("changed_axis") != fixture.get("effect_axis"):
+        return "sc2-axis"
+    if pairs[1][0]["effect"] == pairs[1][1]["effect"]:
+        return "sc2-effect-signal"
+    return None
+
+
+def operative_commands(document):
+    if not isinstance(document, str):
+        return None
+    commands = []
+    fence_char = None
+    fence_length = 0
+    for line in document.splitlines():
+        stripped = line.lstrip()
+        match = re.match(r"^(`{3,}|~{3,})(?:[^`~]*)$", stripped)
+        if match:
+            marker = match.group(1)
+            if fence_char is None:
+                fence_char = marker[0]
+                fence_length = len(marker)
+            elif marker[0] == fence_char and len(marker) >= fence_length:
+                fence_char = None
+                fence_length = 0
+            continue
+        if fence_char is None and line.startswith("Run: "):
+            commands.append(line[len("Run: "):])
+    return commands
+
+
+def validate_source_section(clause, section):
+    literal = clause.get("text")
+    if not isinstance(literal, str) or section.count(literal) != 1:
+        fail(f"source clause missing or ambiguous: {clause.get('id')}")
+    digest = hashlib.sha256(section.encode()).hexdigest()
+    if digest != clause.get("sha256"):
+        fail(f"source clause digest drift: {clause.get('id')}")
+    return digest
+
+
+def validate_source_generation(generation, policy_generation, corpus_generation):
+    if generation != policy_generation:
+        fail("bootstrap source generation mismatch")
+    if generation != corpus_generation:
+        fail("corpus source generation mismatch")
+
+
+def grade_mutation(mutation, cases_by_id, clauses_by_id, disabled_graders=frozenset()):
     mutation_id = mutation["id"]
     case = cases_by_id[mutation["case_id"]]
+    if mutation["grader"] in disabled_graders:
+        return "infrastructure-error", mutation["grader"], "grader-disabled"
     if mutation_id == "delete-design-user-gate":
         clause = clauses_by_id["design-user-gate"]
         source = (root / clause["path"]).read_text(encoding="utf-8")
         mutated = source.replace(clause["text"], "", 1)
         rejected = clause["text"] not in mutated
-        return ("expected-reject", "design-user-gate") if rejected else ("unexpected-pass", "design-user-gate")
+        return ("expected-reject", "design-user-gate", "design-user-gate") if rejected else ("unexpected-pass", "design-user-gate", "none")
     if mutation_id == "replay-completed-phase":
         values = [event["value"] for event in case["events"]]
         mutated = values + [values[1]]
         rejected = len(mutated) != len(set(mutated))
-        return ("expected-reject", "no-phase-replay") if rejected else ("unexpected-pass", "no-phase-replay")
+        return ("expected-reject", "no-phase-replay", "no-phase-replay") if rejected else ("unexpected-pass", "no-phase-replay", "none")
     if mutation_id == "reenter-premerge-shipping":
         clause = clauses_by_id["resume-after-merge"]
         source = (root / clause["path"]).read_text(encoding="utf-8")
         mutated = source.replace("never re-enters pre-merge", "re-enters pre-merge", 1)
         rejected = clause["text"] not in mutated
-        return ("expected-reject", "resume-after-merge") if rejected else ("unexpected-pass", "resume-after-merge")
+        return ("expected-reject", "resume-after-merge", "resume-after-merge") if rejected else ("unexpected-pass", "resume-after-merge", "none")
     if mutation_id == "drop-work-without-subagents":
         values = [event["value"] for event in case["events"]]
         mutated = [value for value in values if value != "implement-degraded"]
         rejected = set(values) - set(mutated) == {"implement-degraded"}
-        return ("expected-reject", "no-coverage-drop") if rejected else ("unexpected-pass", "no-coverage-drop")
+        return ("expected-reject", "no-coverage-drop", "no-coverage-drop") if rejected else ("unexpected-pass", "no-coverage-drop", "none")
     fixture = mutation.get("fixture", {})
     if mutation["grader"] == "sc2-comparison":
+        invariant = sc2_invariant(fixture)
         if mutation_id == "controlled-same-kind-pairs":
-            valid = (
-                fixture.get("left_kind") == fixture.get("right_kind")
-                and fixture.get("invariance_equal") is True
-                and fixture.get("axis_relevant") is True
-                and fixture.get("effect_equal") is False
-            )
-            return ("pass", "sc2-comparison") if valid else ("unexpected-reject", "sc2-comparison")
-        invalid = (
-            fixture.get("left_kind") != fixture.get("right_kind")
-            or fixture.get("invariance_equal") is not True
-            or fixture.get("axis_relevant") is not True
-            or fixture.get("effect_equal") is not False
-        )
-        return ("expected-reject", "sc2-comparison") if invalid else ("unexpected-pass", "sc2-comparison")
+            return ("pass", "sc2-comparison", "sc2-controlled-pairs") if invariant is None else ("unexpected-reject", "sc2-comparison", invariant)
+        return ("expected-reject", "sc2-comparison", invariant) if invariant else ("unexpected-pass", "sc2-comparison", "none")
     if mutation["grader"] == "sc2-guard":
-        invalid = fixture.get("pass_fixture") is True and fixture.get("fail_fixture") is True
-        return ("expected-reject", "sc2-guard") if invalid else ("unexpected-pass", "sc2-guard")
+        pass_invariant = sc2_invariant(fixture.get("pass_fixture", {}))
+        fail_invariant = sc2_invariant(fixture.get("fail_fixture", {}))
+        discriminates = pass_invariant is None and fail_invariant is not None
+        return ("expected-reject", "sc2-guard", "sc2-guard-discrimination") if discriminates else ("unexpected-pass", "sc2-guard", "none")
     if mutation_id == "contradictory-substitute-command":
-        invalid = fixture.get("operative") != fixture.get("substitute")
-        return ("expected-reject", "operative-section-parser") if invalid else ("unexpected-pass", "operative-section-parser")
+        commands = operative_commands(fixture.get("document"))
+        invalid = commands is not None and len(commands) > 1 and commands != [fixture.get("expected_command")]
+        return ("expected-reject", "operative-section-parser", "parser-contradictory") if invalid else ("unexpected-pass", "operative-section-parser", "none")
     if mutation_id == "fence-relocation":
-        invalid = fixture.get("fence") == "~~~~markdown" and bool(fixture.get("operative"))
-        return ("expected-reject", "operative-section-parser") if invalid else ("unexpected-pass", "operative-section-parser")
+        commands = operative_commands(fixture.get("document"))
+        invalid = commands is not None and fixture.get("expected_command") not in commands
+        return ("expected-reject", "operative-section-parser", "parser-relocation") if invalid else ("unexpected-pass", "operative-section-parser", "none")
     fail(f"unknown mutation: {mutation_id}")
 
 
@@ -417,8 +481,15 @@ def validate_static(cases):
         fail("unknown baseline policy schema")
     if policy.get("state") != "bootstrap":
         fail("bootstrap policy state mismatch")
-    spec_path = root / policy.get("approved_spec", "")
-    if hashlib.sha256(spec_path.read_bytes()).hexdigest() != policy.get("approved_spec_sha256"):
+    if policy.get("approved_spec") != "docs/specs/2026-08-24-release-loop-conformance-fuzzing-design.md":
+        fail("bootstrap spec path mismatch")
+    if policy.get("roadmap_item") != "Conformance suite":
+        fail("bootstrap ROADMAP item mismatch")
+    spec_path = root / policy["approved_spec"]
+    approved_spec_digest = "2cde033379b87d6c8eb92ea32ea3800a82625d86056da496343a91cf0bd8930b"
+    if policy.get("approved_spec_sha256") != approved_spec_digest:
+        fail("bootstrap policy spec digest mismatch")
+    if hashlib.sha256(spec_path.read_bytes()).hexdigest() != approved_spec_digest:
         fail("bootstrap spec digest mismatch")
     roadmap = (root / "ROADMAP.md").read_text(encoding="utf-8")
     if f"| {policy.get('roadmap_item')} |" not in roadmap:
@@ -427,7 +498,10 @@ def validate_static(cases):
     clauses = manifest.get("clauses")
     if not isinstance(clauses, list) or not clauses:
         fail("source clauses missing")
+    if manifest.get("digest_scope") != "heading-section":
+        fail("source digest scope mismatch")
     clauses_by_id = {}
+    sections_by_id = {}
     generation_rows = []
     for clause in clauses:
         clause_id = clause.get("id")
@@ -436,13 +510,9 @@ def validate_static(cases):
         source_path = root / clause.get("path", "")
         source = source_path.read_text(encoding="utf-8")
         section = section_text(source, clause.get("heading", ""))
-        literal = clause.get("text")
-        if not isinstance(literal, str) or section.count(literal) != 1:
-            fail(f"source clause missing or ambiguous: {clause_id}")
-        digest = hashlib.sha256(literal.encode()).hexdigest()
-        if digest != clause.get("sha256"):
-            fail(f"source clause digest drift: {clause_id}")
+        digest = validate_source_section(clause, section)
         clauses_by_id[clause_id] = clause
+        sections_by_id[clause_id] = section
         generation_rows.append(f"{clause_id}:{digest}")
 
     mutation_rows = mutations.get("mutations")
@@ -453,11 +523,32 @@ def validate_static(cases):
     if mutation_ids != eligible:
         fail("mutation inventory does not match corpus eligibility")
     cases_by_id = {case["id"]: case for case in cases}
+    expected_invariants = {
+        "delete-design-user-gate": "design-user-gate",
+        "replay-completed-phase": "no-phase-replay",
+        "reenter-premerge-shipping": "resume-after-merge",
+        "drop-work-without-subagents": "no-coverage-drop",
+        "different-artifact-kind": "sc2-same-kind",
+        "unstable-invariance-output": "sc2-invariance",
+        "irrelevant-changed-axis": "sc2-axis",
+        "metadata-only-difference": "sc2-effect-signal",
+        "always-passing-guard": "sc2-guard-discrimination",
+        "controlled-same-kind-pairs": "sc2-controlled-pairs",
+        "contradictory-substitute-command": "parser-contradictory",
+        "fence-relocation": "parser-relocation",
+    }
     seen_graders = set()
     for mutation in mutation_rows:
-        result, grader = grade_mutation(mutation, cases_by_id, clauses_by_id)
-        if result != mutation.get("expected") or grader != mutation.get("grader"):
-            fail(f"unexpected static result: {mutation.get('id')} result={result} grader={grader}")
+        result, grader, invariant = grade_mutation(mutation, cases_by_id, clauses_by_id)
+        if (
+            result != mutation.get("expected")
+            or grader != mutation.get("grader")
+            or invariant != expected_invariants[mutation["id"]]
+        ):
+            fail(
+                f"unexpected static result: {mutation.get('id')} "
+                f"result={result} grader={grader} invariant={invariant}"
+            )
         seen_graders.add(grader)
     required_static_graders = {
         grader
@@ -469,28 +560,62 @@ def validate_static(cases):
     if seen_graders != required_static_graders:
         fail("static grader reachability mismatch")
     generation = hashlib.sha256(("\n".join(sorted(generation_rows)) + "\n").encode()).hexdigest()
-    if generation != policy.get("source_generation"):
-        fail("bootstrap source generation mismatch")
+    validate_source_generation(generation, policy.get("source_generation"), corpus.get("source_generation"))
 
     static_negative_probes = []
-    wrong_grader = copy.deepcopy(mutation_rows[0])
-    wrong_grader["grader"] = "phase-order"
-    result, actual_grader = grade_mutation(wrong_grader, cases_by_id, clauses_by_id)
-    if result == wrong_grader["expected"] and actual_grader == wrong_grader["grader"]:
+    unrelated = copy.deepcopy(mutation_rows[4])
+    for pair in unrelated["fixture"].values():
+        if isinstance(pair, dict) and set(pair) == {"left", "right"}:
+            pair["right"]["kind"] = pair["left"]["kind"]
+    unrelated["fixture"]["invariance"]["right"]["comparison"] = {"digest": "unstable"}
+    result, actual_grader, invariant = grade_mutation(unrelated, cases_by_id, clauses_by_id)
+    if result == unrelated["expected"] and invariant == expected_invariants[unrelated["id"]]:
         fail("unrelated rejection probe was accepted")
     static_negative_probes.append("unrelated-rejection")
-    disabled_rows = [row for row in mutation_rows if row["grader"] != "sc2-guard"]
-    disabled_graders = {grade_mutation(row, cases_by_id, clauses_by_id)[1] for row in disabled_rows}
-    if disabled_graders == seen_graders:
+    disabled_result = grade_mutation(
+        next(row for row in mutation_rows if row["grader"] == "sc2-guard"),
+        cases_by_id,
+        clauses_by_id,
+        {"sc2-guard"},
+    )[0]
+    if disabled_result != "infrastructure-error":
         fail("disabled grader probe was accepted")
     static_negative_probes.append("disabled-grader")
-    if generation == "0" * 64:
+    parser_control = operative_commands(
+        "## Operative commands\n\n```markdown\nRun: ignored-example\n```\n\nRun: canonical-command\n"
+    )
+    if parser_control != ["canonical-command"]:
+        fail("operative parser control failed")
+    static_negative_probes.append("parser-control")
+    mutated_section = sections_by_id["design-user-gate"] + "\nDesign may be auto-skipped."
+    try:
+        validate_source_section(clauses_by_id["design-user-gate"], mutated_section)
+    except ValueError as exc:
+        if "source clause digest drift" not in str(exc):
+            fail(f"source generation drift diagnostic mismatch: {exc}")
+    else:
         fail("source generation drift probe was accepted")
     static_negative_probes.append("source-generation-drift")
-    first_clause = clauses[0]
-    if hashlib.sha256(first_clause["text"].encode()).hexdigest() == "0" * 64:
-        fail("clause digest drift probe was accepted")
-    static_negative_probes.append("clause-digest-drift")
+    corpus_mutant = copy.deepcopy(corpus)
+    corpus_mutant["source_generation"] = "0" * 64
+    try:
+        validate_source_generation(generation, policy.get("source_generation"), corpus_mutant["source_generation"])
+    except ValueError as exc:
+        if "corpus source generation mismatch" not in str(exc):
+            fail(f"corpus generation drift diagnostic mismatch: {exc}")
+    else:
+        fail("corpus generation drift probe was accepted")
+    static_negative_probes.append("corpus-generation-drift")
+    policy_mutant = copy.deepcopy(policy)
+    policy_mutant["source_generation"] = "0" * 64
+    try:
+        validate_source_generation(generation, policy_mutant["source_generation"], corpus.get("source_generation"))
+    except ValueError as exc:
+        if "bootstrap source generation mismatch" not in str(exc):
+            fail(f"policy generation drift diagnostic mismatch: {exc}")
+    else:
+        fail("policy generation drift probe was accepted")
+    static_negative_probes.append("policy-generation-drift")
     return len(mutation_rows), len(seen_graders), generation, len(static_negative_probes)
 
 

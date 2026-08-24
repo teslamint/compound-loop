@@ -1,5 +1,6 @@
 {
   "schema": "release-loop-conformance-corpus/v1",
+  "source_generation": "e49d0da64c57fbbb70ad58255f1a56a46ab092143d98cbd39594710d41054cdd",
   "harnesses": [
     "claude",
     "codex"

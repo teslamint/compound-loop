@@ -31,11 +31,16 @@
       "grader": "sc2-comparison",
       "expected": "expected-reject",
       "fixture": {
-        "left_kind": "mlmodelc",
-        "right_kind": "mlpackage",
-        "invariance_equal": true,
-        "axis_relevant": true,
-        "effect_equal": false
+        "invariance": {
+          "left": {"kind": "mlmodelc", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed": {
+          "left": {"kind": "mlmodelc", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+        },
+        "changed_axis": "optimize",
+        "effect_axis": "optimize"
       }
     },
     {
@@ -44,11 +49,16 @@
       "grader": "sc2-comparison",
       "expected": "expected-reject",
       "fixture": {
-        "left_kind": "mlpackage",
-        "right_kind": "mlpackage",
-        "invariance_equal": false,
-        "axis_relevant": true,
-        "effect_equal": false
+        "invariance": {
+          "left": {"kind": "mlpackage", "comparison": {"digest": "stable", "build_id": "uuid-a"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "stable", "build_id": "uuid-b"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed": {
+          "left": {"kind": "mlpackage", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+        },
+        "changed_axis": "optimize",
+        "effect_axis": "optimize"
       }
     },
     {
@@ -57,11 +67,16 @@
       "grader": "sc2-comparison",
       "expected": "expected-reject",
       "fixture": {
-        "left_kind": "coremldata.bin",
-        "right_kind": "coremldata.bin",
-        "invariance_equal": true,
-        "axis_relevant": false,
-        "effect_equal": false
+        "invariance": {
+          "left": {"kind": "coremldata.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "coremldata.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed": {
+          "left": {"kind": "coremldata.bin", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "coremldata.bin", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+        },
+        "changed_axis": "source",
+        "effect_axis": "optimize"
       }
     },
     {
@@ -70,12 +85,16 @@
       "grader": "sc2-comparison",
       "expected": "expected-reject",
       "fixture": {
-        "left_kind": "mlpackage",
-        "right_kind": "mlpackage",
-        "invariance_equal": true,
-        "axis_relevant": true,
-        "effect_equal": true,
-        "metadata_equal": false
+        "invariance": {
+          "left": {"kind": "mlpackage", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed": {
+          "left": {"kind": "mlpackage", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "after"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed_axis": "optimize",
+        "effect_axis": "optimize"
       }
     },
     {
@@ -84,8 +103,30 @@
       "grader": "sc2-guard",
       "expected": "expected-reject",
       "fixture": {
-        "pass_fixture": true,
-        "fail_fixture": true
+        "pass_fixture": {
+          "invariance": {
+            "left": {"kind": "weights.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+            "right": {"kind": "weights.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+          },
+          "changed": {
+            "left": {"kind": "weights.bin", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+            "right": {"kind": "weights.bin", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+          },
+          "changed_axis": "optimize",
+          "effect_axis": "optimize"
+        },
+        "fail_fixture": {
+          "invariance": {
+            "left": {"kind": "weights.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+            "right": {"kind": "mlpackage", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+          },
+          "changed": {
+            "left": {"kind": "weights.bin", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+            "right": {"kind": "mlpackage", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+          },
+          "changed_axis": "optimize",
+          "effect_axis": "optimize"
+        }
       }
     },
     {
@@ -94,11 +135,16 @@
       "grader": "sc2-comparison",
       "expected": "pass",
       "fixture": {
-        "left_kind": "weights.bin",
-        "right_kind": "weights.bin",
-        "invariance_equal": true,
-        "axis_relevant": true,
-        "effect_equal": false
+        "invariance": {
+          "left": {"kind": "weights.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "weights.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed": {
+          "left": {"kind": "weights.bin", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "weights.bin", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+        },
+        "changed_axis": "optimize",
+        "effect_axis": "optimize"
       }
     },
     {
@@ -107,8 +153,8 @@
       "grader": "operative-section-parser",
       "expected": "expected-reject",
       "fixture": {
-        "operative": "run canonical-command",
-        "substitute": "run substitute-command"
+        "expected_command": "canonical-command",
+        "document": "## Operative commands\n\nRun: canonical-command\nRun: substitute-command\n"
       }
     },
     {
@@ -117,8 +163,8 @@
       "grader": "operative-section-parser",
       "expected": "expected-reject",
       "fixture": {
-        "fence": "~~~~markdown",
-        "operative": "run canonical-command"
+        "expected_command": "canonical-command",
+        "document": "## Example\n\n~~~~markdown\nRun: canonical-command\n~~~~\n"
       }
     }
   ]
