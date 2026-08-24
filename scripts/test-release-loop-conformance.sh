@@ -997,6 +997,18 @@ try:
     if not candidate.is_absolute():
         candidate = cwd / candidate
     resolved = candidate.resolve(strict=False)
+    pattern_values = []
+    if tool_name == "Glob":
+        pattern_values.append(tool_input["pattern"])
+    if tool_name == "Grep" and "glob" in tool_input:
+        pattern_values.append(tool_input["glob"])
+    unsafe_pattern = any(
+        not isinstance(pattern, str)
+        or Path(pattern).is_absolute()
+        or pattern.startswith("~")
+        or ".." in Path(pattern).parts
+        for pattern in pattern_values
+    )
 except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
     print("blocked: malformed conformance file-tool path", file=sys.stderr)
     raise SystemExit(2)
@@ -1015,6 +1027,7 @@ protected_write = tool_name in write_tools and any(
 if (
     tool_name not in read_tools | write_tools
     or not any(resolved == root or root in resolved.parents for root in roots)
+    or unsafe_pattern
     or protected_write
 ):
     print("blocked: path outside conformance boundary", file=sys.stderr)
@@ -2699,7 +2712,7 @@ def fake_paid_launcher(call_spec):
     }
 
 
-def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, state_root=None):
+def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, state_root=None, clock=time.monotonic):
     cases = ["L1-full-lifecycle"] if mode_name == "live-pilot" else [
         "L1-full-lifecycle", "L2-mid-loop-resume", "L3-post-merge-resume", "L4-degraded-dispatch"
     ]
@@ -2708,7 +2721,7 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
     results = []
     process_proofs = []
     command_audit = []
-    started = time.monotonic()
+    started = clock()
 
     def persist_state(status, generation_sha256=None, failure=None):
         if state_path is None:
@@ -2727,6 +2740,11 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
             state["failure"] = failure
         write_json_atomic(state_path, state, state_root)
 
+    def reject_schedule(reason):
+        status = "failed-active-process" if ledger["active_process"] is not None else "failed"
+        persist_state(status, failure=reason)
+        fail(reason)
+
     if state_path is not None and state_path.exists():
         existing = json.loads(read_bounded_file(state_path, state_root, 1048576))
         if existing.get("status") != "complete" or existing.get("resource_ledger", {}).get("active_process") is not None:
@@ -2742,10 +2760,10 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                     harness,
                     1,
                     0,
-                    int(time.monotonic() - started),
+                    int(clock() - started),
                 )
                 if invariant is not None:
-                    fail(invariant)
+                    reject_schedule(invariant)
                 session_proofs = []
 
                 def before_invocation(turn_id, session_elapsed=0):
@@ -2755,20 +2773,20 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                         harness,
                         1,
                         session_elapsed,
-                        int(time.monotonic() - started),
+                        int(clock() - started),
                     )
                     if start_invariant is not None:
-                        fail(start_invariant)
+                        reject_schedule(start_invariant)
                     if harness == "claude":
                         reservation_invariant = reserve_claude(ledger, caps, turn_id)
                         if reservation_invariant is not None:
-                            fail(reservation_invariant)
+                            reject_schedule(reservation_invariant)
                     ledger["active_process"] = {"invocation_id": turn_id, "status": "launch-intent"}
                     persist_state("running")
 
                 def after_invocation(turn_id, proof, observed_cost, observed_tokens, session_elapsed=0):
                     if not process_proof_complete(proof):
-                        fail("process-exit-proof-incomplete")
+                        reject_schedule("process-exit-proof-incomplete")
                     session_proofs.append(proof)
                     process_proofs.append(proof)
                     ledger["active_process"] = None
@@ -2777,7 +2795,7 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                     else:
                         settlement_invariant = record_codex_usage(ledger, caps, turn_id, observed_tokens)
                     if settlement_invariant is not None:
-                        fail(settlement_invariant)
+                        reject_schedule(settlement_invariant)
                     persist_state("running")
                     elapsed_invariant = invocation_start_invariant(
                         ledger,
@@ -2785,10 +2803,10 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                         harness,
                         1,
                         session_elapsed,
-                        int(time.monotonic() - started),
+                        int(clock() - started),
                     )
                     if elapsed_invariant in {"session-timeout-exhausted", "total-wall-time-exhausted"}:
-                        fail(elapsed_invariant)
+                        reject_schedule(elapsed_invariant)
 
                 try:
                     outcome = launcher(
@@ -2807,10 +2825,13 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                     if harness == "claude" and ledger["claude_active"] is not None:
                         active_id = ledger["claude_active"]["call_id"]
                         settle_claude(ledger, active_id, None)
-                    persist_state("failed", failure="scheduler-exception")
+                    persist_state(
+                        "failed-active-process" if ledger["active_process"] is not None else "failed",
+                        failure="scheduler-exception",
+                    )
                     raise
                 if not session_proofs:
-                    fail("process-exit-proof-missing")
+                    reject_schedule("process-exit-proof-missing")
                 command_audit.append(outcome["command_audit"])
                 results.append(
                     {
@@ -2826,15 +2847,13 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                     }
                 )
     if ledger["active_process"] is not None or ledger["claude_active"] is not None:
-        fail("paid schedule unsettled")
+        reject_schedule("paid schedule unsettled")
     pilot_invariant = validate_pilot_results(results) if mode_name == "live-pilot" else None
     if pilot_invariant is not None:
-        persist_state("failed", failure=pilot_invariant)
-        fail(pilot_invariant)
+        reject_schedule(pilot_invariant)
     live_invariant = validate_strata(results) if mode_name == "live" else None
     if live_invariant is not None:
-        persist_state("failed", failure=live_invariant)
-        fail(live_invariant)
+        reject_schedule(live_invariant)
     persist_state("sessions-complete")
     return results, ledger, process_proofs, command_audit
 
@@ -4703,7 +4722,11 @@ def validate_resource_group():
             ("write-git", "Write", {"file_path": str(guard_fixture / ".git/config")}, 2),
             ("read-outside", "Read", {"file_path": str(guard_outside / "secret")}, 2),
             ("glob-outside", "Glob", {"path": str(guard_outside), "pattern": "**/*"}, 2),
+            ("glob-absolute-pattern", "Glob", {"path": str(guard_fixture), "pattern": str(guard_outside / "**/*")}, 2),
+            ("glob-parent-pattern", "Glob", {"path": str(guard_fixture), "pattern": "../outside/**/*"}, 2),
+            ("glob-home-pattern", "Glob", {"path": str(guard_fixture), "pattern": "~/.ssh/**"}, 2),
             ("grep-outside", "Grep", {"path": str(guard_outside), "pattern": "token"}, 2),
+            ("grep-absolute-glob", "Grep", {"path": str(guard_fixture), "pattern": "token", "glob": str(guard_outside / "*")}, 2),
             ("missing-path", "Read", {}, 2),
         )
         for label, tool_name, tool_input, expected_code in guard_cases:
@@ -5530,6 +5553,66 @@ def validate_resource_group():
             failed_value = json.loads(read_bounded_file(failed_state, failed_root, 1048576))
             if failed_value.get("status") != "failed" or failed_value.get("failure") != diagnostic:
                 fail(f"resource pilot failure state mismatch: {diagnostic}")
+            negatives += 1
+        scheduler_failure_calls = {"start-cap": 0, "missing-proof": 0, "active-proof": 0}
+
+        def no_proof_launcher(call_spec):
+            scheduler_failure_calls["missing-proof"] += 1
+            return {"command_audit": {}}
+
+        def active_no_proof_launcher(call_spec):
+            scheduler_failure_calls["active-proof"] += 1
+            call_spec["before_invocation"](f"{call_spec['call_id']}:turn-1", 0)
+            return {"command_audit": {}}
+
+        scheduler_failure_cases = (
+            (
+                "start-cap",
+                {**pilot_caps, "total_wall_time": 1},
+                lambda call_spec: scheduler_failure_calls.__setitem__(
+                    "start-cap", scheduler_failure_calls["start-cap"] + 1
+                ),
+                "total-wall-time-exhausted",
+                "failed",
+                0,
+                iter((0, 2)).__next__,
+            ),
+            (
+                "missing-proof", pilot_caps, no_proof_launcher,
+                "process-exit-proof-missing", "failed", 1, time.monotonic,
+            ),
+            (
+                "active-proof",
+                pilot_caps,
+                active_no_proof_launcher,
+                "process-exit-proof-missing",
+                "failed-active-process",
+                1,
+                time.monotonic,
+            ),
+        )
+        for label, failure_caps, launcher, diagnostic, expected_status, expected_calls, clock in scheduler_failure_cases:
+            failed_state = failed_root / f"scheduler-{label}.json"
+            try:
+                execute_paid_schedule(
+                    "live-pilot",
+                    failure_caps,
+                    models,
+                    launcher,
+                    state_path=failed_state,
+                    state_root=failed_root,
+                    clock=clock,
+                )
+            except ValueError as exc:
+                if diagnostic not in str(exc):
+                    fail(f"resource scheduler failure diagnostic mismatch: {label}: {exc}")
+            else:
+                fail(f"resource scheduler failure accepted: {label}")
+            failed_value = json.loads(read_bounded_file(failed_state, failed_root, 1048576))
+            if failed_value.get("status") != expected_status or failed_value.get("failure") != diagnostic:
+                fail(f"resource scheduler failure state mismatch: {label}")
+            if scheduler_failure_calls[label] != expected_calls:
+                fail(f"resource scheduler launch count mismatch: {label}")
             negatives += 1
     with tempfile.TemporaryDirectory(prefix="live-gate-test-", dir=str(receipt_test_root)) as gate_temp:
         gate_path = Path(gate_temp) / "progress.md"
