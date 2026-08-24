@@ -26,6 +26,9 @@ setup_copy() {
   dir="$(mktemp -d 2>&1)" || { echo "  harness error: mktemp -d failed: $dir" >&2; return 1; }
   cp -r "$ROOT/." "$dir/" || { echo "  harness error: worktree copy failed" >&2; rm -rf "$dir"; return 1; }
   rm -rf "$dir/.git"
+  # This harness mutates the Retro format contract only. The run-artifact suite
+  # has its own executable full-lifecycle gate and runs separately in U5.
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$dir/scripts/test-run-artifact-integrity.sh"
   printf '%s\n' "$dir"
 }
 
@@ -1622,6 +1625,56 @@ case_c34() {
   return $result
 }
 
+# --- Cases C35-C38: structured release-data contract drift ---------------
+# Each mutation targets one live U5 contract surface. The repository validator
+# must reject the copied tree, proving the check is coupled to both producer and
+# template rather than to this fixture's own rendering logic.
+case_structured_metric_mutation() {
+  local target="$1" before="$2" after="$3"
+  local dir out code result=0
+  dir="$(setup_copy)" || return 1
+  TEMP_DIRS+=("$dir")
+  python3 - "$dir/$target" "$before" "$after" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+before = sys.argv[2]
+after = sys.argv[3]
+text = path.read_text(encoding="utf-8")
+if text.count(before) < 1:
+    raise SystemExit(f"mutation target count={text.count(before)}: {before}")
+path.write_text(text.replace(before, after), encoding="utf-8")
+PY
+  code=$?
+  [[ $code -eq 0 ]] || { echo "  mutation setup failed"; rm -rf "$dir"; return 1; }
+  out="$(cd "$dir" && bash scripts/validate.sh 2>&1)"; code=$?
+  [[ $code -ne 0 ]] || { echo "  expected nonzero validation result"; result=1; }
+  assert_fail_naming "$out" "retro-format" "structured metric drift" || result=1
+  rm -rf "$dir"
+  return $result
+}
+
+case_c35() {
+  case_structured_metric_mutation schemas/retro-template.md \
+    'Review rounds (unit / final / standalone)' 'Review rounds'
+}
+
+case_c36() {
+  case_structured_metric_mutation skills/retrospective/SKILL.md \
+    'unit_passes + final_passes + standalone_passes' 'unit_passes + final_passes'
+}
+
+case_c37() {
+  case_structured_metric_mutation skills/retrospective/SKILL.md \
+    'reviews/facilitator/round-<N>.md' 'reviews/facilitator/latest.md'
+}
+
+case_c38() {
+  case_structured_metric_mutation schemas/retro-template.md \
+    'Pull request comments (fixed / deferred)' 'Review comments (fixed / deferred)'
+}
+
 run_case A case_a
 run_case B case_b
 run_case C case_c
@@ -1666,6 +1719,10 @@ run_case C31 case_c31
 run_case C32 case_c32
 run_case C33 case_c33
 run_case C34 case_c34
+run_case C35 case_c35
+run_case C36 case_c36
+run_case C37 case_c37
+run_case C38 case_c38
 
 echo
 if [[ $FAIL_COUNT -eq 0 ]]; then

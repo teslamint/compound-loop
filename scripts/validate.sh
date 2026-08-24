@@ -391,6 +391,31 @@ for rel in (SKILL, PROBES):
         if not boundary_search(anchor, text):
             fail(f"verdict vocabulary '{anchor}' from {TEMPLATE} not found in {rel}")
 
+metric_rows = (
+    "Review rounds (unit / final / standalone)",
+    "Fix rounds",
+    "Internal findings (fixed / deferred)",
+    "Pull request comments (fixed / deferred)",
+    "Count completeness",
+)
+for label in metric_rows:
+    matches = [line for line in lines if line.startswith(f"| {label} |")]
+    if len(matches) != 1:
+        fail(f"{TEMPLATE}: expected exactly one release-data row '{label}', found {len(matches)}")
+
+metric_contract = (
+    "unit_passes + final_passes + standalone_passes",
+    "lower bound since `counting_started_at`",
+    "unknown `completeness` value blocks",
+    "stale-commit-range",
+    "reviews/facilitator/round-<N>.md",
+    "Persist every facilitator round verbatim",
+)
+if skill_text is not None:
+    for fragment in metric_contract:
+        if fragment not in skill_text:
+            fail(f"{SKILL}: structured release-data contract missing '{fragment}'")
+
 finish()
 PY
 
@@ -1223,6 +1248,9 @@ PY
 
 # Run-scope discovery, closed-root, handoff, and archive fixtures.
 if ! bash "$ROOT/scripts/test-run-artifact-integrity.sh" scope; then
+  FAIL=1
+fi
+if ! bash "$ROOT/scripts/test-run-artifact-integrity.sh" retro; then
   FAIL=1
 fi
 

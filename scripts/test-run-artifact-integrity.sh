@@ -22,22 +22,33 @@ import tempfile
 
 CASE = sys.argv[1]
 ROOT = Path(sys.argv[2])
-SKILL = (ROOT / "skills/release-loop/SKILL.md").read_text(encoding="utf-8")
-SCHEMA = (ROOT / "skills/release-loop/references/progress-schema.md").read_text(encoding="utf-8")
-ARCHIVE = (ROOT / "skills/release-loop/references/resume-and-archive.md").read_text(encoding="utf-8")
-HOOKS = (ROOT / "skills/release-loop/references/transition-hooks.md").read_text(encoding="utf-8")
+
+
+def read_contract(relative: str) -> str:
+    try:
+        return (ROOT / relative).read_text(encoding="utf-8")
+    except OSError:
+        print(f"FAIL: [run-artifact-integrity] missing or unreadable contract: {relative}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+SKILL = read_contract("skills/release-loop/SKILL.md")
+SCHEMA = read_contract("skills/release-loop/references/progress-schema.md")
+ARCHIVE = read_contract("skills/release-loop/references/resume-and-archive.md")
+HOOKS = read_contract("skills/release-loop/references/transition-hooks.md")
 CLI = ROOT / "skills/release-loop/scripts/run-artifact-integrity.py"
 IMPLEMENTING_CLI = ROOT / "skills/implementing/scripts/phase-artifact-integrity.py"
 RELEASE_CORE = ROOT / "skills/release-loop/scripts/phase_artifact_core.py"
 IMPLEMENTING_CORE = ROOT / "skills/implementing/scripts/phase_artifact_core.py"
 PHASE_CONSUMERS = {
-    name: (ROOT / f"skills/{name}/SKILL.md").read_text(encoding="utf-8")
+    name: read_contract(f"skills/{name}/SKILL.md")
     for name in ("planning", "implementing", "reviewing", "shipping", "retrospective")
 }
-PLAN_SCHEMA = (ROOT / "skills/planning/schemas/plan-schema.md").read_text(encoding="utf-8")
+PLAN_SCHEMA = read_contract("skills/planning/schemas/plan-schema.md")
 IMPLEMENTING = PHASE_CONSUMERS["implementing"]
 REVIEWING = PHASE_CONSUMERS["reviewing"]
-MERGE_PIPELINE = (ROOT / "skills/reviewing/references/merge-pipeline.md").read_text(encoding="utf-8")
+MERGE_PIPELINE = read_contract("skills/reviewing/references/merge-pipeline.md")
+RETRO_TEMPLATE = read_contract("schemas/retro-template.md")
 
 CASES = (
     "new_scoped_run",
@@ -179,6 +190,15 @@ HISTORY_CASES = (
     "shipping_command_changed_axis",
 )
 
+RETRO_CASES = (
+    "retro_structured_metrics",
+    "legacy_partial_metrics",
+    "retro_stale_range",
+    "facilitator_artifact_missing",
+    "unknown_count_completeness",
+    "full_lifecycle",
+)
+
 
 INVOCATIONS = (
     ("skill-initialize", SKILL, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" initialize --repo . --feature <feature_slug>'),
@@ -255,8 +275,8 @@ def new_repo(tmp: Path, name: str = "repo") -> Path:
     return repo.resolve(strict=True)
 
 
-def new_history_repo(tmp: Path, conflict: bool = False) -> Path:
-    repo = new_repo(tmp)
+def new_history_repo(tmp: Path, conflict: bool = False, name: str = "repo") -> Path:
+    repo = new_repo(tmp, name)
     git(repo, "branch", "-M", "main")
     git(repo, "checkout", "-qb", "origin-main-work")
     if conflict:
@@ -592,6 +612,25 @@ def require_history_contract() -> None:
     missing = [fragment for text, fragment in required if fragment not in text]
     if missing:
         raise AssertionError("missing exact-head history contract: " + " | ".join(missing))
+
+
+def require_retro_contract() -> None:
+    retrospective = PHASE_CONSUMERS["retrospective"]
+    required = (
+        (retrospective, "unit_passes + final_passes + standalone_passes"),
+        (retrospective, "lower bound since `counting_started_at`"),
+        (retrospective, "unknown `completeness` value blocks"),
+        (retrospective, "stale-commit-range"),
+        (retrospective, "reviews/facilitator/round-<N>.md"),
+        (retrospective, "Persist every facilitator round verbatim"),
+        (RETRO_TEMPLATE, "Review rounds (unit / final / standalone)"),
+        (RETRO_TEMPLATE, "Internal findings (fixed / deferred)"),
+        (RETRO_TEMPLATE, "Pull request comments (fixed / deferred)"),
+        (RETRO_TEMPLATE, "Count completeness"),
+    )
+    missing = [fragment for text, fragment in required if fragment not in text]
+    if missing:
+        raise AssertionError("missing structured Retro contract: " + " | ".join(missing))
 
 
 def reviewer_output(
@@ -1203,6 +1242,67 @@ class HistoryFixture:
         return True
 
 
+class RetroFixture:
+    def __init__(
+        self,
+        repo: Path,
+        progress_path: Path,
+        reviews: ReviewFixture,
+        current_range: dict[str, str],
+        completeness: str | None,
+        counting_started_at: str,
+        pr_fixed: int = 0,
+        pr_deferred: int = 0,
+    ) -> None:
+        self.repo = repo
+        self.progress_path = progress_path
+        self.reviews = reviews
+        self.current_range = current_range
+        self.completeness = "partial" if completeness is None else completeness
+        self.counting_started_at = counting_started_at
+        self.pr_fixed = pr_fixed
+        self.pr_deferred = pr_deferred
+        self.facilitator_rounds: list[str] = []
+
+    def publish_facilitator_round(self, ordinal: int, body: bytes) -> Path:
+        relative = f"reviews/facilitator/round-{ordinal}.md"
+        path = publish_phase_artifact(self.repo, self.progress_path, relative, body)
+        assert path.read_bytes() == body
+        self.facilitator_rounds.append(relative)
+        return path
+
+    def render_metrics(self, expected_facilitator_rounds: int) -> str:
+        if self.current_range != {
+            "base": git(self.repo, "merge-base", "main", "HEAD"),
+            "head": git(self.repo, "rev-parse", "HEAD"),
+        }:
+            raise Blocked("stale-commit-range")
+        if self.completeness not in {"exact", "partial"}:
+            raise Blocked(f"unknown review count completeness: {self.completeness}")
+        expected = [f"reviews/facilitator/round-{ordinal}.md" for ordinal in range(1, expected_facilitator_rounds + 1)]
+        if self.facilitator_rounds != expected:
+            raise Blocked("facilitator artifact missing")
+        for relative in expected:
+            path = self.progress_path.parent / relative
+            if not path.is_file():
+                raise Blocked("facilitator artifact missing")
+        counts = self.reviews.counts()
+        rounds = counts["unit_passes"] + counts["final_passes"] + counts["standalone_passes"]
+        completeness = "exact"
+        if self.completeness == "partial":
+            completeness = f"partial — lower bound since {self.counting_started_at}"
+        return (
+            "| Metric | Value |\n"
+            "|---|---|\n"
+            f"| Review rounds (unit / final / standalone) | {rounds} "
+            f"({counts['unit_passes']} / {counts['final_passes']} / {counts['standalone_passes']}) |\n"
+            f"| Fix rounds | {counts['fix_rounds']} |\n"
+            f"| Internal findings (fixed / deferred) | {counts['findings_fixed']} / {counts['findings_deferred']} |\n"
+            f"| Pull request comments (fixed / deferred) | {self.pr_fixed} / {self.pr_deferred} |\n"
+            f"| Count completeness | {completeness} |\n"
+        )
+
+
 def history_snapshot(repo: Path, history: HistoryFixture) -> dict[str, object]:
     refs = git(repo, "for-each-ref", "--format=%(refname)=%(objectname)").splitlines()
     return {
@@ -1268,11 +1368,200 @@ def write_history_evidence(
     target.write_text(content, encoding="utf-8")
 
 
+def populate_retro_reviews(repo: Path, path: Path) -> ReviewFixture:
+    reviews = ReviewFixture(repo, path)
+    head = git(repo, "rev-parse", "HEAD")
+    first = reviews.allocate("unit", "U1", head)
+    reviews.complete(str(first["id"]), reviewer_output("actionable", review_body=("fp-retro",)))
+    fix = reviews.allocate("fix", "U1", head, source_review_event=str(first["id"]))
+    reviews.complete(str(fix["id"]), reviewer_output("clean"))
+    second = reviews.allocate("unit", "U1", head, re_review_of=str(first["id"]))
+    reviews.complete(str(second["id"]), reviewer_output("clean"))
+    reviews.verify_re_review(str(second["id"]))
+    final = reviews.allocate("final", "branch", head)
+    reviews.complete(str(final["id"]), reviewer_output("clean"))
+    standalone = reviews.allocate("standalone", "branch", head)
+    reviews.complete(str(standalone["id"]), reviewer_output("clean"))
+    return reviews
+
+
+def run_retro_case(name: str, tmp: Path, sent: Path, before: bytes) -> None:
+    require_retro_contract()
+    repo = new_history_repo(tmp)
+    path = initialize(repo, "alpha")
+    reviews = populate_retro_reviews(repo, path)
+    current_range = {
+        "base": git(repo, "merge-base", "main", "HEAD"),
+        "head": git(repo, "rev-parse", "HEAD"),
+    }
+    retro = RetroFixture(
+        repo,
+        path,
+        reviews,
+        current_range,
+        "exact",
+        "2026-08-24T00:00:00Z",
+        pr_fixed=3,
+        pr_deferred=1,
+    )
+
+    if name == "retro_structured_metrics":
+        retro.publish_facilitator_round(1, b"accepted: exact structured evidence\n")
+        expected = retro.render_metrics(1)
+        narrative = "- review round one passed\n- fixed one review finding\n"
+        path.write_text(path.read_text(encoding="utf-8") + narrative, encoding="utf-8")
+        with_narrative = retro.render_metrics(1)
+        path.write_text(path.read_text(encoding="utf-8").replace(narrative, ""), encoding="utf-8")
+        without_narrative = retro.render_metrics(1)
+        assert with_narrative == without_narrative == expected
+        assert "| Review rounds (unit / final / standalone) | 4 (2 / 1 / 1) |" in expected
+        assert "| Fix rounds | 1 |" in expected
+        assert "| Internal findings (fixed / deferred) | 1 / 0 |" in expected
+        assert "| Pull request comments (fixed / deferred) | 3 / 1 |" in expected
+    elif name == "legacy_partial_metrics":
+        retro.completeness = None
+        retro.completeness = "partial"
+        retro.publish_facilitator_round(1, b"accepted: legacy lower bound\n")
+        rendered = retro.render_metrics(1)
+        assert "partial — lower bound since 2026-08-24T00:00:00Z" in rendered
+        assert "| Review rounds (unit / final / standalone) | 4 (2 / 1 / 1) |" in rendered
+    elif name == "retro_stale_range":
+        (repo / "later.txt").write_text("later\n", encoding="utf-8")
+        git(repo, "add", "later.txt")
+        git(repo, "commit", "-qm", "later")
+        try:
+            retro.render_metrics(0)
+        except Blocked as exc:
+            assert str(exc) == "stale-commit-range"
+        else:
+            raise AssertionError("stale Retro range did not block")
+    elif name == "facilitator_artifact_missing":
+        try:
+            retro.render_metrics(1)
+        except Blocked as exc:
+            assert str(exc) == "facilitator artifact missing"
+        else:
+            raise AssertionError("missing facilitator artifact supported a metric claim")
+    elif name == "unknown_count_completeness":
+        retro.completeness = "estimated"
+        try:
+            retro.render_metrics(0)
+        except Blocked as exc:
+            assert str(exc) == "unknown review count completeness: estimated"
+        else:
+            raise AssertionError("unknown completeness did not block")
+    elif name == "full_lifecycle":
+        coverage: set[int] = set()
+        for relative in ("briefs/U1-brief.md", "reports/U1-report.md", "evidence/U1/T6-success.md"):
+            publish_phase_artifact(repo, path, relative, (relative + "\n").encode())
+        assert all((path.parent / relative).is_file() for relative in ("briefs/U1-brief.md", "reports/U1-report.md", "evidence/U1/T6-success.md"))
+        assert (path.parent / "reviews/events/unit-U1-1.md").is_file()
+        coverage.add(1)
+
+        legacy_repo = new_repo(tmp, "legacy-proof")
+        legacy = legacy_repo / ".release-loop/reports/U1-report.md"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(b"legacy\n")
+        git(legacy_repo, "add", "-f", legacy.relative_to(legacy_repo).as_posix())
+        git(legacy_repo, "commit", "-qm", "legacy")
+        blob = legacy.read_bytes()
+        scoped = initialize(legacy_repo, "proof")
+        publish_phase_artifact(legacy_repo, scoped, "reports/U1-report.md", b"scoped\n")
+        assert legacy.read_bytes() == blob and git(legacy_repo, "status", "--porcelain", "--", legacy.relative_to(legacy_repo).as_posix()) == ""
+        coverage.add(2)
+
+        collision_repo = new_repo(tmp, "collision-proof")
+        orphan = collision_repo / ".release-loop/runs/collision/orphan.txt"
+        orphan.parent.mkdir(parents=True)
+        orphan.write_text("orphan\n", encoding="utf-8")
+        assert_blocked_preserves(lambda: initialize(collision_repo, "collision"), sent, before, "artifact scope collision")
+        coverage.add(3)
+
+        assert reviews.counts() == {
+            "unit_passes": 2,
+            "fix_rounds": 1,
+            "final_passes": 1,
+            "standalone_passes": 1,
+            "findings_fixed": 1,
+            "findings_deferred": 0,
+        }
+        coverage.add(4)
+        recovered = reviews.allocate("unit", "U2", git(repo, "rev-parse", "HEAD"))
+        wrapper = reviews._wrapper(recovered, reviewer_output("clean"))
+        publish_from_cli(repo, path, reviews._result_relative(recovered), wrapper, IMPLEMENTING_CLI)
+        assert reviews.recover(str(recovered["id"])) == "recovered"
+        coverage.add(5)
+        assert reviews.dispositions["fp-retro"]["status"] == "fixed"
+        coverage.add(6)
+        assert reviews.counts()["standalone_passes"] == 1
+        coverage.add(7)
+
+        rewrite_repo = new_history_repo(tmp, conflict=False, name="rewrite-proof")
+        rewrite_path = initialize(rewrite_repo, "rewrite")
+        history = HistoryFixture(rewrite_repo, rewrite_path, "main", "fixture-session")
+        command = 'git rebase --onto "origin/main" "main" "feat/fixture"'
+        try:
+            history.rewrite(command, "origin/main")
+        except Blocked as exc:
+            assert str(exc) == "stale-commit-range" and history.command_calls == 0
+        else:
+            raise AssertionError("unapproved full-lifecycle rewrite executed")
+        coverage.add(9)
+        old_gate = dict(history.review_gate)
+        history.approve(command, "origin/main")
+        history.rewrite(command, "origin/main")
+        assert history.current_commit_range == history.git_range()
+        coverage.add(8)
+        assert old_gate["head"] != history.current_commit_range["head"] and history.review_gate == {"event_id": None, "head": None}
+        coverage.add(10)
+
+        retro.publish_facilitator_round(1, b"accepted: full lifecycle\n")
+        rendered = retro.render_metrics(1)
+        assert "| Count completeness | exact |" in rendered
+        coverage.add(11)
+        source = path.parent / ".tmp/outside.tmp"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"outside\n")
+        assert_blocked_preserves(
+            lambda: run_cli(
+                "publish", "--repo", str(repo),
+                "--progress-path", path.relative_to(repo).as_posix(),
+                "--source", source.relative_to(repo).as_posix(),
+                "--target", str(sent),
+            ),
+            sent,
+            before,
+            "path boundary",
+        )
+        coverage.add(12)
+        validate_text = (ROOT / "scripts/validate.sh").read_text(encoding="utf-8")
+        assert 'test-run-artifact-integrity.sh" scope' in validate_text
+        assert 'test-run-artifact-integrity.sh" retro' in validate_text
+        coverage.add(13)
+
+        publish_phase_artifact(repo, path, "reports/retro.md", rendered.encode())
+        base = new_repo(tmp, "base")
+        handoff_scope(repo, base, path.relative_to(repo).as_posix())
+        base_progress = base / path.relative_to(repo)
+        destination = ".release-loop/archive/2026-08-24-alpha"
+        archive_scope(base, base_progress.relative_to(base).as_posix(), destination)
+        archived = base / destination
+        assert (archived / "progress.md").is_file()
+        assert (archived / "reviews/facilitator/round-1.md").read_bytes() == b"accepted: full lifecycle\n"
+        assert coverage == set(range(1, 14)), coverage
+    else:
+        raise AssertionError(f"unknown Retro case: {name}")
+    assert sent.read_bytes() == before
+
+
 def run_case(name: str) -> None:
     require_contract(check_invocations=name == "operative_contract_mutation")
     with tempfile.TemporaryDirectory(prefix=f"run-artifact-{name}-") as tmp_name:
         tmp = Path(tmp_name)
         sent, before = sentinel(tmp)
+        if name in RETRO_CASES:
+            run_retro_case(name, tmp, sent, before)
+            return
         if name in HISTORY_CASES:
             require_history_contract()
             conflict = name == "rewrite_conflict"
@@ -2617,17 +2906,19 @@ def run_case(name: str) -> None:
 if CASE == "scope":
     selected = CASES
 elif CASE == "all":
-    selected = CASES + REVIEW_CASES + HISTORY_CASES
+    selected = CASES + REVIEW_CASES + HISTORY_CASES + RETRO_CASES
 elif CASE == "consumers":
     selected = CONSUMER_CASES
 elif CASE == "reviews":
     selected = REVIEW_CASES
 elif CASE == "history":
     selected = HISTORY_CASES
-elif CASE in CASES + REVIEW_CASES + HISTORY_CASES:
+elif CASE == "retro":
+    selected = RETRO_CASES
+elif CASE in CASES + REVIEW_CASES + HISTORY_CASES + RETRO_CASES:
     selected = (CASE,)
 else:
-    print("usage: bash scripts/test-run-artifact-integrity.sh <scope|all|consumers|reviews|history|case>", file=sys.stderr)
+    print("usage: bash scripts/test-run-artifact-integrity.sh <scope|all|consumers|reviews|history|retro|case>", file=sys.stderr)
     raise SystemExit(2)
 
 failures = 0
