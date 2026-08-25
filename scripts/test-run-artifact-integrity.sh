@@ -103,6 +103,16 @@ CASES = (
     "handoff_incomplete_rerun",
     "handoff_mismatch_preserves_both",
     "handoff_same_checkout",
+    "legacy_handoff_success",
+    "legacy_handoff_cli_contract",
+    "legacy_handoff_incomplete_rerun",
+    "legacy_handoff_collision",
+    "legacy_handoff_index_collision",
+    "legacy_handoff_destination_attacks",
+    "legacy_handoff_source_persistent_children",
+    "legacy_handoff_symlinks",
+    "legacy_handoff_marker_schema",
+    "legacy_handoff_complete_destination_regression",
     "archive_direct_escape",
     "archive_parent_escape",
     "archive_wrong_family",
@@ -424,6 +434,26 @@ def progress(feature: str, artifact_root: str) -> str:
     )
 
 
+def write_legacy(repo: Path, feature: str = "legacy") -> Path:
+    legacy = repo / ".release-loop/progress.md"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(progress(feature, ".release-loop"), encoding="utf-8")
+    return legacy
+
+
+def populate_legacy_active_state(root: Path) -> None:
+    (root / ".tmp").mkdir(parents=True, exist_ok=True)
+    (root / ".tmp/scratch.tmp").write_text("scratch\n", encoding="utf-8")
+    (root / ".phase-artifact-ownership.json").write_text(
+        '{"schema":"phase-artifact-ownership/v1","owned":{},"pending":null}\n', encoding="utf-8"
+    )
+    for name in ("briefs", "reports", "reviews", "evidence"):
+        directory = root / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f"{name[:-1]}.md").write_text(f"{name}\n", encoding="utf-8")
+    (root / "progress.md.corrupt-2026-08-24T000000Z").write_text("corrupt\n", encoding="utf-8")
+
+
 class Blocked(RuntimeError):
     pass
 
@@ -731,6 +761,8 @@ def handoff_scope(
     progress_path: str,
     marker_path: str | None = None,
     fail_after_marker: bool = False,
+    legacy_destination: str | None = None,
+    failure: str | None = None,
 ) -> dict[str, object]:
     args = [
         "--repo", str(repo),
@@ -739,10 +771,13 @@ def handoff_scope(
     ]
     if marker_path is not None:
         args.extend(("--marker-path", marker_path))
+    if legacy_destination is not None:
+        args.extend(("--legacy-destination", legacy_destination))
+    selected_failure = failure or ("handoff-after-marker" if fail_after_marker else None)
     payload = run_cli(
         "handoff",
         *args,
-        failure="handoff-after-marker" if fail_after_marker else None,
+        failure=selected_failure,
     )
     assert set(payload) == {"cleanup_permitted", "marker_path", "progress_path", "state"}, payload
     assert payload["state"] == "complete" and payload["cleanup_permitted"] is True, payload
@@ -3389,6 +3424,295 @@ def run_case(name: str) -> None:
             )
             assert path.read_bytes() == source_before
             assert not marker.exists()
+        elif name == "legacy_handoff_success":
+            source = repo
+            base = new_repo(tmp, "base")
+            legacy_path = write_legacy(source, "legacy")
+            populate_legacy_active_state(legacy_path.parent)
+            archive_control = base / ".release-loop/archive/2026-01-01-alpha"
+            archive_control.mkdir(parents=True)
+            (archive_control / "kept.txt").write_text("kept\n", encoding="utf-8")
+            archive_control_before = (archive_control / "kept.txt").read_bytes()
+            result = handoff_scope(source, base, str(legacy_path.relative_to(source)), legacy_destination=".release-loop")
+            assert result["cleanup_permitted"] is True
+            assert discover(base, ".release-loop/progress.md") == ("resume", base / ".release-loop/progress.md")
+            source_manifest = filesystem_manifest(source / ".release-loop")
+            base_manifest = filesystem_manifest(base / ".release-loop")
+            for relative, value in source_manifest.items():
+                assert base_manifest[relative] == value, relative
+            assert (archive_control / "kept.txt").read_bytes() == archive_control_before
+            marker = base / ".release-loop/.handoff/legacy.json"
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            assert payload["schema"] == "release-loop-handoff/v2", payload
+            assert payload["status"] == "complete", payload
+            assert payload["destination"] == ".release-loop", payload
+            assert set(payload) == {
+                "schema", "feature", "progress_path", "artifact_root",
+                "source_worktree", "base_owner", "destination", "manifest_sha256", "status",
+            }, payload
+        elif name == "legacy_handoff_cli_contract":
+            missing_source = new_repo(tmp, "cli-missing-source")
+            missing_base = new_repo(tmp, "cli-missing-base")
+            missing_legacy = write_legacy(missing_source, "legacy")
+            assert_blocked_preserves(
+                lambda: handoff_scope(missing_source, missing_base, str(missing_legacy.relative_to(missing_source))),
+                sent, before, "path boundary",
+            )
+            ok_source = new_repo(tmp, "cli-ok-source")
+            ok_base = new_repo(tmp, "cli-ok-base")
+            ok_legacy = write_legacy(ok_source, "legacy")
+            ok_result = handoff_scope(ok_source, ok_base, str(ok_legacy.relative_to(ok_source)), legacy_destination=".release-loop")
+            assert ok_result["cleanup_permitted"] is True
+            wrong_source = new_repo(tmp, "cli-wrong-source")
+            wrong_base = new_repo(tmp, "cli-wrong-base")
+            wrong_legacy = write_legacy(wrong_source, "legacy")
+            assert_blocked_preserves(
+                lambda: handoff_scope(wrong_source, wrong_base, str(wrong_legacy.relative_to(wrong_source)), legacy_destination="other"),
+                sent, before, "path boundary",
+            )
+            scoped_source = new_repo(tmp, "cli-scoped-source")
+            scoped_base = new_repo(tmp, "cli-scoped-base")
+            scoped_path = initialize(scoped_source, "alpha")
+            assert_blocked_preserves(
+                lambda: handoff_scope(scoped_source, scoped_base, str(scoped_path.relative_to(scoped_source)), legacy_destination=".release-loop"),
+                sent, before, "path boundary",
+            )
+            marker_source = new_repo(tmp, "cli-marker-source")
+            marker_base = new_repo(tmp, "cli-marker-base")
+            marker_legacy = write_legacy(marker_source, "legacy")
+            assert_blocked_preserves(
+                lambda: handoff_scope(
+                    marker_source, marker_base, str(marker_legacy.relative_to(marker_source)),
+                    marker_path=".release-loop/.handoff/other.json", legacy_destination=".release-loop",
+                ),
+                sent, before, "path boundary",
+            )
+        elif name == "legacy_handoff_incomplete_rerun":
+            source = repo
+            base = new_repo(tmp, "base")
+            legacy_path = write_legacy(source, "legacy")
+            (legacy_path.parent / "reports").mkdir()
+            (legacy_path.parent / "reports/U1.md").write_text("done\n", encoding="utf-8")
+            try:
+                handoff_scope(
+                    source, base, str(legacy_path.relative_to(source)),
+                    legacy_destination=".release-loop", failure="handoff-after-copy-one",
+                )
+            except Blocked as exc:
+                assert "injected handoff interruption" in str(exc)
+            else:
+                raise AssertionError("legacy handoff interruption did not fire")
+            marker = base / ".release-loop/.handoff/legacy.json"
+            assert marker.is_file()
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            assert payload["status"] == "incomplete", payload
+            assert (base / ".release-loop/progress.md").read_bytes() == legacy_path.read_bytes()
+            assert not (base / ".release-loop/reports").exists()
+            result = handoff_scope(source, base, str(legacy_path.relative_to(source)), legacy_destination=".release-loop")
+            assert result["cleanup_permitted"] is True
+            payload_after = json.loads(marker.read_text(encoding="utf-8"))
+            assert payload_after["status"] == "complete", payload_after
+            assert (base / ".release-loop/reports/U1.md").read_text(encoding="utf-8") == "done\n"
+            assert discover(base, ".release-loop/progress.md")[0] == "resume"
+        elif name == "legacy_handoff_collision":
+            source = repo
+            base = new_repo(tmp, "base")
+            legacy_path = write_legacy(source, "legacy")
+            base_legacy = write_legacy(base, "other")
+            base_before = base_legacy.read_bytes()
+            source_before = legacy_path.read_bytes()
+            assert_blocked_preserves(
+                lambda: handoff_scope(source, base, str(legacy_path.relative_to(source)), legacy_destination=".release-loop"),
+                sent, before, "legacy handoff collision",
+            )
+            marker = base / ".release-loop/.handoff/legacy.json"
+            assert not marker.exists()
+            assert base_legacy.read_bytes() == base_before
+            assert legacy_path.read_bytes() == source_before
+        elif name == "legacy_handoff_index_collision":
+            source = repo
+            base = new_repo(tmp, "base")
+            legacy_path = write_legacy(source, "legacy")
+            tracked = base / ".release-loop/briefs/tracked.md"
+            tracked.parent.mkdir(parents=True)
+            tracked.write_text("tracked\n", encoding="utf-8")
+            git(base, "add", "-f", str(tracked.relative_to(base)))
+            tracked.unlink()
+            tracked.parent.rmdir()
+            status_before = git(base, "status", "--porcelain")
+            assert_blocked_preserves(
+                lambda: handoff_scope(source, base, str(legacy_path.relative_to(source)), legacy_destination=".release-loop"),
+                sent, before, "legacy handoff collision",
+            )
+            marker = base / ".release-loop/.handoff/legacy.json"
+            assert not marker.exists()
+            assert git(base, "status", "--porcelain") == status_before
+            assert not tracked.exists()
+        elif name == "legacy_handoff_destination_attacks":
+            source = repo
+            base = new_repo(tmp, "base")
+            legacy_path = write_legacy(source, "legacy")
+            (legacy_path.parent / "briefs").mkdir()
+            (legacy_path.parent / "briefs/U1.md").write_text("brief\n", encoding="utf-8")
+            try:
+                handoff_scope(
+                    source, base, str(legacy_path.relative_to(source)),
+                    legacy_destination=".release-loop", failure="handoff-after-copy-one",
+                )
+            except Blocked as exc:
+                assert "injected handoff interruption" in str(exc)
+            else:
+                raise AssertionError("legacy handoff interruption did not fire")
+            marker = base / ".release-loop/.handoff/legacy.json"
+            assert marker.is_file()
+            outside = tmp / "outside-destination-attack"
+            outside.mkdir()
+            evil = base / ".release-loop/briefs/evil"
+            evil.symlink_to(outside, target_is_directory=True)
+            assert_blocked_preserves(
+                lambda: handoff_scope(source, base, str(legacy_path.relative_to(source)), legacy_destination=".release-loop"),
+                sent, before, "path boundary",
+            )
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            assert payload["status"] == "incomplete", payload
+            assert not (base / ".release-loop/progress.md").exists()
+        elif name == "legacy_handoff_source_persistent_children":
+            for label in ("archive", ".handoff", "runs", "unexpected"):
+                slug = label.lstrip(".")
+                fresh_source = new_repo(tmp, f"persistent-source-{slug}")
+                fresh_base = new_repo(tmp, f"persistent-base-{slug}")
+                legacy_path = write_legacy(fresh_source, "legacy")
+                child_dir = legacy_path.parent / label
+                child_dir.mkdir(parents=True)
+                (child_dir / "file.txt").write_text("persistent\n", encoding="utf-8")
+                source_before = legacy_path.read_bytes()
+                try:
+                    handoff_scope(fresh_source, fresh_base, str(legacy_path.relative_to(fresh_source)), legacy_destination=".release-loop")
+                except Blocked as exc:
+                    assert "legacy handoff source" in str(exc), str(exc)
+                    assert f".release-loop/{label}" in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"persistent child {label} did not block")
+                assert legacy_path.read_bytes() == source_before
+        elif name == "legacy_handoff_symlinks":
+            outside = tmp / "outside-legacy-symlink"
+            outside.mkdir()
+            source_a = new_repo(tmp, "legacy-symlink-source-a")
+            base_a = new_repo(tmp, "legacy-symlink-base-a")
+            legacy_a = write_legacy(source_a, "legacy")
+            (legacy_a.parent / "briefs").symlink_to(outside, target_is_directory=True)
+            assert_blocked_preserves(
+                lambda: handoff_scope(source_a, base_a, str(legacy_a.relative_to(source_a)), legacy_destination=".release-loop"),
+                sent, before, "path boundary",
+            )
+            source_b = new_repo(tmp, "legacy-symlink-source-b")
+            base_b = new_repo(tmp, "legacy-symlink-base-b")
+            legacy_b = write_legacy(source_b, "legacy")
+            loop_b = base_b / ".release-loop"
+            loop_b.mkdir(parents=True, exist_ok=True)
+            (loop_b / ".handoff").symlink_to(outside, target_is_directory=True)
+            assert_blocked_preserves(
+                lambda: handoff_scope(source_b, base_b, str(legacy_b.relative_to(source_b)), legacy_destination=".release-loop"),
+                sent, before, "path boundary",
+            )
+            source_c = new_repo(tmp, "legacy-symlink-source-c")
+            base_c = new_repo(tmp, "legacy-symlink-base-c")
+            legacy_c = write_legacy(source_c, "legacy")
+            (base_c / ".release-loop").symlink_to(outside, target_is_directory=True)
+            assert_blocked_preserves(
+                lambda: handoff_scope(source_c, base_c, str(legacy_c.relative_to(source_c)), legacy_destination=".release-loop"),
+                sent, before, "path boundary",
+            )
+        elif name == "legacy_handoff_marker_schema":
+            def marker_case(slug, payload_overrides=None, drop_keys=()):
+                marker_source = new_repo(tmp, f"marker-schema-source-{slug}")
+                marker_base = new_repo(tmp, f"marker-schema-base-{slug}")
+                marker_legacy = write_legacy(marker_source, "legacy")
+                populate_legacy_active_state(marker_legacy.parent)
+                marker = marker_base / ".release-loop/.handoff/legacy.json"
+                marker.parent.mkdir(parents=True)
+                base_payload = {
+                    "schema": "release-loop-handoff/v2",
+                    "feature": "legacy",
+                    "progress_path": ".release-loop/progress.md",
+                    "artifact_root": ".release-loop",
+                    "source_worktree": str(marker_source),
+                    "base_owner": str(marker_base),
+                    "destination": ".release-loop",
+                    "manifest_sha256": "0" * 64,
+                    "status": "incomplete",
+                }
+                if payload_overrides:
+                    base_payload.update(payload_overrides)
+                for key in drop_keys:
+                    base_payload.pop(key, None)
+                marker.write_text(json.dumps(base_payload, sort_keys=True) + "\n", encoding="utf-8")
+                before_bytes = marker.read_bytes()
+                try:
+                    handoff_scope(marker_source, marker_base, str(marker_legacy.relative_to(marker_source)), legacy_destination=".release-loop")
+                except Blocked as exc:
+                    assert "legacy handoff marker" in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"marker schema case {slug} did not block")
+                assert marker.read_bytes() == before_bytes
+
+            marker_case("unknown-schema", {"schema": "release-loop-handoff/v1"})
+            marker_case("bogus-schema", {"schema": "bogus"})
+            marker_case("missing-key", drop_keys=("status",))
+            marker_case("bad-status", {"status": "in-progress"})
+
+            forge_source = new_repo(tmp, "marker-schema-forge-source")
+            forge_base = new_repo(tmp, "marker-schema-forge-base")
+            forge_legacy = write_legacy(forge_source, "legacy")
+            (forge_legacy.parent / "reports").mkdir()
+            (forge_legacy.parent / "reports/U1.md").write_text("done\n", encoding="utf-8")
+            handoff_scope(forge_source, forge_base, str(forge_legacy.relative_to(forge_source)), legacy_destination=".release-loop")
+            (forge_base / ".release-loop/reports/U1.md").unlink()
+            forge_marker = forge_base / ".release-loop/.handoff/legacy.json"
+            marker_before = forge_marker.read_bytes()
+            try:
+                handoff_scope(forge_source, forge_base, str(forge_legacy.relative_to(forge_source)), legacy_destination=".release-loop")
+            except Blocked as exc:
+                assert "legacy handoff collision" in str(exc), str(exc)
+            else:
+                raise AssertionError("forged-complete desync did not block")
+            assert forge_marker.read_bytes() == marker_before
+        elif name == "legacy_handoff_complete_destination_regression":
+            source = repo
+            base = new_repo(tmp, "base")
+            legacy_path = write_legacy(source, "legacy")
+            (legacy_path.parent / "reports").mkdir()
+            (legacy_path.parent / "reports/U1.md").write_text("done\n", encoding="utf-8")
+            first = handoff_scope(source, base, str(legacy_path.relative_to(source)), legacy_destination=".release-loop")
+            assert first["cleanup_permitted"] is True
+            marker = base / ".release-loop/.handoff/legacy.json"
+            marker_bytes = marker.read_bytes()
+            second = handoff_scope(source, base, str(legacy_path.relative_to(source)), legacy_destination=".release-loop")
+            assert second["cleanup_permitted"] is True
+            assert marker.read_bytes() == marker_bytes
+
+            for mutation in ("absent", "subset", "mismatch"):
+                mutation_source = new_repo(tmp, f"regression-source-{mutation}")
+                mutation_base = new_repo(tmp, f"regression-base-{mutation}")
+                mutation_legacy = write_legacy(mutation_source, "legacy")
+                (mutation_legacy.parent / "reports").mkdir()
+                (mutation_legacy.parent / "reports/U1.md").write_text("done\n", encoding="utf-8")
+                handoff_scope(mutation_source, mutation_base, str(mutation_legacy.relative_to(mutation_source)), legacy_destination=".release-loop")
+                if mutation == "absent":
+                    shutil.rmtree(mutation_base / ".release-loop/reports")
+                elif mutation == "subset":
+                    (mutation_base / ".release-loop/reports/U1.md").unlink()
+                else:
+                    (mutation_base / ".release-loop/progress.md").write_bytes(b"tampered\n")
+                mutation_marker = mutation_base / ".release-loop/.handoff/legacy.json"
+                marker_before = mutation_marker.read_bytes()
+                try:
+                    handoff_scope(mutation_source, mutation_base, str(mutation_legacy.relative_to(mutation_source)), legacy_destination=".release-loop")
+                except Blocked as exc:
+                    assert "legacy handoff collision" in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"destination {mutation} mutation did not block")
+                assert mutation_marker.read_bytes() == marker_before
         elif name in {
             "archive_direct_escape",
             "archive_parent_escape",
