@@ -65,6 +65,7 @@ The operator revokes or expires the pilot key. The release-loop remains blocked.
 
 - A maintained CLIProxyAPI fork based on v7.2.128 commit `bd34ceca04209ef0460f4b05e3a1a047fb7fad2a`.
 - A maintained strict fork based on `credit-manager` v1.4.2 commit `b1cb5f60a00b0aa9ca833b1bc3a043cebf26e28d`.
+- A maintained Model Router fork based on v0.4.2 commit `594497e5a6a05ad19228063b6fe78ac23949f1f8`.
 - A separate CLIProxyAPI instance with its own Claude OAuth credential.
 - Pre-forward reservation, strict settlement, usage reconciliation, and gateway lifecycle evidence.
 - A compound-loop broker for management credentials and short-lived plugin keys.
@@ -100,6 +101,8 @@ Planning must complete the Gateway plan first. The Integration plan cannot mark 
 | The governed CLIProxyAPI base version is v7.2.128. | `git ls-remote --tags https://github.com/router-for-me/CLIProxyAPI.git 'refs/tags/v7.2.128'` | `2026-08-25T02:32:46Z` | Tag resolves to commit `bd34ceca04209ef0460f4b05e3a1a047fb7fad2a`. | Upstream Git repository. |
 | The current plugin reserves before forwarding but permits settlement above the hold. | `/usr/bin/curl -sS https://raw.githubusercontent.com/yuluo688/credit-manager/v1.4.2/internal/store/settle.go` | `2026-08-25T02:18:10Z` | The bounded source file explicitly permits actual cost above the hold. | Audited v1.4.2 source. |
 | The current input estimate is not a tokenizer ceiling. | `/usr/bin/curl -sS https://raw.githubusercontent.com/yuluo688/credit-manager/v1.4.2/internal/service/request.go` | `2026-08-25T02:18:10Z` | Input estimate is `len(body)/2 + 1` and is clamped to the configured maximum. | Audited v1.4.2 source. |
+| The running instance has no active credit manager. | `GET /v0/management/plugins` with `CLIPROXYAPI_MANAGEMENT_KEY` | `2026-08-25T03:58:31Z` | `credit-manager` is configured but unregistered and disabled. `model-router` v0.3.2 is registered and enabled. | Live management API, sanitized inventory fields only. |
+| The running Model Router usage schema lacks hard-cap correlation fields. | `GET /v0/management/plugins/model-router/usage/requests?limit=1` with `CLIPROXYAPI_MANAGEMENT_KEY` | `2026-08-25T03:58:31Z` | The row has token, cost, model, provider, and timing fields. It has no request, attempt, reservation, auth-fingerprint, route-digest, or pricing-digest field. | Live management API, field names only. |
 
 No management key, plugin key, OAuth token, account name, or usage body is retained in this spec.
 
@@ -120,13 +123,15 @@ The strict plugin owns frontend authentication, reservations, settlement, and au
 
 The compound-loop broker owns the gateway management credential. The Claude child receives only one short-lived plugin key.
 
-Model Router metadata selects the exact Claude provider and model. Usage tracking supplies independent post-request reconciliation.
+The governed core selects the exact Claude provider and model. Model Router usage tracking supplies independent post-request reconciliation.
+
+The governed Model Router fork runs only in `audit_only` mode. It never selects, executes, intercepts, retries, or rewrites a model request.
 
 The governed core invokes the hard-cap hook after final translation, injection, auth selection, and route selection. It invokes the hook before every network attempt.
 
 ### Trusted computing base
 
-The gateway trust boundary includes both governed forks, their Go dependencies, the Go runtime, SQLite, the operating system, and the dedicated OAuth files.
+The gateway trust boundary includes all three governed forks, their Go dependencies, the Go runtime, SQLite, the operating system, and the dedicated OAuth files.
 
 The native plugin runs in the gateway process and can access process memory. Artifact pinning alone is not sufficient.
 
@@ -164,7 +169,13 @@ The design does not prove or cap the Claude subscription invoice. Provider-repor
 
 **R4.** The dedicated gateway uses its own config, auth directory, OAuth login, plugin directory, database, pepper, logs, and process identity.
 
-**R5.** The gateway pins the governed CLIProxyAPI and strict plugin source commits, build inputs, and artifact SHA-256 values.
+**R5.** The gateway pins the governed CLIProxyAPI, strict credit plugin, and Model Router audit plugin source commits, build inputs, and artifact SHA-256 values.
+
+The Model Router audit fork registers only `usage_plugin` and a bounded read-only usage management resource.
+
+It does not register `model_router`, `executor`, `model_registrar`, request or response interceptors, streaming interceptors, configuration writes, price writes, models.dev sync, history reset, or outbound network access.
+
+Its price book is a governed read-only artifact loaded at startup. Startup rejects every extra or missing capability.
 
 ### Strict reservation
 
@@ -471,6 +482,7 @@ No broker error is retryable under the same receipt nonce.
   "gateway_origin_sha256": "<sha256>",
   "cliproxyapi_sha256": "<sha256>",
   "credit_manager_sha256": "<sha256>",
+  "model_router_sha256": "<sha256>",
   "go_toolchain_sha256": "<sha256>",
   "dependency_lock_sha256": "<sha256>",
   "sbom_sha256": "<sha256>",
@@ -565,6 +577,8 @@ The compound-loop generation retains only sanitized summaries and artifact diges
 - Final-body tests for escaped JSON, ASCII, Unicode, tool schemas, and every allowed content block. Image, document, binary, and compressed forms must reject.
 - Core transport tests for redirect, auth fallback, credential rotation, connection reuse, retry, stream failure, and cancellation attempts.
 - Core startup tests for missing, duplicate, disabled, unhealthy, wrong-ID, and wrong-schema hard-cap capabilities.
+- Audit-plugin startup tests reject routing, executor, registrar, interceptor, mutable management, sync, reset, and network capabilities.
+- Each forbidden audit-plugin capability mutation stops gateway startup before the listener opens.
 - ABI mutation tests for every request, response, echo, route, body, auth, and reservation binding.
 - Admission-slot tests for single assignment, settlement handoff, compensation, cancellation, and streaming completion.
 - Property tests around every byte, token, price, and quota boundary.
@@ -604,7 +618,7 @@ The compound-loop generation retains only sanitized summaries and artifact diges
 ## Success Criteria
 
 1. The strict fork never forwards a request without a committed reservation.
-   - **Measured by**: `go test ./...` passes in both governed forks, and the black-box transport fixture records zero network attempts for every admission failure.
+   - **Measured by**: `go test ./...` passes in all three governed forks, and the black-box transport fixture records zero network attempts for every admission failure.
 2. No accepted request can reserve more than 1,500,000 micro-USD.
    - **Measured by**: the boundary suite proves 1,500,000 accepts and 1,500,001 rejects before upstream execution.
 3. The maximum allowed request reserves exactly 1,378,716 micro-USD.
@@ -637,9 +651,10 @@ The compound-loop generation retains only sanitized summaries and artifact diges
 1. **Dedicated gateway origin and host** — The USER selects the exact tailnet origin at the Gateway planning gate. It must differ from `:8317`.
 2. **CLIProxyAPI fork ownership** — The USER selects the maintained core-fork repository before Gateway planning completes.
 3. **Credit-manager fork ownership** — The USER selects the maintained plugin-fork repository before Gateway planning completes.
-4. **Dedicated OAuth identity** — The USER selects the account and approves its isolated login at the deployment gate.
-5. **Hidden billed-content contract** — Gateway planning must identify a governed source for the R11 ceiling. If none exists, planning returns blocked.
-6. **Co-located broker transport** — Gateway planning selects the operator-controlled remote execution channel. It cannot expose the management API beyond loopback.
+4. **Model Router fork ownership** — The USER selects the maintained audit-plugin fork before Gateway planning completes.
+5. **Dedicated OAuth identity** — The USER selects the account and approves its isolated login at the deployment gate.
+6. **Hidden billed-content contract** — Gateway planning must identify a governed source for the R11 ceiling. If none exists, planning returns blocked.
+7. **Co-located broker transport** — Gateway planning selects the operator-controlled remote execution channel. It cannot expose the management API beyond loopback.
 
 Neither open decision authorizes deployment. Deployment requires a separate first-hand outward-action gate.
 
@@ -649,6 +664,7 @@ Neither open decision authorizes deployment. Deployment requires a separate firs
 - [CLIProxyAPI request lifecycle example](https://github.com/router-for-me/CLIProxyAPI/blob/main/examples/plugin/request-lifecycle/README.md)
 - [CLIProxyAPI Usage Observer](https://help.router-for.me/plugin/usage-plugin)
 - [CLIProxyAPI Model Router](https://help.router-for.me/plugin/model-router)
+- [CPA Model Router usage tracking](https://github.com/markhuangai/cpa-plugin-model-router/blob/v0.4.2/docs/usage-tracking.md)
 - [Claude Code CLIProxyAPI client configuration](https://help.router-for.me/agent-client/claude-code)
 - [Claude Code environment variables](https://code.claude.com/docs/en/env-vars)
 - [Claude Sonnet 4.6 pricing](https://platform.claude.com/docs/en/about-claude/pricing)
