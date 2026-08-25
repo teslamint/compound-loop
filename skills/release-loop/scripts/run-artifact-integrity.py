@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -36,8 +37,20 @@ TEST_FAILURES = frozenset((
     "archive-after-manifest-prepare",
     "archive-after-manifest-final",
     "handoff-after-marker",
+    "handoff-after-copy-one",
     "publish-before-final",
 ))
+
+LEGACY_DESTINATION = ".release-loop"
+LEGACY_MARKER_SCHEMA = "release-loop-handoff/v2"
+LEGACY_ACTIVE_ALL = frozenset(("progress.md", ".tmp", JOURNAL_NAME, "briefs", "reports", "reviews", "evidence"))
+LEGACY_PERSISTENT_NAMES = frozenset(("archive", ".handoff", "runs"))
+LEGACY_MARKER_KEYS = frozenset((
+    "schema", "feature", "progress_path", "artifact_root",
+    "source_worktree", "base_owner", "destination", "manifest_sha256", "status",
+))
+LEGACY_MARKER_STATUSES = frozenset(("incomplete", "complete"))
+SHA_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class Blocked(RuntimeError):
@@ -271,6 +284,167 @@ def archive_manifest_entries(root: Path, children: list[Path]) -> list[dict[str,
             else:
                 reject("archive destination conflict", f"unsupported source entry {relative}")
     return sorted(entries, key=lambda row: str(row["path"]))
+
+
+def legacy_active_name(name: str) -> bool:
+    return name in LEGACY_ACTIVE_ALL or name.startswith("progress.md.corrupt-")
+
+
+def legacy_scan_children(repo: Path, container: Path, *, allow_persistent: bool) -> list[Path]:
+    if not container.exists():
+        return []
+    children = []
+    for child in sorted(container.iterdir()):
+        relative = child.relative_to(repo).as_posix()
+        guard(repo, relative, ".release-loop")
+        name = child.name
+        if legacy_active_name(name):
+            children.append(child)
+        elif allow_persistent and name in LEGACY_PERSISTENT_NAMES:
+            continue
+        else:
+            kind = "legacy handoff collision" if allow_persistent else "legacy handoff source"
+            reject(kind, f"unexpected entry {relative}")
+    return children
+
+
+def legacy_manifest_digest(entries: list[dict[str, object]]) -> str:
+    return hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def legacy_is_subset(observed: list[dict[str, object]], full: list[dict[str, object]]) -> bool:
+    return all(entry in full for entry in observed)
+
+
+def legacy_read_marker(marker: Path, expected_fields: dict[str, str]) -> dict[str, str]:
+    if marker.is_symlink() or not marker.is_file():
+        reject("legacy handoff marker", marker.as_posix())
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        reject("legacy handoff marker", f"unreadable {marker.as_posix()}")
+    if not isinstance(payload, dict) or set(payload) != LEGACY_MARKER_KEYS:
+        reject("legacy handoff marker", f"invalid marker shape {marker.as_posix()}")
+    if any(not isinstance(value, str) for value in payload.values()):
+        reject("legacy handoff marker", f"invalid marker shape {marker.as_posix()}")
+    if payload["schema"] != LEGACY_MARKER_SCHEMA:
+        reject("legacy handoff marker", f"unknown marker schema {marker.as_posix()}")
+    if payload["destination"] != LEGACY_DESTINATION:
+        reject("legacy handoff marker", f"unknown destination {marker.as_posix()}")
+    if not SHA_PATTERN.fullmatch(payload["manifest_sha256"]):
+        reject("legacy handoff marker", f"invalid digest {marker.as_posix()}")
+    if payload["status"] not in LEGACY_MARKER_STATUSES:
+        reject("legacy handoff marker", f"invalid status {marker.as_posix()}")
+    for key, value in expected_fields.items():
+        if payload[key] != value:
+            reject("handoff owner mismatch", marker.as_posix())
+    return payload
+
+
+def legacy_write_marker(marker: Path, payload: dict[str, str]) -> None:
+    marker.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+
+
+def legacy_git_active_paths(repo: Path) -> list[str]:
+    tracked = git_tracked(repo, ".release-loop")
+    active = []
+    for relative in tracked:
+        parts = PurePosixPath(relative).parts
+        if len(parts) >= 2 and legacy_active_name(parts[1]):
+            active.append(relative)
+    return active
+
+
+def legacy_copy_child(child: Path, destination_root: Path) -> None:
+    destination_root.mkdir(parents=True, exist_ok=True)
+    target = destination_root / child.name
+    if target.exists() or target.is_symlink():
+        reject("handoff target mismatch", target.as_posix())
+    if child.is_dir():
+        target.mkdir(parents=True)
+        for path in sorted(child.rglob("*")):
+            if path.is_symlink():
+                reject("path boundary", f"symlink component {path}")
+            relative = path.relative_to(child)
+            destination = target / relative
+            if path.is_dir():
+                destination.mkdir(parents=True, exist_ok=True)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(path.read_bytes())
+    else:
+        target.write_bytes(child.read_bytes())
+
+
+def legacy_handoff(
+    repo: Path,
+    base_repo: Path,
+    progress_file: Path,
+    values: dict[str, str],
+    marker_relative: str,
+) -> tuple[Path, Path]:
+    run_id = values["feature"]
+    marker = guard(base_repo, marker_relative, ".release-loop/.handoff")
+    source = repo / ".release-loop"
+    source_children = legacy_scan_children(repo, source, allow_persistent=False)
+    manifest_entries = archive_manifest_entries(source, source_children)
+    digest = legacy_manifest_digest(manifest_entries)
+    destination = base_repo / ".release-loop"
+    expected_fields = {
+        "schema": LEGACY_MARKER_SCHEMA,
+        "feature": run_id,
+        "progress_path": progress_file.relative_to(repo).as_posix(),
+        "artifact_root": ".release-loop",
+        "source_worktree": str(repo),
+        "base_owner": str(base_repo),
+        "destination": LEGACY_DESTINATION,
+    }
+    if marker.exists():
+        payload = legacy_read_marker(marker, expected_fields)
+        if payload["manifest_sha256"] != digest:
+            reject("legacy handoff source", "active manifest changed since marker creation")
+        destination_children = legacy_scan_children(base_repo, destination, allow_persistent=True)
+        observed_entries = archive_manifest_entries(destination, destination_children)
+        if payload["status"] == "complete":
+            if observed_entries != manifest_entries:
+                reject("legacy handoff collision", "destination active state no longer matches complete marker")
+            return legacy_confirm(base_repo, destination, marker)
+        if not legacy_is_subset(observed_entries, manifest_entries):
+            reject("handoff target mismatch", ".release-loop")
+    else:
+        destination_children = legacy_scan_children(base_repo, destination, allow_persistent=True)
+        if destination_children or legacy_git_active_paths(base_repo):
+            reject("legacy handoff collision", "base active legacy state already present")
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        legacy_write_marker(marker, {**expected_fields, "manifest_sha256": digest, "status": "incomplete"})
+    present_names = {child.name for child in destination_children}
+    inject_after_copy = test_failure("handoff-after-copy-one")
+    for child in source_children:
+        if child.name not in present_names:
+            legacy_copy_child(child, destination)
+        elif child.is_dir():
+            copy_missing(child, destination / child.name)
+        else:
+            continue
+        if inject_after_copy:
+            reject("injected handoff interruption", child.name)
+    recheck_entries = archive_manifest_entries(source, legacy_scan_children(repo, source, allow_persistent=False))
+    if legacy_manifest_digest(recheck_entries) != digest:
+        reject("legacy handoff source", "active manifest changed during transfer")
+    dest_children = legacy_scan_children(base_repo, destination, allow_persistent=True)
+    dest_entries = archive_manifest_entries(destination, dest_children)
+    if dest_entries != manifest_entries:
+        reject("handoff target mismatch", ".release-loop")
+    confirmed = legacy_confirm(base_repo, destination, marker)
+    legacy_write_marker(marker, {**expected_fields, "manifest_sha256": digest, "status": "complete"})
+    return confirmed
+
+
+def legacy_confirm(base_repo: Path, destination: Path, marker: Path) -> tuple[Path, Path]:
+    state, selected = discover(base_repo, ".release-loop/progress.md")
+    if state != "resume" or selected != destination / "progress.md":
+        reject("handoff resume verification", ".release-loop")
+    return marker, selected
 
 
 def read_archive_manifest(path: Path) -> dict[str, object]:
@@ -624,18 +798,26 @@ def handoff(
     base_repo: Path,
     progress_path: str,
     marker_path: str | None = None,
+    legacy_destination: str | None = None,
 ) -> tuple[Path, Path]:
     repo = repo.resolve(strict=True)
     base_repo = base_repo.resolve(strict=True)
     if repo == base_repo:
         reject("handoff owner conflict", "source and base resolve to same checkout")
-    inject_after_marker = test_failure("handoff-after-marker")
     progress_file, values, _ = validate_progress(repo, progress_path)
     artifact_root = values["artifact_root"]
-    if artifact_root == ".release-loop":
-        reject("path boundary", "legacy handoff requires an explicit legacy destination contract")
-    source = guard(repo, artifact_root, artifact_root, allow_root=True)
     run_id = values["feature"]
+    if artifact_root == ".release-loop":
+        if legacy_destination != LEGACY_DESTINATION:
+            reject("path boundary", "legacy handoff requires --legacy-destination .release-loop")
+        canonical_marker = f".release-loop/.handoff/{run_id}.json"
+        if marker_path is not None and marker_path != canonical_marker:
+            reject("path boundary", f"legacy marker path must be {canonical_marker}")
+        return legacy_handoff(repo, base_repo, progress_file, values, canonical_marker)
+    if legacy_destination is not None:
+        reject("path boundary", "scoped handoff must not pass --legacy-destination")
+    inject_after_marker = test_failure("handoff-after-marker")
+    source = guard(repo, artifact_root, artifact_root, allow_root=True)
     marker_relative = marker_path or f".release-loop/.handoff/{run_id}.json"
     marker = guard(base_repo, marker_relative, ".release-loop/.handoff")
     destination = guard(
@@ -711,6 +893,7 @@ def parser() -> Parser:
     handoff_parser.add_argument("--base-repo", required=True)
     handoff_parser.add_argument("--progress-path", required=True)
     handoff_parser.add_argument("--marker-path")
+    handoff_parser.add_argument("--legacy-destination")
 
     publish_parser = subparsers.add_parser("publish")
     publish_parser.add_argument("--repo", required=True)
@@ -758,6 +941,7 @@ def execute(arguments: argparse.Namespace) -> dict[str, object]:
             base_repo,
             arguments.progress_path,
             arguments.marker_path,
+            arguments.legacy_destination,
         )
         return {
             "cleanup_permitted": True,
