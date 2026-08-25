@@ -26,7 +26,7 @@ comments_fixed: 0
 comments_deferred: 0
 pr: null
 merged: false
-blocked_reason: Gateway U1-U8 all complete; Ship V1 readiness review pending
+blocked_reason: Gateway U1-U8 all complete; Shipping Step 0 preflight passed (gh authed); Steps 1-8 pending — context budget exceeded, resume with /compound-loop:shipping
 ---
 
 ## Log
