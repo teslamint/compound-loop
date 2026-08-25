@@ -1,6 +1,6 @@
 ---
 title: Dedicated CLIProxyAPI Pre-Spend Quota Gateway
-status: draft
+status: approved
 date: 2026-08-25
 schema: spec/v1
 ---
