@@ -137,6 +137,8 @@ Then the **contradiction-in-one-pass test**: could a careful reader find a contr
 
 ## Step 12: Human Approval Gate
 
+When `release-loop` invoked this skill, atomically set `phase_status: waiting-user` and issue `pending_gate.id: design-approval` before asking. Record a fresh `issued_at` and `expected_answer_class: approve-spec-or-request-revision`. After observing approval or revision, validate its timestamp and reserved receipt. Then atomically remove `pending_gate` and `gate_answer_receipt`, change `phase_status`, and log the outcome. Standalone designing does not write these records.
+
 > "Spec written and committed to `<path>`. Review it and let me know if you want changes before we move to planning."
 
 Wait for the user's response. Changes requested → revise, re-run Step 11, re-commit. Approved → set `status: approved` in the frontmatter, commit, advance. **USER — always human. Never auto-skip.** `enforces: P7`
@@ -152,4 +154,3 @@ After the approval gate: scan the dialogue and the spec for **resolved** domain 
 The only skill invoked after `designing` is `planning`. Do not invoke any implementation, frontend, or scaffolding skill from here.
 
 Out of Scope moved to `references/out-of-scope.md`.
-

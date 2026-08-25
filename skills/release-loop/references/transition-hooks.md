@@ -20,3 +20,11 @@ Transfer only the exact active scope to the base owner. Compare the complete sou
 A matching owner marker resumes only incomplete transfer steps. The local transfer can run headlessly only after it proves that no outward target is reachable. Cancellation preserves the source worktree. A partial target retains its incomplete marker. The next invocation resumes from that marker before cleanup.
 
 If the authoritative base ledger records `phase: ship` and `merged: true`, resume never re-enters pre-merge `shipping`. Use transition logs and the exact handoff marker to resume an interrupted transfer. Finish pending cleanup only after acceptance. Then run each incomplete post-Ship transition before Retro.
+
+## Release-loop pre-merge verification V1: Produce the approved generation
+
+After Review returns `clean`, the first-hand release-loop orchestrator runs the approved plan's V1 section before invoking `shipping`. It requires a current-session pilot approval packet and receipt, a complete pilot, a separately approved full packet and receipt, and one verified complete generation. Persist V1 start and acceptance with the exact generation manifest SHA-256. Missing, failed, interrupted, stale, or unverifiable V1 state blocks Ship before the merge gate. Resume retains completed calls but never reuses a receipt from another session.
+
+## Release-loop pre-archive verification V2: Verify the archived generation
+
+After Retro commits and archive evidence is staged, keep the live progress record nonterminal. Run the approved plan's V2 section against the exact persisted archive destination, tracked baseline, and matching handoff. Persist V2 acceptance and mark only that handoff consumed before setting `phase: done`. Move `progress.md` last. A missing marker, digest mismatch, incomplete generation, failed validation, or foreign destination leaves the loop live and resumable.

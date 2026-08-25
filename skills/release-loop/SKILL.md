@@ -49,6 +49,10 @@ Before every phase dispatch, persist and send one invocation packet containing t
 
 Phase transitions fire only when the invoked skill's exit condition holds — read its terminal state (commit, `mode:agent` envelope, or terminal signal line per `schemas/headless-contract.md`), never assume success from silence. `enforces: P3`
 
+After Review is clean and before `shipping` starts, run the approved plan's `## Release-loop pre-merge verification V1:` contract from `references/transition-hooks.md`. Ship remains blocked until one complete generation digest is accepted and persisted. Resume never infers V1 completion from partial calls or an approval packet.
+
+Before every V1 preparation or resume, require the runner's closed `adapter_eligibility` result before reading or mutating an approval packet, receipt, nonce, or generation. An ineligible adapter blocks with its exact failure and preserves every authority artifact byte-for-byte.
+
 Ship without Retro is an incomplete release: after merge, the loop always enters Retro before reporting done.
 
 ## Approved-plan transition hooks
@@ -81,6 +85,7 @@ When the resume argument is given or the Retro exit condition holds, read refere
 
 ## Gate handling
 
+- Before answering a pending USER gate, require exactly one valid `pending_gate` from `references/progress-schema.md`. Match its ID, phase, answer class, issue timestamp, absent approval, and absent `gate_answer_receipt`. Atomically reserve the answer receipt and Log line before sending one answer. Then require the owning phase to validate the outcome timestamp and atomically clear the gate and receipt with its outcome Log. Missing, duplicate, stale, mismatched, unknown, already-approved, or previously reserved state blocks without sending an answer.
 - USER gates use the harness's blocking question tool per `references/question-tools.md` (plugin root). Record the approval in progress.md (`approved_by: user`, timestamp) — this is the evidence `--skip-design` later relies on.
 - **Gate approval is not execution authorization** (pilot-proven, `enforces: P7`): a relayed "the human approved" message lets the loop *advance*, but protected or outward executions (merging to the default branch, pushing) are performed by whoever holds first-hand consent — the human, or the session that received the approval directly. A phase worker acting on relay will be (correctly) refused by harness permission systems; it prepares the exact command and hands it up instead of executing.
 - **Prepare before the gate resolves** (`enforces: P8`): before the Ship gate resolves — USER question or `--auto` condition evaluation — the orchestrator verifies `final_action` is `determined` and persisted; a gate must not resolve while the command packet exists only in conversation. After execution, flip the record to `executed` in the same edit as the evidence Log line. The record is preparation evidence, never approval (`enforces: P7`).

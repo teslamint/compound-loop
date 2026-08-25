@@ -1,0 +1,423 @@
+{
+  "schema": "release-loop-mutations/v1",
+  "mutations": [
+    {
+      "id": "delete-design-user-gate",
+      "case_id": "L1-full-lifecycle",
+      "grader": "design-user-gate",
+      "expected": "expected-reject"
+    },
+    {
+      "id": "missing-pending-gate",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "design",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": null,
+        "approvals": {},
+        "gate_answer_receipt": null
+      }
+    },
+    {
+      "id": "unknown-pending-gate",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "design",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "publish-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "approve-spec-or-request-revision"},
+        "approvals": {},
+        "gate_answer_receipt": null
+      }
+    },
+    {
+      "id": "already-approved-pending-gate",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "design",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "design-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "approve-spec-or-request-revision"},
+        "approvals": {"design_approved": {"by": "user", "at": "2026-08-24T04:00:45Z"}},
+        "gate_answer_receipt": null
+      }
+    },
+    {
+      "id": "unknown-pending-answer",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "design",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "design-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "approve-spec-or-request-revision"},
+        "approvals": {},
+        "gate_answer_receipt": null,
+        "answer": "publish"
+      }
+    },
+    {
+      "id": "nonmonotonic-pending-answer",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "scenario": "reserve-before-issue",
+        "phase": "design",
+        "answer": "approve",
+        "issued_at": "2026-08-24T04:00:00Z",
+        "reserved_at": "2026-08-24T03:59:59Z"
+      }
+    },
+    {
+      "id": "nonmonotonic-pending-outcome",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "scenario": "outcome-before-reservation",
+        "phase": "design",
+        "answer": "approve",
+        "issued_at": "2026-08-24T04:00:00Z",
+        "reserved_at": "2026-08-24T04:00:02Z",
+        "answered_at": "2026-08-24T04:00:01Z"
+      }
+    },
+    {
+      "id": "malformed-pending-outcome",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "scenario": "outcome-without-timezone",
+        "phase": "design",
+        "answer": "approve",
+        "issued_at": "2026-08-24T04:00:00Z",
+        "reserved_at": "2026-08-24T04:00:01Z",
+        "answered_at": "2026-08-24T04:00:02"
+      }
+    },
+    {
+      "id": "missing-pending-outcome-log",
+      "case_id": "L1-full-lifecycle",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "scenario": "remove-outcome-log",
+        "phase": "design",
+        "answer": "approve",
+        "issued_at": "2026-08-24T04:00:00Z",
+        "reserved_at": "2026-08-24T04:00:01Z",
+        "answered_at": "2026-08-24T04:00:02Z"
+      }
+    },
+    {
+      "id": "skip-v1-before-ship",
+      "case_id": "L1-full-lifecycle",
+      "grader": "transition-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "review": "clean",
+        "next_phase": "ship",
+        "v1_status": "missing",
+        "v2_status": "missing",
+        "phase": "review",
+        "handoff_consumed": false,
+        "generation_digests": ["a", "a", "a", "a"]
+      }
+    },
+    {
+      "id": "replay-completed-phase",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "no-phase-replay",
+      "expected": "expected-reject"
+    },
+    {
+      "id": "mismatched-pending-gate",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "design",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "ship-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "merge-or-nonmerge-disposition"},
+        "approvals": {},
+        "gate_answer_receipt": null
+      }
+    },
+    {
+      "id": "mismatched-pending-answer-class",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "ship",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "ship-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "approve-spec-or-request-revision"},
+        "approvals": {},
+        "gate_answer_receipt": null
+      }
+    },
+    {
+      "id": "stale-pending-gate",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "ship",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "ship-approval", "issued_at": "2026-08-24T03:59:59Z", "expected_answer_class": "merge-or-nonmerge-disposition"},
+        "approvals": {},
+        "gate_answer_receipt": null
+      }
+    },
+    {
+      "id": "duplicate-pending-answer",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "ship",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "ship-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "merge-or-nonmerge-disposition"},
+        "approvals": {},
+        "gate_answer_receipt": {"gate_id": "ship-approval", "gate_issued_at": "2026-08-24T04:00:30Z", "answer": "merge", "reserved_at": "2026-08-24T04:00:45Z"}
+      }
+    },
+    {
+      "id": "duplicate-pending-gate-record",
+      "case_id": "L2-mid-loop-resume",
+      "grader": "pending-gate-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "phase": "ship",
+        "phase_status": "waiting-user",
+        "phase_entered_at": "2026-08-24T04:00:00Z",
+        "observed_at": "2026-08-24T04:01:00Z",
+        "pending_gate": {"id": "ship-approval", "issued_at": "2026-08-24T04:00:30Z", "expected_answer_class": "merge-or-nonmerge-disposition"},
+        "gate_record_count": 2,
+        "approvals": {},
+        "gate_answer_receipt": null
+      }
+    },
+    {
+      "id": "reenter-premerge-shipping",
+      "case_id": "L3-post-merge-resume",
+      "grader": "resume-after-merge",
+      "expected": "expected-reject"
+    },
+    {
+      "id": "skip-v2-before-done",
+      "case_id": "L3-post-merge-resume",
+      "grader": "transition-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "review": "clean",
+        "next_phase": "done",
+        "v1_status": "accepted",
+        "v2_status": "started",
+        "phase": "retro",
+        "handoff_consumed": false,
+        "generation_digests": ["a", "a", "a", "a"]
+      }
+    },
+    {
+      "id": "mismatched-generation-chain",
+      "case_id": "L3-post-merge-resume",
+      "grader": "transition-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "review": "clean",
+        "next_phase": "retro",
+        "v1_status": "accepted",
+        "v2_status": "started",
+        "phase": "ship",
+        "handoff_consumed": false,
+        "generation_digests": ["a", "a", "b", "a"]
+      }
+    },
+    {
+      "id": "early-handoff-consumption",
+      "case_id": "L3-post-merge-resume",
+      "grader": "transition-state",
+      "expected": "expected-reject",
+      "fixture": {
+        "review": "clean",
+        "next_phase": "retro",
+        "v1_status": "accepted",
+        "v2_status": "started",
+        "phase": "retro",
+        "handoff_consumed": true,
+        "generation_digests": ["a", "a", "a", "a"]
+      }
+    },
+    {
+      "id": "drop-work-without-subagents",
+      "case_id": "L4-degraded-dispatch",
+      "grader": "no-coverage-drop",
+      "expected": "expected-reject"
+    },
+    {
+      "id": "different-artifact-kind",
+      "case_id": "SC2-reject-a-different-kind",
+      "grader": "sc2-comparison",
+      "expected": "expected-reject",
+      "fixture": {
+        "invariance": {
+          "left": {"kind": "mlmodelc", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed": {
+          "left": {"kind": "mlmodelc", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+        },
+        "changed_axis": "optimize",
+        "effect_axis": "optimize"
+      }
+    },
+    {
+      "id": "unstable-invariance-output",
+      "case_id": "SC2-reject-b-unstable-invariance",
+      "grader": "sc2-comparison",
+      "expected": "expected-reject",
+      "fixture": {
+        "invariance": {
+          "left": {"kind": "mlpackage", "comparison": {"digest": "stable", "build_id": "uuid-a"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "stable", "build_id": "uuid-b"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed": {
+          "left": {"kind": "mlpackage", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+        },
+        "changed_axis": "optimize",
+        "effect_axis": "optimize"
+      }
+    },
+    {
+      "id": "irrelevant-changed-axis",
+      "case_id": "SC2-reject-c-irrelevant-axis",
+      "grader": "sc2-comparison",
+      "expected": "expected-reject",
+      "fixture": {
+        "invariance": {
+          "left": {"kind": "coremldata.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "coremldata.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed": {
+          "left": {"kind": "coremldata.bin", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "coremldata.bin", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+        },
+        "changed_axis": "source",
+        "effect_axis": "optimize"
+      }
+    },
+    {
+      "id": "metadata-only-difference",
+      "case_id": "SC2-reject-d-metadata-only",
+      "grader": "sc2-comparison",
+      "expected": "expected-reject",
+      "fixture": {
+        "invariance": {
+          "left": {"kind": "mlpackage", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed": {
+          "left": {"kind": "mlpackage", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "mlpackage", "comparison": {"digest": "after"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed_axis": "optimize",
+        "effect_axis": "optimize"
+      }
+    },
+    {
+      "id": "always-passing-guard",
+      "case_id": "SC2-guard-reject",
+      "grader": "sc2-guard",
+      "expected": "expected-reject",
+      "fixture": {
+        "pass_fixture": {
+          "invariance": {
+            "left": {"kind": "weights.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+            "right": {"kind": "weights.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+          },
+          "changed": {
+            "left": {"kind": "weights.bin", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+            "right": {"kind": "weights.bin", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+          },
+          "changed_axis": "optimize",
+          "effect_axis": "optimize"
+        },
+        "fail_fixture": {
+          "invariance": {
+            "left": {"kind": "weights.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+            "right": {"kind": "mlpackage", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+          },
+          "changed": {
+            "left": {"kind": "weights.bin", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+            "right": {"kind": "mlpackage", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+          },
+          "changed_axis": "optimize",
+          "effect_axis": "optimize"
+        }
+      }
+    },
+    {
+      "id": "controlled-same-kind-pairs",
+      "case_id": "SC2-accept-controlled-pairs",
+      "grader": "sc2-comparison",
+      "expected": "pass",
+      "fixture": {
+        "invariance": {
+          "left": {"kind": "weights.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "weights.bin", "comparison": {"digest": "stable"}, "effect": {"latency_ms": 10}, "metadata": {"run": "b"}}
+        },
+        "changed": {
+          "left": {"kind": "weights.bin", "comparison": {"digest": "before"}, "effect": {"latency_ms": 10}, "metadata": {"run": "a"}},
+          "right": {"kind": "weights.bin", "comparison": {"digest": "after"}, "effect": {"latency_ms": 8}, "metadata": {"run": "b"}}
+        },
+        "changed_axis": "optimize",
+        "effect_axis": "optimize"
+      }
+    },
+    {
+      "id": "contradictory-substitute-command",
+      "case_id": "parser-contradictory-substitute-command",
+      "grader": "operative-section-parser",
+      "expected": "expected-reject",
+      "fixture": {
+        "expected_command": "canonical-command",
+        "document": "## Operative commands\n\nRun: canonical-command\nRun: substitute-command\n"
+      }
+    },
+    {
+      "id": "fence-relocation",
+      "case_id": "parser-fence-relocation",
+      "grader": "operative-section-parser",
+      "expected": "expected-reject",
+      "fixture": {
+        "expected_command": "canonical-command",
+        "document": "## Example\n\n~~~~markdown\nRun: canonical-command\n~~~~\n"
+      }
+    }
+  ]
+}

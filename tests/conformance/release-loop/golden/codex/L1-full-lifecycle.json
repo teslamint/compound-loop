@@ -1,0 +1,28 @@
+{
+  "schema": "release-loop-golden-input/v1",
+  "harness": "codex",
+  "case_id": "L1-full-lifecycle",
+  "payload_mode": "exact-current-skill-bytes",
+  "skill_source": "skills/release-loop/SKILL.md",
+  "skill_sha256": "7c43110603dcb5ae829288a4392fec5703a24afc0e03f85c9c9fa70f7cfa94d7",
+  "skill_materialization": {
+    "read_mode": "bytes",
+    "digest": "sha256",
+    "insertion": "verbatim"
+  },
+  "prompt": "Run the complete release-loop lifecycle in the disposable fixture. Stop only at recorded USER gates and finish with an archived Retro.",
+  "scripted_answers": [
+    {
+      "gate_id": "design-approval",
+      "phase": "design",
+      "expected_answer_class": "approve-spec-or-request-revision",
+      "answer": "approve"
+    },
+    {
+      "gate_id": "ship-approval",
+      "phase": "ship",
+      "expected_answer_class": "merge-or-nonmerge-disposition",
+      "answer": "merge"
+    }
+  ]
+}

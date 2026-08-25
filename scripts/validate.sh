@@ -1262,6 +1262,11 @@ if ! bash "$ROOT/scripts/test-run-artifact-integrity.sh" retro; then
   FAIL=1
 fi
 
+# 16. Release-loop conformance corpus and semantic mutations (no model calls)
+if ! bash "$ROOT/scripts/test-release-loop-conformance.sh" static; then
+  fail "release-loop static conformance failed"
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "ALL CHECKS PASSED"

@@ -1,0 +1,12 @@
+default_permissions = "conformance"
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+
+[permissions.conformance.filesystem]
+":minimal" = "read"
+"__CODEX_BIN_DIR__" = "read"
+"__CODEX_RUNTIME_ROOT__" = "read"
+"__FEATURE_ROOT__" = "read"
+
+[permissions.conformance.filesystem.":workspace_roots"]
+"." = "write"
