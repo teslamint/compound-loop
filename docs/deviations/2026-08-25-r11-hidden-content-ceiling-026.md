@@ -46,16 +46,19 @@ The governed sources are:
 
 The strict plugin uses `hidden_allowance: 2048` instead of `hidden_allowance: 65536` in reservation arithmetic.
 
-The maximum reservation drops from 1,378,716 to 959,100 micro-USD:
+The maximum reservation drops from 1,378,716 to 959,694 micro-USD:
 
 ```text
-max input + hidden = 122880 + 2048 = 124928
-max over input + cache_read + cache_creation = 124928:
-  ceil(input * 6.60) + ceil(cache_read * 6.60) + ceil(cache_creation * 6.60) = 824525
+max input-like tokens = 122880 + 2048 = 124928
+worst-case three-category split (each ceil independent):
+  ceil(a * 6.60) + ceil(b * 6.60) + ceil(c * 6.60) where a+b+c = 124928
+  = 824526 micro-USD (three non-zero-mod-5 categories, +1 over single-category)
 ceil(output 8192 * 16.50) = 135168
-maximum category-split reserve = 824525 + 135168 = 959693 micro-USD
+maximum category-split reserve = 824526 + 135168 = 959694 micro-USD
 ```
 
 At settlement, the strict plugin checks `usage.input_tokens <= body_ceiling_tokens + 2048`. A violation triggers R29 (key disabled, eligibility revoked, full reservation charged).
 
 The per-invocation key quota of 1,500,000 micro-USD is unchanged. The deviation reduces the per-request maximum reservation, not the key quota.
+
+The maximum reservation of 959,694 micro-USD permits one full-context request and one partial follow-up within a 1,500,000 quota.
