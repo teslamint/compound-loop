@@ -2,7 +2,8 @@
 schema: plan/v1
 title: Release-loop Cross-Harness Conformance Fuzzing
 type: feat
-status: approved
+status: done
+completed_by: 08e12a82752847b3bead5a96fd251b4ad58eae1b
 date: 2026-08-24
 execution: code
 origin: docs/specs/2026-08-24-release-loop-conformance-fuzzing-design.md

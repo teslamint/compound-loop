@@ -2,8 +2,9 @@
 schema: release-loop/v1
 feature: fuzz-testing
 artifact_root: .release-loop
-phase: ship
-phase_status: blocked
+phase: retro
+phase_status: complete
+retro: docs/retros/2026-08-25-release-loop-conformance-fuzzing-retro.md
 started: 2026-08-23T15:12:18Z
 updated: 2026-08-25T22:38:00Z
 branch: feat/fuzz-testing
@@ -14,10 +15,10 @@ plan: docs/plans/2026-08-24-001-feat-release-loop-conformance-fuzzing-plan.md
 design_approved: {by: user, at: 2026-08-23T15:48:05Z}
 final_action:
   kind: merge-to-base
-  status: determined
+  status: executed
   command: "gh pr merge 25 --squash --delete-branch"
-  marker: "Preparation evidence only; this is not merge approval."
-  updated: 2026-08-25T22:30:00Z
+  marker: "Merge executed; commit 08e12a82752847b3bead5a96fd251b4ad58eae1b"
+  updated: 2026-08-25T23:00:00Z
 ci_attempts: 0
 current_unit: U7
 review_rounds: 1
@@ -25,14 +26,14 @@ feedback_rounds: 0
 comments_fixed: 0
 comments_deferred: 0
 pr: 25
-merged: false
+merged: true
 current_commit_range: a924a5ba825f57df04e982d59185d88c6ab0101e..d5ed0d2ecc8c6a06d1a87b787476d95f63781d19
 review_gate: null
 review_rounds: 2
 feedback_rounds: 1
 comments_fixed: 2
 comments_deferred: 10
-blocked_reason: PR #25 Step 6 complete (12/12 threads resolved); waiting for CodeRabbit re-review approve before merge
+blocked_reason: null
 ---
 
 ## Log
@@ -138,3 +139,5 @@ blocked_reason: PR #25 Step 6 complete (12/12 threads resolved); waiting for Cod
 - 2026-08-25T22:45:00Z ship: external-review — reviewer=CodeRabbit; reviews=1; threads=12; status=CHANGES_REQUESTED; decision=satisfied; reason=review artifacts exist
 - 2026-08-25T22:50:00Z ship: Step 6 review feedback — 12 threads: 2 fixed (updated timestamp, progress-schema YAML format), 1 declined (markdown escape in code span), 9 not-addressing (sealed/approved docs or external gateway fork scope); all 12/12 resolved; commit a2c003a
 - 2026-08-25T22:50:00Z ship: waiting for CodeRabbit re-review approve; USER approved merge on approve
+- 2026-08-25T23:00:00Z ship: CodeRabbit APPROVED after @coderabbitai resolve; merge conflicts resolved (3 files: validate.sh, resume-and-archive.md, transition-hooks.md); golden skill_sha256 and source_generation repinned; CI green; PR #25 merged as squash commit `08e12a82752847b3bead5a96fd251b4ad58eae1b`; merged-result verification `bash scripts/validate.sh` ALL CHECKS PASSED on base main at `08e12a8`; Ship complete
+- 2026-08-25T23:00:00Z retro: entered; headless mode
