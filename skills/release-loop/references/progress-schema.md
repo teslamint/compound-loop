@@ -25,8 +25,17 @@ design_approved: {by: user, at: <timestamp>}
 ship_approved: {by: user | auto, at: <timestamp>, conditions: "CI green, no open P0"}
 
 # Optional sealed verification evidence.
-pre_merge_verification: {id: V1, status: started | accepted, generation_sha256: <sha256>, updated: <timestamp>}
-archive_verification: {id: V2, status: started | accepted, generation_sha256: <sha256>, archive_root: <path>, updated: <timestamp>}
+pre_merge_verification:
+  id: V1
+  status: started | accepted
+  generation_sha256: <sha256>
+  updated: <timestamp>
+archive_verification:
+  id: V2
+  status: started | accepted
+  generation_sha256: <sha256>
+  archive_root: <path>
+  updated: <timestamp>
 
 # Optional pending USER gate. It exists only while one release-loop question waits.
 pending_gate:
