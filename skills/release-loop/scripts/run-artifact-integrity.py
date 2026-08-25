@@ -435,8 +435,9 @@ def legacy_handoff(
     dest_entries = archive_manifest_entries(destination, dest_children)
     if dest_entries != manifest_entries:
         reject("handoff target mismatch", ".release-loop")
+    confirmed = legacy_confirm(base_repo, destination, marker)
     legacy_write_marker(marker, {**expected_fields, "manifest_sha256": digest, "status": "complete"})
-    return legacy_confirm(base_repo, destination, marker)
+    return confirmed
 
 
 def legacy_confirm(base_repo: Path, destination: Path, marker: Path) -> tuple[Path, Path]:
