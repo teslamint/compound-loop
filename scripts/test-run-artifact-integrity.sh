@@ -3956,6 +3956,9 @@ def run_case(name: str) -> None:
                 "import sys\n"
                 f"real_git = {real_git!r}\n"
                 "args = sys.argv[1:]\n"
+                "if args == ['rev-parse', 'HEAD'] and os.path.realpath(os.getcwd()) == os.path.realpath(os.environ['MATRIX_TEST_SOURCE_ROOT']):\n"
+                "    print(os.environ['MATRIX_TEST_SOURCE_COMMIT'])\n"
+                "    raise SystemExit(0)\n"
                 "if args == ['log', '-1', '--format=%H', '--', 'docs/deviations/2026-08-24-final-review-integrity-correction-019.md']:\n"
                 "    print(os.environ['MATRIX_TEST_ADDENDUM_COMMIT'])\n"
                 "    raise SystemExit(0)\n"
@@ -3973,12 +3976,13 @@ def run_case(name: str) -> None:
                 encoding="utf-8",
             )
             signature_git.chmod(0o755)
-            source_commit = git(ROOT, "rev-parse", "HEAD")
+            source_commit = "1" * 40
             addendum_commit = "2" * 40
             unknown_commit = "3" * 40
             probe_environment = {
                 **os.environ,
                 "MATRIX_TEST_SOURCE_COMMIT": source_commit,
+                "MATRIX_TEST_SOURCE_ROOT": str(ROOT),
                 "MATRIX_TEST_SOURCE_STATUS": "G",
                 "MATRIX_TEST_ADDENDUM_COMMIT": addendum_commit,
                 "MATRIX_TEST_ADDENDUM_STATUS": "E",
@@ -4003,6 +4007,7 @@ def run_case(name: str) -> None:
                 environment.update({
                     "PATH": str(signature_git_dir) + os.pathsep + environment.get("PATH", ""),
                     "MATRIX_TEST_SOURCE_COMMIT": source_commit,
+                    "MATRIX_TEST_SOURCE_ROOT": str(ROOT),
                     "MATRIX_TEST_SOURCE_STATUS": source_status,
                     "MATRIX_TEST_ADDENDUM_COMMIT": addendum_commit,
                     "MATRIX_TEST_ADDENDUM_STATUS": addendum_status,
