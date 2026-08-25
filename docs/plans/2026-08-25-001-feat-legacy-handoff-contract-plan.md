@@ -2,7 +2,7 @@
 schema: plan/v1
 title: Legacy Handoff Contract
 type: feat
-status: draft
+status: approved
 date: 2026-08-25
 execution: code
 origin: docs/specs/2026-08-25-legacy-handoff-contract-design.md
