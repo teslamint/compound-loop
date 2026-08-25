@@ -86,6 +86,14 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Supersession** — retiring a plan because a successor replaces it, recorded on the predecessor with a pointer to the successor. Timed at the successor's creation, not its approval, and reachable from draft: a plan can be replaced before anyone approves it. Direction is predecessor→successor only. *Avoid: abandoned* — retirement without a successor pointer has no observed instance and no slot to explain itself.
 - **Rejection record** — an inline schema note preserving why a value was removed from (or refused entry to) a closed vocabulary, so the absence reads as a decision rather than an oversight and the value is not re-proposed uninformed.
 
+## Conformance testing
+
+- **Digest chain** — a cascading integrity proof across conformance test fixtures where one level's output feeds the next level's input. In the release-loop harness: skill-file bytes → golden-file digest → clause-section digests → generation digest. A change at any level invalidates all downstream levels.
+
+## External review
+
+- **Artifact-free success** — a review-bot check-run status of success/passing accompanied by zero review artifacts (submitted reviews, review threads). The state that fires the external review verification gate; a green status alone does not prove a review happened. *Avoid: green status* as evidence of review completion.
+
 ## Review independence
 
 - **Conformance review** — review that checks an artifact against the approved plan or spec that specified it. Finds drift, dataflow gaps, and contradictions between units; inherits the approved artifact's model of what could go wrong, so it cannot surface a failure mode the plan never imagined.
