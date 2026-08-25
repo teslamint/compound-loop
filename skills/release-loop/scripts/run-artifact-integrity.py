@@ -418,15 +418,23 @@ def legacy_handoff(
         marker.parent.mkdir(parents=True, exist_ok=True)
         legacy_write_marker(marker, {**expected_fields, "manifest_sha256": digest, "status": "incomplete"})
     present_names = {child.name for child in destination_children}
-    pending = [child for child in source_children if child.name not in present_names]
     inject_after_copy = test_failure("handoff-after-copy-one")
-    for child in pending:
-        legacy_copy_child(child, destination)
+    for child in source_children:
+        if child.name not in present_names:
+            legacy_copy_child(child, destination)
+        elif child.is_dir():
+            copy_missing(child, destination / child.name)
+        else:
+            continue
         if inject_after_copy:
             reject("injected handoff interruption", child.name)
     recheck_entries = archive_manifest_entries(source, legacy_scan_children(repo, source, allow_persistent=False))
     if legacy_manifest_digest(recheck_entries) != digest:
         reject("legacy handoff source", "active manifest changed during transfer")
+    dest_children = legacy_scan_children(base_repo, destination, allow_persistent=True)
+    dest_entries = archive_manifest_entries(destination, dest_children)
+    if dest_entries != manifest_entries:
+        reject("handoff target mismatch", ".release-loop")
     legacy_write_marker(marker, {**expected_fields, "manifest_sha256": digest, "status": "complete"})
     return legacy_confirm(base_repo, destination, marker)
 

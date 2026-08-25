@@ -113,6 +113,7 @@ CASES = (
     "legacy_handoff_symlinks",
     "legacy_handoff_marker_schema",
     "legacy_handoff_complete_destination_regression",
+    "legacy_handoff_partial_directory_rerun",
     "archive_direct_escape",
     "archive_parent_escape",
     "archive_wrong_family",
@@ -3721,6 +3722,36 @@ def run_case(name: str) -> None:
                 else:
                     raise AssertionError(f"destination {mutation} mutation did not block")
                 assert mutation_marker.read_bytes() == marker_before
+        elif name == "legacy_handoff_partial_directory_rerun":
+            source = repo
+            base = new_repo(tmp, "base")
+            legacy_path = write_legacy(source, "legacy")
+            (legacy_path.parent / "briefs").mkdir()
+            (legacy_path.parent / "briefs/a.md").write_text("a\n", encoding="utf-8")
+            (legacy_path.parent / "briefs/b.md").write_text("b\n", encoding="utf-8")
+            try:
+                handoff_scope(
+                    source, base, str(legacy_path.relative_to(source)),
+                    legacy_destination=".release-loop", failure="handoff-after-copy-one",
+                )
+            except Blocked as exc:
+                assert "injected handoff interruption" in str(exc)
+            else:
+                raise AssertionError("legacy handoff interruption did not fire")
+            marker = base / ".release-loop/.handoff/legacy.json"
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            assert payload["status"] == "incomplete", payload
+            assert (base / ".release-loop/briefs/a.md").read_text(encoding="utf-8") == "a\n"
+            assert (base / ".release-loop/briefs/b.md").read_text(encoding="utf-8") == "b\n"
+            assert not (base / ".release-loop/progress.md").exists()
+            (base / ".release-loop/briefs/b.md").unlink()
+            result = handoff_scope(source, base, str(legacy_path.relative_to(source)), legacy_destination=".release-loop")
+            assert result["cleanup_permitted"] is True
+            payload_after = json.loads(marker.read_text(encoding="utf-8"))
+            assert payload_after["status"] == "complete", payload_after
+            assert (base / ".release-loop/briefs/a.md").read_text(encoding="utf-8") == "a\n"
+            assert (base / ".release-loop/briefs/b.md").read_text(encoding="utf-8") == "b\n"
+            assert discover(base, ".release-loop/progress.md")[0] == "resume"
         elif name in {
             "archive_direct_escape",
             "archive_parent_escape",
