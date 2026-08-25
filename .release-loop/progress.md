@@ -26,7 +26,9 @@ comments_fixed: 0
 comments_deferred: 0
 pr: 25
 merged: false
-blocked_reason: PR #25 created; CI and review pending
+current_commit_range: a924a5ba825f57df04e982d59185d88c6ab0101e..d5ed0d2ecc8c6a06d1a87b787476d95f63781d19
+review_gate: null
+blocked_reason: PR #25 CI green; external review gate stopped — CodeRabbit in progress after 2 re-fetch attempts; USER chose stop; resume with /compound-loop:shipping after CodeRabbit review completes
 ---
 
 ## Log
@@ -125,3 +127,7 @@ blocked_reason: PR #25 created; CI and review pending
 - 2026-08-25T22:30:00Z ship: Step 3 commit — working tree clean, no new commits needed
 - 2026-08-25T22:30:00Z ship: base-topology — origin/main left=0 right=0; action=clean; reason=in sync
 - 2026-08-25T22:30:00Z ship: Step 4 push+PR — pushed feat/fuzz-testing to origin; PR #25 created (https://github.com/teslamint/compound-loop/pull/25)
+- 2026-08-25T22:35:00Z ship: Step 5 CI — GitGuardian pass, CodeRabbit pass (review skipped initially)
+- 2026-08-25T22:35:00Z ship: Step 6 review feedback — 0 reviews, 0 comments, 0 threads
+- 2026-08-25T22:36:00Z ship: external-review — reviewer=CodeRabbit; reviews=0; threads=0; status=skipped; decision=required; reason=OSS manual review required, @coderabbitai review posted
+- 2026-08-25T22:38:00Z ship: external-review — reviewer=CodeRabbit; reviews=0; threads=0; status=pending; decision=stopped; reason=CodeRabbit still in progress after 2 re-fetch attempts (120s); USER chose stop
