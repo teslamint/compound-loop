@@ -47,6 +47,8 @@ Phase transitions fire only when the invoked skill's exit condition holds — re
 
 After Review is clean and before `shipping` starts, run the approved plan's `## Release-loop pre-merge verification V1:` contract from `references/transition-hooks.md`. Ship remains blocked until one complete generation digest is accepted and persisted. Resume never infers V1 completion from partial calls or an approval packet.
 
+Before every V1 preparation or resume, require the runner's closed `adapter_eligibility` result before reading or mutating an approval packet, receipt, nonce, or generation. An ineligible adapter blocks with its exact failure and preserves every authority artifact byte-for-byte.
+
 Ship without Retro is an incomplete release: after merge, the loop always enters Retro before reporting done.
 
 ## Approved-plan transition hooks

@@ -44,6 +44,8 @@ ADAPTER_SUMMARY_CAP = 1500000
 ADAPTER_HANDSHAKE_TIMEOUT = 2
 ADAPTER_TERM_GRACE = 0.2
 ADAPTER_GROUP_ABSENCE_TIMEOUT = 1
+GOVERNED_HARD_CAP_COMPONENTS = None
+GOVERNED_HARD_CAP_PROOF_PATH = None
 corpus_path = data_root / "corpus.json"
 expected_graders = [
     "design-user-gate",
@@ -2172,6 +2174,7 @@ def build_paid_approval_packet(mode_name, command, models, caps, auth_brokers, s
         "caps": caps,
         "auth_brokers": auth_brokers,
         "source_identity": source_identity,
+        "adapter_eligibility_sha256": adapter_eligibility_proof_digest(current_adapter_eligibility()),
         "codex_hard_dollar_cap": "unavailable-observed-token-cap-enforced",
         "pilot_evidence": pilot_evidence,
     }
@@ -2304,7 +2307,77 @@ def new_resource_ledger(caps):
         "codex_tokens": 0,
         "active_process": None,
         "calls": [],
+        "overrun": None,
+        "budget_frozen": False,
     }
+
+
+def current_adapter_eligibility():
+    return {
+        "schema": "release-loop-adapter-eligibility/v1",
+        "adapter": "claude-cli",
+        "eligible": False,
+        "failure": "claude-hard-budget-unavailable",
+    }
+
+
+def require_current_adapter_eligibility():
+    eligibility = current_adapter_eligibility()
+    if eligibility.get("eligible") is not True:
+        fail(eligibility.get("failure", "adapter-ineligible"))
+    proof = eligibility.get("proof")
+    invariant = validate_adapter_eligibility_proof(
+        proof,
+        GOVERNED_HARD_CAP_COMPONENTS,
+        GOVERNED_HARD_CAP_PROOF_PATH,
+    )
+    if invariant is not None:
+        fail(invariant)
+    if eligibility.get("proof_sha256") != adapter_eligibility_proof_digest(proof):
+        fail("adapter-eligibility-proof-digest")
+    return eligibility
+
+
+def validate_adapter_eligibility_proof(record, component_paths, proof_path):
+    required = {"schema", "eligible", "adapter", "enforcer", "verifier", "mechanism", "proof_sha256"}
+    if not isinstance(record, dict) or set(record) != required:
+        return "adapter-eligibility-proof-shape"
+    if record["schema"] != "release-loop-adapter-eligibility-proof/v1" or record["eligible"] is not True:
+        return "adapter-eligibility-proof-state"
+    if not isinstance(component_paths, dict) or set(component_paths) != {"adapter", "enforcer", "verifier"}:
+        return "adapter-eligibility-proof-components"
+    for component in ("adapter", "enforcer", "verifier"):
+        value = record.get(component)
+        if not isinstance(value, dict) or set(value) != {"identity", "version", "sha256"}:
+            return f"adapter-eligibility-proof-{component}"
+        if not all(isinstance(value[key], str) and value[key] for key in ("identity", "version")):
+            return f"adapter-eligibility-proof-{component}"
+        path = Path(component_paths[component])
+        if path.is_symlink() or not path.is_file():
+            return f"adapter-eligibility-proof-{component}"
+        if hashlib.sha256(path.read_bytes()).hexdigest() != value["sha256"]:
+            return f"adapter-eligibility-proof-{component}"
+    if record["verifier"]["identity"] != "release-loop-hard-budget-verifier/v1":
+        return "adapter-eligibility-proof-verifier"
+    if not isinstance(record["mechanism"], str) or not record["mechanism"]:
+        return "adapter-eligibility-proof-mechanism"
+    proof_path = Path(proof_path)
+    if proof_path.is_symlink() or not proof_path.is_file():
+        return "adapter-eligibility-proof-artifact"
+    if hashlib.sha256(proof_path.read_bytes()).hexdigest() != record["proof_sha256"]:
+        return "adapter-eligibility-proof-artifact"
+    if (
+        GOVERNED_HARD_CAP_COMPONENTS is None
+        or GOVERNED_HARD_CAP_PROOF_PATH is None
+        or component_paths != GOVERNED_HARD_CAP_COMPONENTS
+        or proof_path != GOVERNED_HARD_CAP_PROOF_PATH
+    ):
+        return "adapter-eligibility-proof-untrusted"
+    return None
+
+
+def adapter_eligibility_proof_digest(record):
+    return hashlib.sha256((json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()).hexdigest()
 
 
 def reserve_claude(ledger, caps, call_id):
@@ -2331,6 +2404,89 @@ def settle_claude(ledger, call_id, observed_cost):
     ledger["claude_active"] = None
     ledger["calls"].append({"harness": "claude", "call_id": call_id, "charge": str(charge)})
     return None
+
+
+def extract_claude_accounting(stdout, stderr, fixture_root, host_home):
+    terminal_results = []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "result":
+            continue
+        subtype = event.get("subtype")
+        cost = event.get("total_cost_usd")
+        if not isinstance(subtype, str) or not isinstance(cost, (int, float, str)):
+            continue
+        parsed_cost = Decimal(str(cost))
+        if not parsed_cost.is_finite() or parsed_cost < 0:
+            fail("claude-accounting-cost-invalid")
+        terminal_results.append((subtype, parsed_cost))
+    if len(terminal_results) > 1:
+        overruns = [row for row in terminal_results if row[0] == "error_max_budget_usd"]
+        if not overruns:
+            fail("claude-terminal-result-duplicate")
+        result_subtype, parsed_actual = max(overruns, key=lambda row: row[1])
+    elif terminal_results:
+        result_subtype, parsed_actual = terminal_results[0]
+    else:
+        result_subtype, parsed_actual = None, None
+    trust_warning = None
+    fixture_text = str(Path(fixture_root).resolve())
+    home_text = str(Path(host_home).resolve())
+    expected_warning = (
+        r"Ignoring (?P<count>[1-9][0-9]*) permissions\.allow entries from \.claude/settings\.json: "
+        r"this workspace has not been trusted\. Run Claude Code interactively here once and accept the trust "
+        r"dialog, or set projects\[\"" + re.escape(fixture_text) + r"\"\]\.hasTrustDialogAccepted: true in "
+        + re.escape(home_text) + r"/\.claude\.json\."
+    )
+    for line in stderr.splitlines():
+        if re.fullmatch(expected_warning, line):
+            trust_warning = "workspace-untrusted-project-allows-ignored"
+    return {
+        "reported_actual": str(parsed_actual) if parsed_actual is not None else None,
+        "result_subtype": result_subtype,
+        "trust_warning": trust_warning,
+    }
+
+
+def close_claude_overrun(ledger, call_id, accounting):
+    active = ledger.get("claude_active")
+    if not active or active.get("call_id") != call_id:
+        fail("claude-reservation-missing")
+    reserved = active["reserved"]
+    reported_actual = Decimal(str(accounting.get("reported_actual")))
+    if (
+        accounting.get("result_subtype") != "error_max_budget_usd"
+        or not reported_actual.is_finite()
+        or reported_actual <= reserved
+    ):
+        fail("claude-overrun-evidence-invalid")
+    total_before = ledger["claude_remaining"] + reserved
+    raw_remaining = total_before - reported_actual
+    remaining_after = max(Decimal("0"), raw_remaining)
+    record = {
+        "call_id": call_id,
+        "reserved": str(reserved),
+        "reported_actual": str(reported_actual),
+        "difference": str(reported_actual - reserved),
+        "total_before": str(total_before),
+        "raw_remaining": str(raw_remaining),
+        "remaining_after": str(remaining_after),
+        "result_subtype": "error_max_budget_usd",
+        "trust_warning": accounting.get("trust_warning"),
+        "retryable": False,
+        "budget_frozen": True,
+    }
+    ledger["claude_spent"] += reported_actual
+    ledger["claude_remaining"] = remaining_after
+    ledger["claude_active"] = None
+    ledger["active_process"] = None
+    ledger["overrun"] = record
+    ledger["budget_frozen"] = True
+    ledger["calls"].append({"harness": "claude", "call_id": call_id, "overrun": record})
+    return record
 
 
 def record_codex_usage(ledger, caps, call_id, observed_tokens):
@@ -2711,6 +2867,8 @@ def normalized_resource_ledger(ledger):
         "codex_tokens": ledger["codex_tokens"],
         "active_process": ledger["active_process"],
         "calls": ledger["calls"],
+        "overrun": ledger.get("overrun"),
+        "budget_frozen": ledger.get("budget_frozen", False),
     }
 
 
@@ -2766,7 +2924,16 @@ def fake_paid_launcher(call_spec):
     }
 
 
-def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, state_root=None, clock=time.monotonic):
+def execute_paid_schedule(
+    mode_name,
+    caps,
+    models,
+    launcher,
+    state_path=None,
+    state_root=None,
+    clock=time.monotonic,
+    state_writer=write_json_atomic,
+):
     cases = ["L1-full-lifecycle"] if mode_name == "live-pilot" else [
         "L1-full-lifecycle", "L2-mid-loop-resume", "L3-post-merge-resume", "L4-degraded-dispatch"
     ]
@@ -2792,7 +2959,7 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
         }
         if failure is not None:
             state["failure"] = failure
-        write_json_atomic(state_path, state, state_root)
+        state_writer(state_path, state, state_root)
 
     def reject_schedule(reason):
         status = "failed-active-process" if ledger["active_process"] is not None else "failed"
@@ -2838,13 +3005,30 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                     ledger["active_process"] = {"invocation_id": turn_id, "status": "launch-intent"}
                     persist_state("running")
 
-                def after_invocation(turn_id, proof, observed_cost, observed_tokens, session_elapsed=0):
+                def after_invocation(
+                    turn_id,
+                    proof,
+                    observed_cost,
+                    observed_tokens,
+                    session_elapsed=0,
+                    claude_accounting=None,
+                ):
                     if not process_proof_complete(proof):
                         reject_schedule("process-exit-proof-incomplete")
                     session_proofs.append(proof)
                     process_proofs.append(proof)
                     ledger["active_process"] = None
                     if harness == "claude":
+                        active = ledger.get("claude_active")
+                        if (
+                            claude_accounting is not None
+                            and active is not None
+                            and claude_accounting.get("result_subtype") == "error_max_budget_usd"
+                            and Decimal(str(claude_accounting.get("reported_actual"))) > active["reserved"]
+                        ):
+                            close_claude_overrun(ledger, turn_id, claude_accounting)
+                            persist_state("failed", failure="claude-hard-budget-overrun")
+                            fail("claude-hard-budget-overrun")
                         settlement_invariant = settle_claude(ledger, turn_id, observed_cost)
                     else:
                         settlement_invariant = record_codex_usage(ledger, caps, turn_id, observed_tokens)
@@ -2876,6 +3060,12 @@ def execute_paid_schedule(mode_name, caps, models, launcher, state_path=None, st
                         }
                     )
                 except Exception:
+                    if ledger.get("budget_frozen") is True and ledger.get("overrun") is not None:
+                        try:
+                            persist_state("failed", failure="claude-hard-budget-overrun")
+                        except Exception:
+                            pass
+                        fail("claude-hard-budget-overrun")
                     if harness == "claude" and ledger["claude_active"] is not None:
                         active_id = ledger["claude_active"]["call_id"]
                         settle_claude(ledger, active_id, None)
@@ -4660,12 +4850,24 @@ def paid_auth_preflight():
                 status = json.loads(result.stdout)
             except json.JSONDecodeError:
                 fail("auth-isolation-unavailable")
-            if status != {"authenticated": True, "harness": harness, "method": "brokered"}:
+            expected_status = {"authenticated": True, "harness": harness, "method": "brokered"}
+            if harness == "claude":
+                host_home = status.get("host_home")
+                if not isinstance(host_home, str) or not Path(host_home).is_absolute():
+                    fail("auth-isolation-unavailable")
+                try:
+                    resolved_host_home = Path(host_home).resolve(strict=True)
+                except FileNotFoundError:
+                    fail("auth-isolation-unavailable")
+                expected_status["host_home"] = str(resolved_host_home)
+            if status != expected_status:
                 fail("auth-isolation-unavailable")
             readiness[harness] = {
                 "bytes": broker_bytes,
                 "sha256": hashlib.sha256(broker_bytes).hexdigest(),
             }
+            if harness == "claude":
+                readiness[harness]["host_home"] = expected_status["host_home"]
     return readiness
 
 
@@ -4833,8 +5035,23 @@ def actual_paid_launcher(call_spec):
     if harness == "codex" and result.returncode == 0:
         read_bounded_file(result_path, run_root)
     initial_cost, initial_tokens = extract_usage(result.stdout, harness)
+    initial_accounting = (
+        extract_claude_accounting(
+            result.stdout,
+            result.stderr,
+            repo_path,
+            call_spec.get("claude_host_home", home_path),
+        )
+        if harness == "claude"
+        else None
+    )
     call_spec["after_invocation"](
-        initial_turn_id, proof, initial_cost, initial_tokens, time.monotonic() - actual_session_started
+        initial_turn_id,
+        proof,
+        initial_cost,
+        initial_tokens,
+        time.monotonic() - actual_session_started,
+        initial_accounting,
     )
     if result.returncode != 0:
         return {
@@ -4878,12 +5095,23 @@ def actual_paid_launcher(call_spec):
         outputs.append(resumed.stdout)
         proofs.append(resume_proof)
         resume_cost, resume_tokens = extract_usage(resumed.stdout, harness)
+        resume_accounting = (
+            extract_claude_accounting(
+                resumed.stdout,
+                resumed.stderr,
+                repo_path,
+                call_spec.get("claude_host_home", home_path),
+            )
+            if harness == "claude"
+            else None
+        )
         call_spec["after_invocation"](
             resume_turn_id,
             resume_proof,
             resume_cost,
             resume_tokens,
             time.monotonic() - actual_session_started,
+            resume_accounting,
         )
         if resumed.returncode != 0:
             infrastructure_status = "failed"
@@ -5125,7 +5353,7 @@ def validate_resource_group():
                 cap_root,
                 {"PATH": "/usr/bin:/bin"},
                 b"",
-                0.2,
+                2,
                 cap_root,
                 table_reader=empty_process_table,
             )
@@ -5207,8 +5435,11 @@ def validate_resource_group():
             broker_path.write_text(
                 f"#!{sys.executable}\nimport json,os,sys\n"
                 f"harness={harness!r}\n"
+                f"host_home={str(broker_root)!r}\n"
                 "if sys.argv[1:3] == ['status','--json']:\n"
-                " print(json.dumps({'authenticated':True,'harness':harness,'method':'brokered'})); raise SystemExit(0)\n"
+                " status={'authenticated':True,'harness':harness,'method':'brokered'}\n"
+                " if harness=='claude': status['host_home']=host_home\n"
+                " print(json.dumps(status)); raise SystemExit(0)\n"
                 "if len(sys.argv)>1 and sys.argv[1]=='--': os.execv(sys.argv[2],[sys.argv[2],*sys.argv[3:]])\n"
                 "raise SystemExit(2)\n",
                 encoding="utf-8",
@@ -5227,6 +5458,8 @@ def validate_resource_group():
                 key: hashlib.sha256(path.read_bytes()).hexdigest() for key, path in broker_paths.items()
             }:
                 fail("resource broker readiness mismatch")
+            if broker_readiness["claude"].get("host_home") != str(broker_root.resolve()):
+                fail("resource Claude broker host home mismatch")
             broker_marker = broker_root / "replacement-executed"
             broker_paths["claude"].write_text(
                 f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(broker_marker)!r}).write_text('executed')\n",
@@ -5514,15 +5747,15 @@ def validate_resource_group():
         fail("resource normal process control failed")
     process_controls += 1
     timeout = managed_process(
-        [sys.executable, "-c", "import time; time.sleep(5)"], 0.05, table_reader=empty_process_table
+        [sys.executable, "-c", "import time; time.sleep(5)"], 1, table_reader=empty_process_table
     )
     if not timeout["timed_out"] or not timeout["reaped"] or not timeout["process_group_reaped"]:
         fail("resource timeout process control failed")
     process_controls += 1
     resistant = managed_process(
         [sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(5)"],
-        0.05,
-        0.05,
+        1,
+        0.2,
         table_reader=empty_process_table,
     )
     if not resistant["kill_sent"] or not resistant["reaped"] or not resistant["process_group_reaped"]:
@@ -5553,8 +5786,8 @@ def validate_resource_group():
 
     escaped = managed_process(
         [sys.executable, "-c", escaped_code],
+        1,
         0.2,
-        0.05,
         table_reader=scripted_process_table,
     )
     if not escaped["timed_out"] or escaped["descendants_absent"] or not escaped["observed_descendants"]:
@@ -5911,6 +6144,299 @@ def validate_resource_group():
     settle_claude(missing_telemetry, "missing", None)
     if missing_telemetry["claude_spent"] != Decimal(caps["claude_max_invocation_usd"]):
         fail("resource missing telemetry did not consume reservation")
+    eligibility = current_adapter_eligibility()
+    if eligibility != {
+        "schema": "release-loop-adapter-eligibility/v1",
+        "adapter": "claude-cli",
+        "eligible": False,
+        "failure": "claude-hard-budget-unavailable",
+    }:
+        fail("resource current adapter eligibility mismatch")
+    try:
+        require_current_adapter_eligibility()
+    except ValueError as exc:
+        if "claude-hard-budget-unavailable" not in str(exc):
+            fail(f"resource adapter eligibility diagnostic mismatch: {exc}")
+    else:
+        fail("resource ineligible Claude adapter accepted")
+    v1_eligibility_literal = (
+        "Before every V1 preparation or resume, require the runner's closed `adapter_eligibility` result "
+        "before reading or mutating an approval packet, receipt, nonce, or generation."
+    )
+    if (root / "skills/release-loop/SKILL.md").read_text(encoding="utf-8").count(v1_eligibility_literal) != 1:
+        fail("resource V1 adapter eligibility source contract missing")
+    with tempfile.TemporaryDirectory(prefix="eligibility-proof-", dir=str(root / ".release-loop/evidence/U6")) as proof_temp:
+        proof_root = Path(proof_temp)
+        component_paths = {}
+        for component in ("adapter", "enforcer", "verifier"):
+            component_path = proof_root / component
+            component_path.write_text(component + "\n", encoding="utf-8")
+            component_paths[component] = component_path
+        proof_path = proof_root / "proof.json"
+        proof_path.write_text('{"hard_cap":true}\n', encoding="utf-8")
+        eligibility_proof = {
+            "schema": "release-loop-adapter-eligibility-proof/v1",
+            "eligible": True,
+            "adapter": {
+                "identity": "fixture-adapter",
+                "version": "1",
+                "sha256": hashlib.sha256(component_paths["adapter"].read_bytes()).hexdigest(),
+            },
+            "enforcer": {
+                "identity": "fixture-enforcer",
+                "version": "1",
+                "sha256": hashlib.sha256(component_paths["enforcer"].read_bytes()).hexdigest(),
+            },
+            "verifier": {
+                "identity": "release-loop-hard-budget-verifier/v1",
+                "version": "1",
+                "sha256": hashlib.sha256(component_paths["verifier"].read_bytes()).hexdigest(),
+            },
+            "mechanism": "fixture-hard-stop",
+            "proof_sha256": hashlib.sha256(proof_path.read_bytes()).hexdigest(),
+        }
+        if (
+            validate_adapter_eligibility_proof(eligibility_proof, component_paths, proof_path)
+            != "adapter-eligibility-proof-untrusted"
+        ):
+            fail("resource ungoverned adapter eligibility proof accepted")
+        if not re.fullmatch(r"[0-9a-f]{64}", adapter_eligibility_proof_digest(eligibility_proof)):
+            fail("resource adapter eligibility proof digest mismatch")
+        proof_mutations = []
+        for component in ("adapter", "enforcer", "verifier"):
+            for field in ("identity", "version", "sha256"):
+                mutant = copy.deepcopy(eligibility_proof)
+                mutant[component][field] = "0" * 64 if field == "sha256" else ""
+                proof_mutations.append((f"{component}-{field}", mutant))
+        for field, value in (
+            ("schema", "unknown"),
+            ("eligible", False),
+            ("mechanism", ""),
+            ("proof_sha256", "0" * 64),
+        ):
+            mutant = copy.deepcopy(eligibility_proof)
+            mutant[field] = value
+            proof_mutations.append((field, mutant))
+        for label, mutant in proof_mutations:
+            if validate_adapter_eligibility_proof(mutant, component_paths, proof_path) is None:
+                fail(f"resource adapter eligibility proof mutant accepted: {label}")
+        component_paths["adapter"].write_text("changed\n", encoding="utf-8")
+        if validate_adapter_eligibility_proof(eligibility_proof, component_paths, proof_path) is None:
+            fail("resource adapter eligibility launch-time mutation accepted")
+    accounting_fixture_root = Path("/private/tmp/fixture root").resolve()
+    accounting_host_home = Path("/Users/fixture-user").resolve()
+    accounting_stdout = json.dumps({
+        "type": "result",
+        "subtype": "error_max_budget_usd",
+        "total_cost_usd": 1.51532725,
+    }) + "\n"
+    accounting_stderr = (
+        "Ignoring 5 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. "
+        "Run Claude Code interactively here once and accept the trust dialog, or set "
+        f"projects[\"{accounting_fixture_root}\"].hasTrustDialogAccepted: true in "
+        f"{accounting_host_home}/.claude.json.\n"
+    )
+    accounting = extract_claude_accounting(
+        accounting_stdout,
+        accounting_stderr,
+        accounting_fixture_root,
+        accounting_host_home,
+    )
+    if accounting != {
+        "reported_actual": "1.51532725",
+        "result_subtype": "error_max_budget_usd",
+        "trust_warning": "workspace-untrusted-project-allows-ignored",
+    }:
+        fail("resource Claude accounting evidence mismatch")
+    duplicate_non_overrun = (
+        json.dumps({"type": "result", "subtype": "success", "total_cost_usd": 0.1}) + "\n"
+        + json.dumps({"type": "result", "subtype": "success", "total_cost_usd": 0.2}) + "\n"
+    )
+    try:
+        extract_claude_accounting(
+            duplicate_non_overrun,
+            "",
+            accounting_fixture_root,
+            accounting_host_home,
+        )
+    except ValueError as exc:
+        if "claude-terminal-result-duplicate" not in str(exc):
+            fail(f"resource Claude duplicate result diagnostic mismatch: {exc}")
+    else:
+        fail("resource Claude duplicate result accepted")
+    overrun_with_duplicate = accounting_stdout + json.dumps({
+        "type": "result", "subtype": "success", "total_cost_usd": 0.1,
+    }) + "\n"
+    if extract_claude_accounting(
+        overrun_with_duplicate,
+        accounting_stderr,
+        accounting_fixture_root,
+        accounting_host_home,
+    ) != accounting:
+        fail("resource Claude duplicate overrun lost primary failure")
+    malformed_warning_accounting = extract_claude_accounting(
+        accounting_stdout,
+        accounting_stderr.rstrip() + " changed\n",
+        accounting_fixture_root,
+        accounting_host_home,
+    )
+    if (
+        malformed_warning_accounting.get("reported_actual") != accounting["reported_actual"]
+        or malformed_warning_accounting.get("result_subtype") != "error_max_budget_usd"
+        or malformed_warning_accounting.get("trust_warning") is not None
+    ):
+        fail("resource Claude malformed trust warning masked overrun")
+    overrun_caps = {**caps, "claude_total_budget_usd": "4.50", "claude_max_invocation_usd": "1.50"}
+    overrun_ledger = new_resource_ledger(overrun_caps)
+    overrun_ledger["claude_spent"] = Decimal("0.50")
+    overrun_ledger["claude_remaining"] = Decimal("4.00")
+    reserve_claude(overrun_ledger, overrun_caps, "overrun")
+    overrun_ledger["active_process"] = {"invocation_id": "overrun", "status": "launch-intent"}
+    overrun = close_claude_overrun(overrun_ledger, "overrun", accounting)
+    if overrun != {
+        "call_id": "overrun",
+        "reserved": "1.50",
+        "reported_actual": "1.51532725",
+        "difference": "0.01532725",
+        "total_before": "4.00",
+        "raw_remaining": "2.48467275",
+        "remaining_after": "2.48467275",
+        "result_subtype": "error_max_budget_usd",
+        "trust_warning": "workspace-untrusted-project-allows-ignored",
+        "retryable": False,
+        "budget_frozen": True,
+    }:
+        fail("resource Claude overrun record mismatch")
+    if (
+        overrun_ledger["claude_spent"] != Decimal("2.01532725")
+        or overrun_ledger["claude_remaining"] != Decimal("2.48467275")
+        or overrun_ledger["claude_active"] is not None
+        or overrun_ledger["active_process"] is not None
+        or overrun_ledger["overrun"] != overrun
+    ):
+        fail("resource Claude overrun ledger mismatch")
+    authority_paths = (
+        root / ".release-loop/evidence/live-pilot-approval.json",
+        root / ".release-loop/evidence/live-pilot-receipt.json",
+        root / ".release-loop/evidence/live-approval.json",
+        root / ".release-loop/evidence/live-receipt.json",
+        root / ".release-loop/evidence/paid-nonces.json",
+    )
+    authority_before = {path: path.read_bytes() if path.is_file() else None for path in authority_paths}
+    for paid_mode in ("prepare-pilot", "install-full-approval", "live-pilot", "live"):
+        rejected = run_bounded(
+            ["bash", str(root / "scripts/test-release-loop-conformance.sh"), paid_mode],
+            root,
+            {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"},
+            timeout=20,
+        )
+        if rejected.returncode == 0 or "claude-hard-budget-unavailable" not in rejected.stderr:
+            fail(f"resource paid eligibility entrypoint mismatch: {paid_mode}")
+    authority_after = {path: path.read_bytes() if path.is_file() else None for path in authority_paths}
+    if authority_after != authority_before:
+        fail("resource paid eligibility rejection mutated authority")
+    with tempfile.TemporaryDirectory(prefix="overrun-state-", dir=str(root / ".release-loop/evidence/U6")) as state_temp:
+        state_root = Path(state_temp)
+        state_path = state_root / "state.json"
+
+        def overrun_launcher(call_spec):
+            turn_id = f"{call_spec['call_id']}:turn-1"
+            call_spec["before_invocation"](turn_id, 0)
+            raw_proof = managed_process(
+                [sys.executable, "-c", "raise SystemExit(0)"],
+                2,
+                table_reader=empty_process_table,
+            )
+            proof = {
+                "leader_waited": raw_proof["reaped"],
+                "pgid_absent": raw_proof["process_group_reaped"],
+                "descendants_absent": raw_proof["descendants_absent"],
+                "observed_escape_detected": not raw_proof["descendants_absent"],
+            }
+            call_spec["after_invocation"](
+                turn_id,
+                proof,
+                accounting["reported_actual"],
+                0,
+                0,
+                accounting,
+            )
+            fail("resource overrun launcher continued")
+
+        try:
+            execute_paid_schedule(
+                "live-pilot",
+                overrun_caps,
+                models,
+                overrun_launcher,
+                state_path=state_path,
+                state_root=state_root,
+            )
+        except ValueError as exc:
+            if "claude-hard-budget-overrun" not in str(exc):
+                fail(f"resource overrun scheduler diagnostic mismatch: {exc}")
+        else:
+            fail("resource overrun scheduler accepted")
+        overrun_state = json.loads(read_bounded_file(state_path, state_root, 1048576))
+        if (
+            overrun_state.get("status") != "failed"
+            or overrun_state.get("failure") != "claude-hard-budget-overrun"
+            or overrun_state.get("resource_ledger", {}).get("overrun", {}).get("retryable") is not False
+            or overrun_state.get("resource_ledger", {}).get("budget_frozen") is not True
+        ):
+            fail("resource overrun state mismatch")
+        frozen_state = state_path.read_bytes()
+        try:
+            execute_paid_schedule(
+                "live-pilot",
+                overrun_caps,
+                models,
+                overrun_launcher,
+                state_path=state_path,
+                state_root=state_root,
+            )
+        except ValueError as exc:
+            if "orphan-process-state" not in str(exc):
+                fail(f"resource overrun restart diagnostic mismatch: {exc}")
+        else:
+            fail("resource overrun restart accepted")
+        if state_path.read_bytes() != frozen_state:
+            fail("resource overrun restart mutated terminal state")
+        retry_state_path = state_root / "retry-state.json"
+        injected = {"failed": False}
+
+        def fail_first_overrun_write(path, value, allowed_root):
+            if (
+                value.get("status") == "failed"
+                and value.get("failure") == "claude-hard-budget-overrun"
+                and not injected["failed"]
+            ):
+                injected["failed"] = True
+                raise OSError("injected overrun state write failure")
+            write_json_atomic(path, value, allowed_root)
+
+        try:
+            execute_paid_schedule(
+                "live-pilot",
+                overrun_caps,
+                models,
+                overrun_launcher,
+                state_path=retry_state_path,
+                state_root=state_root,
+                state_writer=fail_first_overrun_write,
+            )
+        except ValueError as exc:
+            if "claude-hard-budget-overrun" not in str(exc):
+                fail(f"resource overrun write retry diagnostic mismatch: {exc}")
+        else:
+            fail("resource overrun write retry accepted")
+        retried_state = json.loads(read_bounded_file(retry_state_path, state_root, 1048576))
+        if (
+            not injected["failed"]
+            or retried_state.get("failure") != "claude-hard-budget-overrun"
+            or retried_state.get("resource_ledger", {}).get("budget_frozen") is not True
+        ):
+            fail("resource overrun write retry state mismatch")
     codex_cap = new_resource_ledger(caps)
     if record_codex_usage(codex_cap, caps, "too-many", caps["codex_observed_token_cap"] + 1) != "codex-token-cap-exhausted":
         fail("resource Codex token overflow accepted")
@@ -6608,6 +7134,9 @@ corpus = load_json(corpus_path)
 cases = validate_corpus(corpus)
 validate_golden()
 
+if mode in {"prepare-pilot", "install-full-approval", "live-pilot", "live"}:
+    require_current_adapter_eligibility()
+
 if mode == "fixture":
     fixture_gh_calls, fixture_forbidden, fixture_policies, fixture_audit_rows = validate_fixture()
 if mode == "gate":
@@ -6698,6 +7227,7 @@ if mode in {"live-pilot", "live"}:
         }
         enriched["auth_broker_digests"] = live_auth_brokers
         enriched["expected_source_snapshot"] = live_source_readiness["snapshot"]
+        enriched["claude_host_home"] = live_auth_readiness["claude"]["host_home"]
         return actual_paid_launcher(enriched)
 
     live_observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
