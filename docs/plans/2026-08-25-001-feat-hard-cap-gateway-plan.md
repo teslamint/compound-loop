@@ -2,11 +2,12 @@
 schema: plan/v1
 title: Dedicated CLIProxyAPI Pre-Spend Quota Gateway
 type: feat
-status: draft
+status: approved
 date: 2026-08-25
 execution: code
 origin: docs/specs/2026-08-25-dedicated-cliproxy-hard-cap-gateway-design.md
 deepened: true
+body_seal: 33264c35240d3bda38bae4eee679789625a9ee5fbc139a5a91b43d752116ef3f
 ---
 
 # Dedicated CLIProxyAPI Pre-Spend Quota Gateway Plan
