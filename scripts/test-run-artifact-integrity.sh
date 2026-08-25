@@ -122,6 +122,7 @@ CASES = (
     "handoff_parent_escape",
     "handoff_wrong_family",
     "operative_contract_mutation",
+    "shipping_cleanup_contract_mutation",
     "external_cwd_portability",
     "feature_worktree_owns_scope",
     "resume_skip_no_new_worktree",
@@ -271,6 +272,7 @@ INVOCATIONS = (
     ("skill-discover", SKILL, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" discover --repo . --progress-path <repo-relative-progress-path>'),
     ("archive", ARCHIVE, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" archive --repo . --progress-path <repo-relative-progress-path> --destination <repo-relative-archive-path>'),
     ("handoff", HOOKS, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" handoff --repo <source-worktree> --base-repo <base-checkout> --progress-path <repo-relative-progress-path>'),
+    ("legacy-handoff", HOOKS, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" handoff --repo <source-worktree> --base-repo <base-checkout> --progress-path <repo-relative-progress-path> --legacy-destination .release-loop'),
     ("phase-packet", SKILL, 'progress_path: <repo-relative-progress-path>'),
     ("phase-publisher", SKILL, 'python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" publish --repo . --progress-path <repo-relative-progress-path> --source <repo-relative-temporary-path> --target <repo-relative-final-path>'),
 )
@@ -294,6 +296,8 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["HOOKS"], "`.release-loop/.handoff` is the fixed handoff root"),
         (selected["HOOKS"], "Make the base owner discover and resume that exact progress path."),
         (selected["HOOKS"], "Cancellation preserves the source worktree."),
+        (selected["HOOKS"], "are never active transfer bytes"),
+        (selected["SKILL"], "adds `--legacy-destination .release-loop`"),
         (selected["SKILL"], "directory containing the loaded `SKILL.md`"),
         (selected["SKILL"], "temporary regular file under `<artifact_root>/.tmp/`"),
         (selected["SCHEMA"], "temporary path under `<artifact_root>/.tmp/`"),
@@ -806,21 +810,25 @@ def assert_blocked_preserves(action, sentinel_path: Path, before: bytes, diagnos
     assert sentinel_path.read_bytes() == before
 
 
-def require_phase_consumer_contract() -> None:
+def require_phase_consumer_contract(texts: dict[str, str] | None = None) -> None:
+    selected = texts or PHASE_CONSUMERS
     shared = ("exact repo-relative `progress_path`", "`artifact_root = dirname(progress_path)`")
-    missing = [f"{name}: {fragment}" for name, text in PHASE_CONSUMERS.items() for fragment in shared if fragment not in text]
+    missing = [f"{name}: {fragment}" for name, text in selected.items() for fragment in shared if fragment not in text]
     required = (
-        (PHASE_CONSUMERS["planning"], "<artifact_root>/evidence/U<N>/"),
-        (PHASE_CONSUMERS["implementing"], "<artifact_root>/briefs/U<N>-brief.md"),
-        (PHASE_CONSUMERS["implementing"], "<artifact_root>/reports/U<N>-report.md"),
-        (PHASE_CONSUMERS["implementing"], "<artifact_root>/reviews/U<N>-diff.txt"),
-        (PHASE_CONSUMERS["implementing"], "<artifact_root>/.tmp/U<N>-brief.tmp"),
-        (PHASE_CONSUMERS["implementing"], "<artifact_root>/.tmp/U<N>-report.tmp"),
-        (PHASE_CONSUMERS["implementing"], "<artifact_root>/.tmp/U<N>-<transition-id>-<outcome>.tmp"),
-        (PHASE_CONSUMERS["implementing"], "<artifact_root>/.tmp/U<N>-diff.tmp"),
-        (PHASE_CONSUMERS["implementing"], "<artifact_root>/.tmp/branch-diff.tmp"),
-        (PHASE_CONSUMERS["implementing"], "publish each temporary artifact"),
-        (PHASE_CONSUMERS["reviewing"], "<artifact_root>/evidence/U<N>/"),
+        (selected["planning"], "<artifact_root>/evidence/U<N>/"),
+        (selected["implementing"], "<artifact_root>/briefs/U<N>-brief.md"),
+        (selected["implementing"], "<artifact_root>/reports/U<N>-report.md"),
+        (selected["implementing"], "<artifact_root>/reviews/U<N>-diff.txt"),
+        (selected["implementing"], "<artifact_root>/.tmp/U<N>-brief.tmp"),
+        (selected["implementing"], "<artifact_root>/.tmp/U<N>-report.tmp"),
+        (selected["implementing"], "<artifact_root>/.tmp/U<N>-<transition-id>-<outcome>.tmp"),
+        (selected["implementing"], "<artifact_root>/.tmp/U<N>-diff.tmp"),
+        (selected["implementing"], "<artifact_root>/.tmp/branch-diff.tmp"),
+        (selected["implementing"], "publish each temporary artifact"),
+        (selected["reviewing"], "<artifact_root>/evidence/U<N>/"),
+        (selected["shipping"], "cleanup_permitted: true"),
+        (selected["shipping"], ".release-loop/.handoff/<feature>.json"),
+        (selected["shipping"], "exact base discovery of `.release-loop/progress.md`"),
         (PLAN_SCHEMA, "<artifact_root>/evidence/U<N>/"),
         (PLAN_SCHEMA, "executable probe"),
         (PLAN_SCHEMA, "exact partial durable state"),
@@ -3754,7 +3762,7 @@ def run_case(name: str) -> None:
                     mutations.append(changed)
                 for mutation in mutations:
                     texts = dict(baseline)
-                    texts[key] = texts[key].replace(invocation, mutation, 1)
+                    texts[key] = texts[key].replace(invocation, mutation)
                     assert texts[key] != baseline[key], f"structural mutation target absent: {name_label}"
                     try:
                         require_contract(texts)
@@ -3762,6 +3770,25 @@ def run_case(name: str) -> None:
                         assert name_label in str(exc), str(exc)
                     else:
                         raise AssertionError(f"structural invocation mutation escaped: {name_label}")
+        elif name == "shipping_cleanup_contract_mutation":
+            require_phase_consumer_contract()
+            baseline = dict(PHASE_CONSUMERS)
+            fragments = (
+                ("shipping-cleanup-permitted", "shipping", "cleanup_permitted: true"),
+                ("shipping-complete-marker", "shipping", ".release-loop/.handoff/<feature>.json"),
+                ("shipping-base-discovery", "shipping", "exact base discovery of `.release-loop/progress.md`"),
+            )
+            for label, key, fragment in fragments:
+                assert fragment in baseline[key], f"missing baseline fragment: {label}"
+                texts = dict(baseline)
+                texts[key] = texts[key].replace(fragment, "", 1)
+                assert texts[key] != baseline[key], f"structural mutation target absent: {label}"
+                try:
+                    require_phase_consumer_contract(texts)
+                except AssertionError as exc:
+                    assert fragment in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"structural cleanup mutation escaped: {label}")
         elif name == "external_cwd_portability":
             plugin_root = tmp / "plugin-root"
             copied_skill_root = plugin_root / "skills/release-loop"

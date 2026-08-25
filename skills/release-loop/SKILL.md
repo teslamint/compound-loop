@@ -60,6 +60,8 @@ A post-approval deviation never overrides a transition by discovery alone. When 
 On every Ship entry or resume, inspect the base checkout's exact `.release-loop/.handoff` root. Do this before trusting the selected progress record or removing a worktree. Rerun an owned operation from the preserved feature worktree. A missing or mismatched owner marker blocks Ship and preserves the operation.
 If the authoritative base ledger records `phase: ship` and `merged: true`, resume never re-enters pre-merge `shipping`. Use transition logs and exact handoff state to resume an interrupted transfer. Finish cleanup only after acceptance. Then run each incomplete post-Ship transition before Retro.
 
+For a legacy record (`artifact_root: .release-loop`), the handoff invocation packet adds `--legacy-destination .release-loop`; a scoped record's packet omits it.
+
 When an approved plan declares a Release-loop transition heading, read references/transition-hooks.md. Also read it when `.release-loop/.handoff` is nonempty at Ship entry or resume.
 
 ## Starting a new loop
