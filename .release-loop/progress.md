@@ -1,0 +1,110 @@
+---
+schema: release-loop/v1
+feature: fuzz-testing
+artifact_root: .release-loop
+phase: ship
+phase_status: blocked
+started: 2026-08-23T15:12:18Z
+updated: 2026-08-25T05:18:54Z
+branch: feat/fuzz-testing
+base_branch: main
+flags: []
+spec: docs/specs/2026-08-24-release-loop-conformance-fuzzing-design.md
+plan: docs/plans/2026-08-24-001-feat-release-loop-conformance-fuzzing-plan.md
+design_approved: {by: user, at: 2026-08-23T15:48:05Z}
+final_action:
+  kind: merge-to-base
+  status: predicted
+  command: null
+  marker: "Preparation evidence only; this is not merge approval."
+  updated: 2026-08-23T15:12:18Z
+ci_attempts: 0
+current_unit: U7
+review_rounds: 1
+feedback_rounds: 0
+comments_fixed: 0
+comments_deferred: 0
+pr: null
+merged: false
+blocked_reason: Gateway U1 complete; U2 (CLIProxyAPI core hardcap hook ABI) pending start; 2 upstream go-git vulns noted (not in gateway path)
+---
+
+## Log
+
+- 2026-08-23T15:12:18Z loop: initialized `fuzz-testing` on `feat/fuzz-testing`; final action predicted as merge to `main`
+- 2026-08-23T15:12:18Z design: baseline verification — `bash scripts/validate.sh` -> `ALL CHECKS PASSED`
+- 2026-08-23T15:23:29Z design: draft spec written at `docs/specs/2026-08-24-release-loop-conformance-fuzzing-design.md`
+- 2026-08-23T15:34:26Z design: independent review `not_clean`; repaired hermetic shipping, source linkage, harness protocol, SC2 inventory, resource gates, and post-Ship evidence handoff
+- 2026-08-23T15:47:03Z design: independent re-review `clean`; draft spec committed as `78248103065a58cf80a19ce012d97b8a8df9e089`; waiting for USER approval
+- 2026-08-23T15:48:05Z design: USER approved spec and requested wait before Plan
+- 2026-08-23T15:48:51Z design: approval committed as `d06d993e0de43886ddc68a17b027f9cf7ceaff10`; Design complete, Plan not started by USER request
+- 2026-08-24T02:12:34Z plan: resumed from approved spec; scope confirmation waived because the release-loop caller supplied the approved scope with no new fork
+- 2026-08-24T02:26:44Z plan: draft written at `docs/plans/2026-08-24-001-feat-release-loop-conformance-fuzzing-plan.md`; four-persona deepening review started
+- 2026-08-24T02:34:54Z plan: deepening found CLI protocol, source ownership, live-action, archive, security, and trigger-audit gaps; repairs integrated; Claude `--verbose` deviation committed as `e08e495`
+- 2026-08-24T02:43:39Z plan: draft committed as `6fd87af`; validator and `bash scripts/validate.sh` passed; waiting for USER approval
+- 2026-08-24T03:08:11Z plan: USER approved draft; sealed approval committed as `2ef896c`; Plan complete
+- 2026-08-24T03:08:11Z implement: entered U1 with TDD and EDD; no live model calls authorized
+- 2026-08-24T03:12:00Z implement: U1 serial worker presumed dead after prolonged no-write; interrupted and degraded to inline execution
+- 2026-08-24T03:16:33Z implement: U1 RED missing-corpus observed; GREEN inventory passed; signed commit `62767b6`; task review started
+- 2026-08-24T03:28:03Z implement: U1 complete (commits `62767b6`,`09675d4`; review SPEC_COMPLIANCE=clean QUALITY=clean); entered U2
+- 2026-08-24T03:36:43Z implement: U2 commit `f6b6fa7` review not_clean; sealed plan omits U2 ownership of `corpus.json`, but spec R3 requires corpus generation binding; waiting for USER deviation decision
+- 2026-08-24T04:00:54Z implement: USER approved exact U2 ownership deviation; committed addendum `docs/deviations/2026-08-24-corpus-source-generation-binding-018.md` as `62bbf81`; U2 review repair resumed
+- 2026-08-24T04:06:43Z implement: U2 review repair committed as signed `fb07bc9`; `bash scripts/validate.sh` -> `ALL CHECKS PASSED` in 3.07 seconds; independent re-review started
+- 2026-08-24T04:09:44Z implement: U2 complete (signed commits `f6b6fa7`,`fb07bc9`,`97f1292`; review `SPEC_COMPLIANCE=clean`, `QUALITY=clean`); entered U3
+- 2026-08-24T04:19:30Z implement: U3 hermetic fixture committed as signed `b81d396`; fixture 9 `gh` calls / 14 forbidden calls and `bash scripts/validate.sh` -> `ALL CHECKS PASSED`; independent review started
+- 2026-08-24T04:35:42Z implement: U3 complete (signed commits `b81d396`,`5b59097`,`9da6281`; review `SPEC_COMPLIANCE=clean`, `QUALITY=clean`); entered U4
+- 2026-08-24T04:40:54Z implement: U4 RED reached stale golden source identity; proposed ownership deviation `docs/deviations/2026-08-24-u4-golden-source-repin-019.md` SHA-256 `09455e0161956decf11a6724b716c50dba514c89b606b4b18be35d8abfd55956` committed as signed `8783b8a`; waiting for USER approval
+- 2026-08-24T05:19:59Z implement: USER approved exact deviation 019 at committed path and SHA-256; U4 golden source-identity repin authorized and resumed
+- 2026-08-24T05:28:51Z implement: U4 pending gate contract committed as signed `392ab12`; gate 9 mutations / 7 controls, static 21 mutations / 8 graders, and `bash scripts/validate.sh` -> `ALL CHECKS PASSED`; independent review started
+- 2026-08-24T05:42:35Z implement: U4 complete (signed commits `392ab12`,`83b0dce`; review `SPEC_COMPLIANCE=clean`, `QUALITY=clean`); entered U5
+- 2026-08-24T05:51:02Z implement: U5 zero-model preflight committed as signed `6b430f1`; 2 adapters / 4 calls / 8 negative probes and `bash scripts/validate.sh` -> `ALL CHECKS PASSED`; independent review started
+- 2026-08-24T06:02:24Z implement: U5 complete (signed commits `6b430f1`,`795e414`,`b7f5199`,`e67fb4a`; review `SPEC_COMPLIANCE=clean`, `QUALITY=clean`); entered U6
+- 2026-08-24T06:11:11Z implement: U6 resource engine committed as signed `0e348b4`; fake full run 24 sessions / 20 negative probes / 3 process controls and `bash scripts/validate.sh` -> `ALL CHECKS PASSED`; independent review started
+- 2026-08-24T07:38:31Z implement: U6 complete (signed commits `0e348b4`,`67bae9d`,`65518d3`,`cfa1a9c`,`2398ec6`,`92e0474`,`c19bff7`,`48e78cb`,`b62290a`; review `SPEC_COMPLIANCE=clean`, `QUALITY=clean`); entered U7
+- 2026-08-24T07:39:51Z implement: U7 golden ownership contradiction recorded in `docs/deviations/2026-08-24-u7-golden-source-repin-020.md` SHA-256 `ab7d2bed11336239de16766c4f7249b04753996b7b7a66a4b6d55e4671c2aa04`, signed commit `6d4ef43`; waiting for USER approval
+- 2026-08-24T07:46:06Z implement: USER approved exact deviation 020 at committed path and SHA-256; U7 lifecycle and golden repin resumed
+- 2026-08-24T08:02:13Z implement: U7 transition contract committed as signed `5569c99`; transition 7 controls / 7 negatives, static 29 mutations / 9 graders, and `bash scripts/validate.sh` -> `ALL CHECKS PASSED`; independent review started
+- 2026-08-24T08:40:20Z implement: U7 complete (signed commits `5569c99`,`6f305cb`,`ed9e12a`,`93be73d`,`b7b12ff`,`63db2fa`,`7f00124`,`22b8ef6`; review `SPEC_COMPLIANCE=clean`, `QUALITY=clean`); Implement complete
+- 2026-08-24T08:40:20Z review: phase gate verified last task review clean, all U1-U7 signed, `preflight` and `transition` pass, `bash scripts/validate.sh` -> `ALL CHECKS PASSED`; Review complete
+- 2026-08-24T08:40:20Z ship: entered pre-merge V1 readiness; blocked before receipt or model call because Claude auth is false and `CONFORMANCE_CLAUDE_AUTH_BROKER` / `CONFORMANCE_CODEX_AUTH_BROKER` are absent
+- 2026-08-24T09:18:51Z ship: USER selected broker configuration; live check still shows Claude `loggedIn=false`, no broker environment paths, and Codex only user-home ChatGPT auth; no receipt or model call started
+- 2026-08-24T09:46:10Z ship: corrected auth diagnosis — sandboxed `claude auth status` is false, while USER shell and escalated execution both report authenticated `claude.ai` Max; blocker is Keychain isolation plus absent brokers, not account logout
+- 2026-08-24T10:56:41Z ship: Claude and Codex brokers report authenticated `brokered`; commits `bc9e098` and `9698c61` added OS sandboxing, credential scrubbing, canonical file-tool guards, Claude doctor validation, and immutable policy digests; independent security re-review pending before pilot approval packet preparation
+- 2026-08-24T11:05:25Z ship: V1 security re-review clean after `0851285`; prepared current-source pilot packet `.release-loop/evidence/live-pilot-approval.json` SHA-256 `790217de64a6b777b019ae2894c6b7cb0074666c568570097f3d5cc29ae50c59`; waiting for first-hand USER approval, no receipt or model call started
+- 2026-08-24T11:21:53Z ship: USER approved pilot packet SHA-256 `790217de64a6b777b019ae2894c6b7cb0074666c568570097f3d5cc29ae50c59`; current-session receipt nonce `885a978ff3fa247da81396614dc7189c` written and consumed once
+- 2026-08-24T11:22:45Z ship: pilot stopped `pilot-infrastructure-failure` before either adapter produced a model response; Claude rejected scrub-forced permission mode and `{}` MCP shape, Codex rejected `--approve-for-me` with `--sandbox`; no retry performed
+- 2026-08-24T11:25:08Z ship: committed deviation 021 as `b0edb28`; path `docs/deviations/2026-08-24-live-cli-compatibility-021.md` SHA-256 `09e111d47baf0d1863f120ceea12df56ac50e925000a0050e650a0eec2142ed6`; waiting for first-hand USER approval before implementation or a replacement pilot packet
+- 2026-08-24T11:32:00Z ship: USER approved committed deviation 021 at exact path and SHA-256; compatibility repair resumed under TDD; no replacement model call authorized
+- 2026-08-24T11:39:00Z ship: deviation 021 compatibility repair committed as `28d21bb`; preflight, fixture, resource, and full validation passed; independent correctness and security review started
+- 2026-08-24T11:44:00Z ship: review found Claude Glob pattern traversal, incomplete scheduler failure persistence, and non-deterministic Codex host-read isolation; replacement packet preparation remained stopped
+- 2026-08-24T11:47:00Z ship: Claude canonical pattern guards and scheduler failure seams committed as `15324fc`; resource negatives increased to 33 and all deterministic gates passed
+- 2026-08-24T11:50:17Z ship: committed deviation 022 as `4ba398a`; path `docs/deviations/2026-08-24-codex-permission-profile-022.md` SHA-256 `4d79609d063791cb955e607c4076d01a30e09ee3f8753b25130d5cab3ff4359c`; zero-model Codex Seatbelt probe accepted the proposed least-privilege profile; waiting for first-hand USER approval
+- 2026-08-24T12:09:58Z ship: USER approved committed deviation 022 at exact path and SHA-256; least-privilege Codex profile implementation resumed under TDD; no replacement model call authorized
+- 2026-08-24T12:20:00Z ship: Codex permission profile implemented in `9520d54`; actual Seatbelt allowed fixture write and feature read, denied feature write and base read; broker profile copy probe passed
+- 2026-08-24T12:22:00Z ship: Codex global profile argv corrected in `ffe2900`; effective profile audit and callback failure preservation committed as `63558ec`; independent security and architecture reviews returned clean
+- 2026-08-24T12:24:44Z ship: prepared replacement V1 pilot packet `.release-loop/evidence/live-pilot-approval.json` SHA-256 `32764384908ca38c35f43ae568b24b31a2e509d753019530c72ce309577e2491` for source `63558ec`; waiting for fresh first-hand USER approval, no replacement receipt or model call started
+- 2026-08-24T12:56:51Z ship: USER approved replacement pilot packet SHA-256 `32764384908ca38c35f43ae568b24b31a2e509d753019530c72ce309577e2491`; fresh receipt nonce `5729b948f49e92f025d68c51b3367eb7` written and consumed once
+- 2026-08-24T12:58:14Z ship: replacement pilot stopped on Claude turn 1 with `adapter output exceeded cap`; bounded capture marked overflow, killed leader with return code -9, and recorded `failed-active-process`; no retry or Codex session started
+- 2026-08-24T13:41:50Z ship: committed deviation 023 as `1193365`; path `docs/deviations/2026-08-24-live-adapter-output-cap-023.md` SHA-256 `013e6e2537ed93ba7d7df80f9727da9ec9d2e2508e2ebb9873a86df1f2531160`; waiting for first-hand USER approval, no retry started
+- 2026-08-24T13:48:50Z ship: USER approved committed deviation 023 at exact path and SHA-256; output-cap repair resumed under TDD; no model call authorized
+- 2026-08-24T13:52:38Z ship: fixed 1 MiB adapter cap committed as `f8c9d7f`; below-cap and above-cap supervisor tests plus all repository gates passed; prepared packet `.release-loop/evidence/live-pilot-approval.json` SHA-256 `4f467c2477a86dc2747b75caacabf2105d7dff4b41d33be36090217065496669`; waiting for fresh USER approval
+- 2026-08-24T21:24:52Z ship: USER approved pilot packet SHA-256 `4f467c2477a86dc2747b75caacabf2105d7dff4b41d33be36090217065496669`; execution withheld before receipt because independent security review found unbounded post-overflow buffering and direct-child-only termination; packet invalidated for source repair
+- 2026-08-24T21:57:42Z ship: committed deviation 024 as `1d3fdb1`; path `docs/deviations/2026-08-25-adapter-descendant-containment-024.md` SHA-256 `a255e0654443e7a00142d5451dc70744ecd01c19dc2e708f0a2aa9ca13e6b7e5`; waiting for first-hand USER approval, no receipt or model call started
+- 2026-08-24T22:33:12Z ship: USER approved committed deviation 024 at exact path and SHA-256; process-group containment repair resumed under TDD; no model call authorized
+- 2026-08-24T22:42:29Z ship: deviation 024 implementation committed as `5d14c0c`; preflight, fixture, resource, full validation, and three-lane re-review passed; prepared packet `.release-loop/evidence/live-pilot-approval.json` SHA-256 `f69031ae53f077dca745be86e09956e527f792a79b893a9086c0599a473bc7e1`; waiting for fresh first-hand USER approval
+- 2026-08-24T23:13:10Z ship: USER approved pilot packet SHA-256 `f69031ae53f077dca745be86e09956e527f792a79b893a9086c0599a473bc7e1`; fresh receipt nonce `2f58d74d9ae9368c11f60fa1bcbc4f17` prepared for one execution
+- 2026-08-24T23:25:01Z ship: pilot 4 stopped `claude-settlement-invalid`; Claude reported `error_max_budget_usd` with actual cost USD `1.51532725`, above the approved per-invocation cap USD `1.50`; output stayed within cap, process group reaped, Codex did not start, nonce consumed, no retry performed
+- 2026-08-25T00:02:52Z ship: USER selected strict Claude hard-cap policy; committed deviation 025 as `4b89ff7`; path `docs/deviations/2026-08-25-claude-hard-budget-eligibility-025.md` SHA-256 `bc0b54de890403666c57f30f2b5a777e72b79789c65583ea39a3459c59327f1e`; validation and three-lane review passed; waiting for first-hand USER approval, no model call authorized
+- 2026-08-25T00:16:42Z ship: USER approved committed deviation 025 at exact path and SHA-256; hard-budget eligibility and overrun accounting implementation resumed under TDD and EDD; no model call authorized
+- 2026-08-25T01:12:06Z ship: deviation 025 implementation committed as `45da922`; all paid and approval entry points now reject `claude-hard-budget-unavailable` before authority access; pilot 4 state reconciled to frozen `claude-hard-budget-overrun`; preflight, fixture, resource, static, full validation, and three-lane review passed; Ship V1 blocked until a governed hard-cap Claude adapter exists
+- 2026-08-25T03:10:03Z ship: dedicated CLIProxyAPI pre-spend quota gateway draft committed as `f65a9a8`; path `docs/specs/2026-08-25-dedicated-cliproxy-hard-cap-gateway-design.md` SHA-256 `ec68d561606ec9597d54fc941d096ee33314e4ea5c8619477b59c424c1bd9a46`; validation and fresh adversarial review passed; waiting for USER design approval, no deployment or model call authorized
+- 2026-08-25T04:03:46Z ship: authenticated read-only management inspection found Model Router v0.3.2 enabled and credit-manager unregistered/disabled; usage rows lack hard-cap correlation fields; revised gateway draft committed as `60ed368`, SHA-256 `7391e1fe1f7da4746d55b5ef7a74a10041e1d0d70ba484f52a49ad252fcc1a7c`; Model Router v0.4.2 audit-only fork contract and final adversarial clean review recorded; waiting for USER design approval
+- 2026-08-25T04:14:29Z ship: USER approved dedicated pre-spend quota gateway design; frontmatter approval and resolved vocabulary committed as `e968f44`; approved spec SHA-256 `b5db6bab7aeb6d8b8d7a87e65977772067208d011837aec4e9f392a8e3593814`; no implementation, deployment, OAuth login, key creation, or model call authorized
+- 2026-08-25T04:32:05Z ship: resumed from blocked state; USER selected "Gateway 구현 진행"; added `artifact_root: .release-loop` for current schema validation; Gateway planning dispatch pending after R11 hidden-content ceiling constraint probe
+- 2026-08-25T04:37:23Z ship: resolved Open Decision 6 (R11 hidden billed-content ceiling governed source); Claude API pricing docs (platform.claude.com) confirm provider-side system-added tokens are NOT billed; actual hidden billed content is tool-use system prompt at ~286-804 tokens per model; USER approved adjusting R11 ceiling to ~2,048 tokens in Gateway plan (deviation from spec's 65,536); Gateway planning dispatch starting
+- 2026-08-25T04:48:54Z ship: committed deviation 026 as `0bb5fb7`; path `docs/deviations/2026-08-25-r11-hidden-content-ceiling-026.md` SHA-256 `c61833f91d695b74dfb6624dfe6b34e420288cca162fed2d355536969097dc73`; USER approved; replaces R11 65,536-token ceiling with 2,048-token runtime-checked allowance; Gateway plan draft starting
+- 2026-08-25T05:02:15Z ship: Gateway plan drafted, adversarial-reviewed (P1×2 P2×4 P3×2 addressed), draft committed as `e404c1c`, USER approved, sealed and committed as `1b70a38`; plan at `docs/plans/2026-08-25-001-feat-hard-cap-gateway-plan.md` body_seal `33264c35240d3bda38bae4eee679789625a9ee5fbc139a5a91b43d752116ef3f`; 8 units (U1-U8) ready for Gateway implementation; blocked_reason unchanged until U1 starts
+- 2026-08-25T05:18:54Z ship: resumed from blocked state; HEAD `1b70a38` matches; no handoff at base `.release-loop/.handoff`; U1 started: three upstream repos cloned to `~/workspace/gateway-forks/{cliproxyapi,credit-manager,model-router}`, commit SHA verified against plan (bd34cec/b1cb5f6/594497e), governed/hardcap branches created, push remotes disabled; SDK coupling gap found: model-router pins CLIProxyAPI v7.2.123 vs host v7.2.128; SBOM tools (syft, cyclonedx-gomod) not installed; GOTOOLCHAIN=auto needs pinning; baseline reproducibility test pending
+- 2026-08-25T16:00:00Z ship: session resumed; HEAD `1b70a38` confirmed; base `.release-loop/.handoff` absent; plan body_seal `33264c35…` verified; credit-manager already on CLIProxyAPI v7.2.128, model-router still v7.2.123 (needs `replace` directive); cliproxyapi `bd34ceca` confirmed as tag `v7.2.128`; SBOM tools still absent; pending target platform decision before build skeleton
+- 2026-08-25T16:30:00Z ship: Gateway U1 blockers resolved: target platform darwin/arm64 (USER selected); model-router SDK coupling fixed via `replace` directive committed as `8af2e7b` on governed/hardcap; SBOM tools installed (cyclonedx-gomod v1.8.0, govulncheck); GOTOOLCHAIN pinned to `go1.27.0` in Makefile; build script at `~/workspace/gateway-forks/Makefile` SHA-256 `b6067b0f69c60b8b2691627f6513ef0e08214a0c211ca4cd1510155096a0894c`
+- 2026-08-25T16:35:00Z ship: Gateway U1 reproducible build PASSED; gateway-core `f29aded…`, credit-manager-strict.so `bc049ce…`, model-router-audit.so `9ced5b0…` — two consecutive builds identical; SBOM generated CycloneDX 1.6 (cliproxyapi 109 components, credit-manager 13, model-router 9); govulncheck: credit-manager 0, model-router 0, cliproxyapi 2 upstream go-git vulns (GO-2026-6214 path traversal, GO-2026-6213 symlink follow — both fixable via go-git v6.0.0-alpha.5 bump, not in gateway execution path); Gateway U1 complete
