@@ -13,6 +13,12 @@ From "review clean" to "merged and cleaned up," with evidence at every claim -- 
 - **Exit**: PR merged and cleaned up, or an explicit terminal state -- kept-as-is, discarded, escalated to human, or **preparation-only** (see Step 0).
 - **Gate**: merge is USER by default; `--auto` requires CI green and no open P0 (P1s addressed or explicitly deferred). `enforces: P7`
 
+## Run artifact scope
+
+When `release-loop` invokes shipping, it supplies one exact repo-relative `progress_path`. Validate that record before using it and require `artifact_root = dirname(progress_path)` to match the ledger's `artifact_root`. A missing, ambiguous, mismatched, symlinked, or out-of-root path blocks before any write. Derive every persisted sibling target from `artifact_root`; before its first write, reject any unowned filesystem or tracked target. A valid legacy ledger may update itself at the selected path, but no sibling target inherits that exemption. Standalone shipping retains its git-dir state sink and creates no release-loop artifact.
+
+Legacy compatibility only: `release-loop` -> `.release-loop/progress.md` names a selected valid legacy ledger. It is never a new-run default or sibling-write authority.
+
 ## Step 0: Capability Preflight
 
 Read and follow `references/capability-preflight.md` before proceeding to Step 1. If any required capability is unavailable, execution stops in preparation-only status -- no push, PR creation, CI watch, or merge actions are performed.
@@ -79,17 +85,23 @@ If `git fetch` fails, stop -- topology verification is unavailable. Record `fetc
 
 When `local_ahead > 0`, check whether the feature branch actually inherited any local-only commits by comparing commit counts: `inherited=$(( $(git rev-list --count "origin/$base_branch".."$feature_branch") - $(git rev-list --count "$base_branch".."$feature_branch") ))`. If `inherited == 0`, no local-only commits are in the PR scope -- skip the gate. This catches the intermediate case where the feature branched from L1 while main advanced to L2 (tip-only `--is-ancestor` would miss L1). If `inherited > 0`, list the local-only commits (`git log --oneline "origin/$base_branch".."$base_branch"`) and present a blocking question with three options:
 
+Before the rebase option can execute, validate the ledger's `current_commit_range` against full `git merge-base <base_branch> HEAD` and `git rev-parse HEAD` values. Persist one current-session USER rewrite approval before mutation. The record binds the approver, session identity, fresh timestamp, old range, exact rewrite command, and exact target base. A missing, prior-session, cancelled, failed, or mismatched approval blocks before command execution with `stale-commit-range`. A result-only record never authorizes a rewrite.
+
 - **Rebase feature onto remote base** (recommended): `git rebase --onto "origin/$base_branch" "$base_branch" "$feature_branch"`. This transplants only feature-unique commits onto the remote base tip, stripping the inherited local-ahead commits without touching the local base ref. After success, verify with `git log --oneline "origin/$base_branch".."$feature_branch"` -- it must contain only feature-unique commits; if any local-ahead commits remain, stop and report. If the feature branch already exists on the remote (update-PR path), the subsequent push will be non-fast-forward; use `git push --force-with-lease origin "$feature_branch"` for that push only.
 - **Accept divergence**: proceed with the push. The durable record must log: the local-ahead commit list, acknowledgment that the PR scope includes those commits, and that Step 8's merged-result fast-forward check will fail (manual base reconciliation required after merge).
 - **Stop**: abort shipping; user resolves manually.
 
-If `git rebase --onto` encounters conflicts, run `git rebase --abort`, stop, and report. Never auto-resolve rebase conflicts.
+If `git rebase --onto` encounters conflicts, never auto-resolve them. Run `git rebase --abort`, verify the old range, persist the failed result described below, then stop and report.
+
+After the exact rewrite command returns, persist one post-mutation result linked to its approval. Record the exit status, exact verification command, old range, and observed new range. Success consumes the approval, updates `current_commit_range`, clears `review_gate`, and preserves review events and counts. Failure or mid-conflict cancellation runs `git rebase --abort`, verifies and retains the old authoritative range, records the terminal result, clears any gate invalidated while HEAD changed, and invalidates the approval. Pre-command cancellation records `cancelled` without running the command. A failed or cancelled attempt requires fresh current-session USER approval before retry.
+
+On every shipping entry and resume, compare the observed range with `current_commit_range`. Descendant progress refreshes the range and clears `review_gate`. An unapproved non-descendant head blocks with `stale-commit-range`; neither counters nor historical event rows change. Shipping proceeds toward push only after a clean final or standalone `review_gate` names the current exact head.
 
 **`--auto` mode**: escalate to blocked -- never auto-resolve base divergence. Local-ahead commits may be intentional unpushed work; shipping cannot judge intent. This matches the PR #29 precedent, which required typed authorization plus a backup branch for base-ref reconciliation. Log `blocked_reason` in the durable record and surface to the user.
 
 **Preparation-only path** (Step 0 determined no network): skip this gate -- the push will not happen. Include a note in the manual-steps file: "Before pushing, check base-branch sync: `git fetch origin <base> --quiet && git rev-list --left-right --count origin/<base>...<base>` -- stop if fetch fails."
 
-Log the result in the shipping state sink: `release-loop` path -> `.release-loop/progress.md` Log line `<timestamp> ship: base-topology — origin/<base> left=N right=M; action=<clean|rebase-onto|accepted|blocked|stopped|fetch-failed|rebase-conflict>; reason=<...>`; standalone path -> `shipping-final-action.md` in git-dir. `enforces: P3, P8`
+Log the result in the shipping state sink: `release-loop` path -> the supplied exact `progress_path` Log line `<timestamp> ship: base-topology — origin/<base> left=N right=M; action=<clean|rebase-onto|accepted|blocked|stopped|fetch-failed|rebase-conflict>; reason=<...>`; standalone path -> `shipping-final-action.md` in git-dir. `enforces: P3, P8`
 
 **Guardrail, verbatim:** the PR body **must** be written to a temp file and passed via `--body-file <path>`. Never use `--body-file -`, stdin pipes, heredoc-to-stdin, or `--body "$(cat ...)"` -- these can silently produce an empty PR body while `gh` still exits 0 and returns a URL.
 
@@ -100,7 +112,7 @@ EOF
 gh pr create --title "<title>" --body-file "$BODY_FILE"
 ```
 
-If invoked from `release-loop`, record the PR number in `.release-loop/progress.md`. `enforces: P8`
+If invoked from `release-loop`, record the PR number in the supplied exact `progress_path`. `enforces: P8`
 
 ## Step 5: CI Loop
 
@@ -125,11 +137,11 @@ Fetch **all** review threads/comments via the API -- never work from a summarize
 
 **Before claiming "all resolved," re-fetch the comment list via the API** and verify every ID is addressed or carries an explicit deferred rationale -- never claim resolution from memory or a commit-message summary. `enforces: P3`
 
-If invoked from `release-loop`, update `.release-loop/progress.md` with review rounds and comments fixed/deferred. `enforces: P8`
+If invoked from `release-loop`, update the supplied exact `progress_path` with review rounds and comments fixed/deferred. `enforces: P8`
 
 ## Step 7: Merge Gate
 
-**Persist before the gate resolves**: before asking the blocking question or evaluating `--auto` conditions, write the exact merge command (the `gh pr merge <number> --squash --delete-branch` line with literal values) plus the non-authorization marker "preparation evidence -- first-hand consent still required" to the durable record. This holds on every path that reaches this step -- interactive, `--auto`, and dispatched worker; preparation-only never gets here, having terminated at Step 0 with its manual-command file. Re-persist whenever the command changes (e.g. the merge strategy is overridden by repo convention). On every merge path, append a separate `merged-result-verification-command` record containing the exact full-suite Step 1 command with literal values before presenting the merge gate; a missing or ambiguous record blocks the gate. Sink by mode: dispatched worker -> the hand-up packet (the structured payload a dispatched worker returns to its orchestrator when it cannot execute the protected action); `release-loop` -> `.release-loop/progress.md`; standalone -> the worktree's git-dir state (`$(git rev-parse --git-dir)/shipping-final-action.md`, not a tracked or root-level file). The record is preparation evidence, not authorization. `enforces: P3, P7`
+**Persist before the gate resolves**: before asking the blocking question or evaluating `--auto` conditions, write the exact merge command (the `gh pr merge <number> --squash --delete-branch` line with literal values) plus the non-authorization marker "preparation evidence -- first-hand consent still required" to the durable record. This holds on every path that reaches this step -- interactive, `--auto`, and dispatched worker; preparation-only never gets here, having terminated at Step 0 with its manual-command file. Re-persist whenever the command changes (e.g. the merge strategy is overridden by repo convention). On every merge path, append a separate `merged-result-verification-command` record containing the exact full-suite Step 1 command with literal values before presenting the merge gate; a missing or ambiguous record blocks the gate. Sink by mode: dispatched worker -> the hand-up packet (the structured payload a dispatched worker returns to its orchestrator when it cannot execute the protected action); `release-loop` -> the supplied exact `progress_path` (legacy compatibility mapping: `release-loop` -> `.release-loop/progress.md` only when that exact legacy ledger was selected); standalone -> the worktree's git-dir state (`$(git rev-parse --git-dir)/shipping-final-action.md`, not a tracked or root-level file). The record is preparation evidence, not authorization. `enforces: P3, P7`
 
 **Message freshness**: if review rounds (Step 6) produced additional fix commits, regenerate the merge commit message from the current diff against base — the Step 3 draft describes the pre-review artifact and is stale after review changes it.
 
@@ -190,7 +202,7 @@ This list is not exhaustive. An unrecognized integration produces no false posit
 
 **`--auto` mode**: escalate to blocked when the gate fires -- never auto-waive a required external review. Log `blocked_reason: external-review-artifact-free` in the durable record and surface to the user. When the gate evaluates to satisfied or not-applicable, `--auto` continues without user interaction.
 
-**Durable record.** Log the gate result in the shipping state sink: `release-loop` path -> `.release-loop/progress.md` Log line `<timestamp> ship: external-review — reviewer=<name|none>; reviews=<N>; threads=<N>; status=<value>; decision=<satisfied|waived|required|not-applicable|blocked|stopped>; reason=<...>`; standalone path -> `shipping-final-action.md` in git-dir. Waiver evidence must include: the user's stated rationale, the review-bot name, and the timestamp. A waiver without rationale is a schema violation. `enforces: P3, P8`
+**Durable record.** Log the gate result in the shipping state sink: `release-loop` path -> the supplied exact `progress_path` Log line `<timestamp> ship: external-review — reviewer=<name|none>; reviews=<N>; threads=<N>; status=<value>; decision=<satisfied|waived|required|not-applicable|blocked|stopped>; reason=<...>`; standalone path -> `shipping-final-action.md` in git-dir. Waiver evidence must include: the user's stated rationale, the review-bot name, and the timestamp. A waiver without rationale is a schema violation. `enforces: P3, P8`
 
 **Interaction with Step 6.** Step 6 processes review comments and threads that already exist. This gate checks whether those artifacts exist at all. If the reviewer ran and produced comments, Step 6 processes them and the gate finds artifacts (satisfied). If the reviewer skipped, Step 6 has nothing to process and the gate catches the gap.
 

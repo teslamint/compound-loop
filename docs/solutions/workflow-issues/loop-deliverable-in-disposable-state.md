@@ -1,7 +1,7 @@
 ---
 module: release-loop
 date: "2026-08-15"
-last_updated: "2026-08-16"
+last_updated: "2026-08-25"
 problem_type: workflow_issue
 component: loop-state-lifecycle
 severity: medium
@@ -106,6 +106,19 @@ merge result:
 Never infer that all effects failed or all effects succeeded from one compound
 exit status. Remote merge, merged-byte verification, state handoff, worktree
 removal, and branch deletion are separate recoverable transitions.
+
+Legacy ledgers need a separate recovery path. If `artifact_root: .release-loop`
+makes handoff fail before marker creation because no explicit legacy destination
+contract exists, preserve the worktree. Do not invent a destination. This is a
+lifecycle contract gap, not a failure of run-integrity success criteria. After
+first-hand USER approval, create a recovery branch at the verified merged SHA.
+Run Retro and archive before cleanup. The durable follow-up is an explicit,
+collision-safe legacy destination with an acceptance matrix.
+
+A ledger summary is not a verification transcript. Preserve bounded raw failure
+output, exact environment observations, and both RED and GREEN results before
+using them for an independent root-cause claim. When those artifacts do not
+exist, Retro may record the recovery outcome but must narrow the causal claim.
 
 ## Why This Matters
 

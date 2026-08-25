@@ -4,7 +4,7 @@
   "case_id": "L3-post-merge-resume",
   "payload_mode": "exact-current-skill-bytes",
   "skill_source": "skills/release-loop/SKILL.md",
-  "skill_sha256": "4e515b0f1da9fdb43197d0059b66713b1f722643ce159a86162e6226e04cf7d3",
+  "skill_sha256": "7c43110603dcb5ae829288a4392fec5703a24afc0e03f85c9c9fa70f7cfa94d7",
   "skill_materialization": {
     "read_mode": "bytes",
     "digest": "sha256",

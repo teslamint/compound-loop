@@ -13,6 +13,10 @@ Standalone and callable from anywhere in the loop. Measures declared success cri
 - **Exit**: retro doc committed to git at `docs/retros/YYYY-MM-DD-<context>-retro.md`.
 - **Gate**: AUTO — no human approval required to write or commit a retro.
 
+## Run artifact scope
+
+When `release-loop` invokes retrospective, it supplies one exact repo-relative `progress_path`. Validate that record before using it and require `artifact_root = dirname(progress_path)` to match the ledger's `artifact_root`. A missing, ambiguous, mismatched, symlinked, or out-of-root path blocks before any read-dependent write. Derive every persisted sibling target from `artifact_root`; before its first write, reject any unowned filesystem or tracked target. A valid legacy ledger may update itself at the selected path, but no sibling target inherits that exemption. Standalone retrospective may proceed without a run ledger and creates no release-loop artifact.
+
 ## Phase 1: Scope & Mode Detection
 
 Classify the source before collecting anything:
@@ -33,6 +37,12 @@ Gather what's available; degrade gracefully rather than blocking on a missing so
 - **Session-history search** (session-end mode, no PR): a pluggable capability, not a hard dependency — if a session-search tool is available, use it with a tight payload (topic, time window, one filter rule); if unavailable, skip and note the gap in the doc rather than blocking.
 - **Origin artifact**: Follow `Origin and coverage selection` below; with no plan, preserve the existing no-plan fallback. Otherwise, read the selected spec's `## Success Criteria` section verbatim (`skills/designing/references/spec-template.md` shape: statement + `Measured by`).
 
+For a selected release-loop ledger, derive release-review metrics only from `review_counts`; never parse narrative Log lines. Compute `Review rounds` as `unit_passes + final_passes + standalone_passes`, then show those three components and `fix_rounds`. Show internal `findings_fixed` / `findings_deferred` separately from pull request `comments_fixed` / `comments_deferred`.
+
+Before rendering those values, run `git merge-base <base_branch> HEAD` and `git rev-parse HEAD`. Both full object IDs must equal `current_commit_range.base` and `.head`. A mismatch blocks measurement with `stale-commit-range`; Retro never refreshes stale authority while measuring. A current legacy ledger with neither `review_counts.completeness` nor `counting_started_at` adopts `partial` and the current valid ISO-8601 UTC timestamp in the same persisted edit before structured counting starts. A legacy row with only one field, an empty or invalid timestamp, or an unknown `completeness` value blocks; never guess or render it. Render partial values as a lower bound since `counting_started_at`, using the exact persisted value.
+
+Acceptance criterion 13 uses the immutable `full_validation_gate` report, not validator-registration text. The dedicated group runs the sixteen exact commands from approved plan U5 step 4, in order, and records each exact command, numeric exit, bounded result, and UTC start/end timestamps. It publishes the report once through the packaged publisher. Before Retro or full-lifecycle evidence cites the report, verify its publisher receipt path and SHA-256, ownership journal entry, current bytes, sixteen-command inventory, and all-zero exits. Keep this group outside the ordinary `all` group so its nested `test-run-artifact-integrity.sh all` command cannot recurse.
+
 ## Standalone plan contract
 
 Retrospective consumes only repo-relative origin, applicability, terminal-transition, coverage-selection, and frontmatter-immutability rules; it does not require the full planning skill or its schema file.
@@ -42,7 +52,7 @@ Plan-consumer contract lives in [references/plan-consumer-contract.md](reference
 ### Origin and coverage selection
 
 `origin` is resolved as a repo-relative spec path, while the existing no-plan fallback applies when no plan exists.
-The covered-plan set is the progress ledger's `plan:` value plus every plan cited by Phase 2 data or the retrospective body.
+The covered-plan set is the selected exact `progress_path` ledger's `plan:` value plus every plan cited by Phase 2 data or the retrospective body.
 When neither the ledger nor Phase 2/body cites a plan, no plan is selected and no terminal flip occurs.
 When multiple qualifying plans are selected, apply the same applicability and transition rules to every plan.
 
@@ -95,6 +105,8 @@ The narrative half of a retro is where self-assessment bias lives: the agent tha
 **Verdict authority**: only the facilitator authors the Verdict cell of a transcript row (the Interview Transcript section of `schemas/retro-template.md`). Every probed exchange lands in the transcript — accepted triples and terminal rejections alike. A non-terminal `rejected: <reason>` is a round output that continues the loop, never a transcript verdict; after 3 consecutive rejections the exchange terminates and the row records `no evidenced answer (3 rejections)` with the facilitator's final rejection text verbatim. A finding may cite such a T-ID — an honest gap is itself finding material. T-IDs are stable and never renumbered (same discipline as the spec's S-IDs).
 
 **Round contract**: one round is one stateless dispatch. Input: the artifacts above + the accumulated transcript + the respondent's new answers. Output: per-probe results — `accepted` / `rejected: <reason>` / re-probe text — expressible as structured text from a one-shot invocation. At most 5 dispatches globally across the whole interview; Phases 4 and 5 may share a round, and the cap is never per-phase.
+
+Persist every facilitator round verbatim before the transcript or metrics cite it. In release-loop mode, write the exact returned bytes to a transition-owned temporary file, then use the packaged publisher from the invocation packet to publish `<artifact_root>/reviews/facilitator/round-<N>.md`. The target is `reviews/facilitator/round-<N>.md` relative to `artifact_root`; N is the dispatch ordinal. Persist the publisher receipt path and SHA-256 with that round. Before use, require one receipt for each ordinal, the matching ownership journal entry, and current bytes with the same SHA-256. A missing, changed, conflicting, journal-mismatched, or unpublished round blocks an evidence-backed count or verdict claim. Standalone retrospective without a ledger records the same bytes in the retro document only and creates no release-loop artifact.
 
 **Verbatim rule**: facilitator verdict text — acceptances and rejections both — is recorded verbatim, never summarized by the respondent. In degraded modes where one agent authors probe, answer, and verdict, the Verdict cell records `self-attested`, never `accepted` — a reader must never mistake self-attestation for facilitator acceptance.
 
@@ -155,4 +167,3 @@ End every invocation with the exact terminal signal line from `schemas/headless-
 `compound` is the only skill invoked from inside `retrospective`, and only per Phase 7's gate. Nothing invokes `retrospective` automatically — `release-loop`'s Retro phase and direct user invocation are the only callers.
 
 Out of Scope moved to `references/out-of-scope.md`.
-
