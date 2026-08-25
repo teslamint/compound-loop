@@ -26,7 +26,7 @@ comments_fixed: 0
 comments_deferred: 0
 pr: null
 merged: false
-blocked_reason: Gateway U2 review found 5 deliverable gaps; repairs required before U3
+blocked_reason: Gateway U2 gaps 3+4 fixed (d695768b); gaps 1 (startup validation), 2 (zero retries), 5 (admission slot) remain before U3
 ---
 
 ## Log
@@ -110,3 +110,4 @@ blocked_reason: Gateway U2 review found 5 deliverable gaps; repairs required bef
 - 2026-08-25T16:35:00Z ship: Gateway U1 reproducible build PASSED; gateway-core `f29aded…`, credit-manager-strict.so `bc049ce…`, model-router-audit.so `9ced5b0…` — two consecutive builds identical; SBOM generated CycloneDX 1.6 (cliproxyapi 109 components, credit-manager 13, model-router 9); govulncheck: credit-manager 0, model-router 0, cliproxyapi 2 upstream go-git vulns (GO-2026-6214 path traversal, GO-2026-6213 symlink follow — both fixable via go-git v6.0.0-alpha.5 bump, not in gateway execution path); Gateway U1 complete
 - 2026-08-25T17:00:00Z ship: Gateway U2 implemented in cliproxyapi governed/hardcap; 10 files changed (234 insertions): `MethodHardcapPreRoundTrip` ABI constant, `HardcapPreRoundTrip` interface (reserve/settle), RPC capability wiring, `HardCapConfig` (required/plugin_id), transport hook before `doClaudeUpstreamRequest` in execute and streaming paths with deferred settlement, redirect blocking; committed as `9d4aadf0` + `9b98ac7c` (9 tests, all pass); existing tests pass
 - 2026-08-25T17:30:00Z ship: Gateway U2 review found 5 deliverable gaps blocking U3: (1) startup validation not wired — `hard_cap.required` and `plugin_id` enforced nowhere, misconfigured gateway silently uncapped; (2) retry/auth-fallback not disabled — conductor retry loop multiplies spend past single-reservation cap; (3) `GetBody` replay not blocked — Go transport can silently resend bytes without fresh reservation; (4) reserve-call timeout absent — hung plugin hangs request forever; (5) admission slot (single-assignment, double-assignment rejection, compensation) not implemented — requires implementation or deviation; `UsagePresent` field added to `HardcapSettlementRequest` as `fb3d158e`; stream settle context decision: use `context.WithoutCancel` for settlement survival on client disconnect (fail-safe over-charge is acceptable for strict mode but silent reservation leak is not)
+- 2026-08-25T19:00:00Z ship: Gateway U2 gaps 3+4 fixed as `d695768b`: (3) `httpReq.GetBody = nil` when reservation active in execute and stream paths; (4) `context.WithTimeout(ctx, 5s)` around `ReservePreRoundTrip`; also `UsagePresent=true` set at all token-parse sites, `context.WithoutCancel` for stream settlement defer; all 9 hardcap tests pass; gaps 1 (startup validation), 2 (zero retries/auth fallback), 5 (admission slot) still open
