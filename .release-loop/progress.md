@@ -14,19 +14,19 @@ plan: docs/plans/2026-08-24-001-feat-release-loop-conformance-fuzzing-plan.md
 design_approved: {by: user, at: 2026-08-23T15:48:05Z}
 final_action:
   kind: merge-to-base
-  status: predicted
-  command: null
+  status: determined
+  command: "gh pr merge 25 --squash --delete-branch"
   marker: "Preparation evidence only; this is not merge approval."
-  updated: 2026-08-23T15:12:18Z
+  updated: 2026-08-25T22:30:00Z
 ci_attempts: 0
 current_unit: U7
 review_rounds: 1
 feedback_rounds: 0
 comments_fixed: 0
 comments_deferred: 0
-pr: null
+pr: 25
 merged: false
-blocked_reason: Gateway U1-U8 all complete; Shipping Step 0 preflight passed (gh authed); Steps 1-8 pending — context budget exceeded, resume with /compound-loop:shipping
+blocked_reason: PR #25 created; CI and review pending
 ---
 
 ## Log
@@ -119,3 +119,9 @@ blocked_reason: Gateway U1-U8 all complete; Shipping Step 0 preflight passed (gh
 - 2026-08-25T22:00:00Z ship: Gateway U8 implemented in gateway-forks/eligibility as `dc81e6e`; `release-loop-hard-cap-gateway-eligibility/v1` JSON record with all 12 required SHA-256 fields (core, plugins, toolchain, deps, SBOM, egress, config, pricing, build proof, transform proof, self-referential proof_generation); generate/verify/schema CLI; atomic file write; DisallowUnknownFields; sensitive content scanner; 14 tests pass (race-clean); 7 Go files (+1630 lines); record over real home is `eligible: false` until `make sbom` and `make verify-reproducible` run; exit codes: 0=eligible, 1=ineligible, 2=operational failure; Gateway U8 complete
 - 2026-08-25T22:15:00Z ship: Gateway U7 implemented in gateway-forks/integration (6 commits, HEAD `6076af7`); fake upstream server (SSE + non-streaming, /stats /control, configurable delays/errors); broker secrets test (25/25 pass, FD-3 only); reconciliation contract (11-group trace, 12 tests); 6 gateway-driven scenario scripts (zero-upstream, streaming-settle, 8317-isolation, preflight, reconciliation, broker-secrets) + gateway fixture + lib; shellcheck clean; Go tests pass; Finding: credit-manager ↔ model-router has no direct join key (positional association for single-request, tripwire test for future column); Gateway U7 complete
 - 2026-08-25T22:15:00Z ship: **Gateway plan U1-U8 ALL COMPLETE.** Three governed forks (cliproxyapi `d7a6dbac`, credit-manager `17f20c2`, model-router `44ed78f`), two standalone tools (broker `5a482b9`, eligibility `dc81e6e`), integration suite (`6076af7`), config/deploy scripts, and governed artifacts. Ship V1 hardcap blocker resolved pending USER review.
+- 2026-08-25T22:30:00Z ship: Step 0 preflight PASSED (gh v2.98.0, authed teslamint, network reachable, ADMIN permission); full mode
+- 2026-08-25T22:30:00Z ship: Step 1 verification PASSED — `bash scripts/validate.sh` ALL CHECKS PASSED
+- 2026-08-25T22:30:00Z ship: Step 2 environment — worktree (GIT_DIR≠GIT_COMMON), branch feat/fuzz-testing
+- 2026-08-25T22:30:00Z ship: Step 3 commit — working tree clean, no new commits needed
+- 2026-08-25T22:30:00Z ship: base-topology — origin/main left=0 right=0; action=clean; reason=in sync
+- 2026-08-25T22:30:00Z ship: Step 4 push+PR — pushed feat/fuzz-testing to origin; PR #25 created (https://github.com/teslamint/compound-loop/pull/25)
