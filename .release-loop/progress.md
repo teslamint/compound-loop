@@ -28,7 +28,11 @@ pr: 25
 merged: false
 current_commit_range: a924a5ba825f57df04e982d59185d88c6ab0101e..d5ed0d2ecc8c6a06d1a87b787476d95f63781d19
 review_gate: null
-blocked_reason: PR #25 CI green; external review gate stopped — CodeRabbit in progress after 2 re-fetch attempts; USER chose stop; resume with /compound-loop:shipping after CodeRabbit review completes
+review_rounds: 2
+feedback_rounds: 1
+comments_fixed: 2
+comments_deferred: 10
+blocked_reason: PR #25 Step 6 complete (12/12 threads resolved); waiting for CodeRabbit re-review approve before merge
 ---
 
 ## Log
@@ -131,3 +135,6 @@ blocked_reason: PR #25 CI green; external review gate stopped — CodeRabbit in 
 - 2026-08-25T22:35:00Z ship: Step 6 review feedback — 0 reviews, 0 comments, 0 threads
 - 2026-08-25T22:36:00Z ship: external-review — reviewer=CodeRabbit; reviews=0; threads=0; status=skipped; decision=required; reason=OSS manual review required, @coderabbitai review posted
 - 2026-08-25T22:38:00Z ship: external-review — reviewer=CodeRabbit; reviews=0; threads=0; status=pending; decision=stopped; reason=CodeRabbit still in progress after 2 re-fetch attempts (120s); USER chose stop
+- 2026-08-25T22:45:00Z ship: external-review — reviewer=CodeRabbit; reviews=1; threads=12; status=CHANGES_REQUESTED; decision=satisfied; reason=review artifacts exist
+- 2026-08-25T22:50:00Z ship: Step 6 review feedback — 12 threads: 2 fixed (updated timestamp, progress-schema YAML format), 1 declined (markdown escape in code span), 9 not-addressing (sealed/approved docs or external gateway fork scope); all 12/12 resolved; commit a2c003a
+- 2026-08-25T22:50:00Z ship: waiting for CodeRabbit re-review approve; USER approved merge on approve
