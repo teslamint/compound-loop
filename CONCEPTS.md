@@ -14,6 +14,8 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Discriminating criterion** — a success criterion that measures a state change and therefore must fail on the pre-change tree. One that already passes before the work is done carries no information about the work, whatever it reports afterward.
 - **Invariance guard** — a success criterion that must hold both before and after, proving the change disturbed nothing. Passing on the pre-change tree is the expected result, not the non-discriminating defect; the two criterion kinds are read against opposite baselines.
 
+- **Measurement contract** — the binding obligation created when a spec names a test case, fixture, or command as a success criterion's measurement method. Every named measurement must be executable at retro time; a name that resolves to nothing makes the criterion unverifiable regardless of the implementation's correctness. *Avoid: measurement suggestion* — the name in the spec is a contract, not a hint.
+
 ## Release ceremony
 
 - **Release ceremony** — the post-merge process that turns merged work into a versioned release: CHANGELOG authoring, version bump, and tag. Owned by `release`, deliberately separate from feature shipping so features stay independently revertable.
@@ -67,6 +69,8 @@ Shared vocabulary for this repo. One canonical term per concept; definitions sta
 - **Review event** — one reserved review or fix attempt with a stable identity and one immutable result. Replay resumes the same event; it never creates a second count for the same attempt.
 - **Exact-head review gate** — a clean whole-branch review bound to one full commit identity. Any head change invalidates the gate, regardless of ancestry.
 - **Count completeness** — whether structured lifecycle totals cover the whole run (`exact`) or only events after structured counting began (`partial`). A partial count is a lower bound, never an exact total.
+
+- **Injection granularity** — the match between a fault injection's interrupt boundary and the recovery unit's operational boundary. When the injection interrupts at top-level-child level but the recovery code distinguishes individual files within directories, the injection cannot create the partial state the recovery path handles. *Avoid: injection coverage* — granularity is about where the break falls, not how many paths run.
 
 ## Carry-forward triggers
 
