@@ -1,6 +1,6 @@
 ---
 name: compound
-description: Document a solved problem or captured guidance into docs/solutions/ and the shared CONCEPTS.md vocabulary. /compound or $compound right after verifying a fix, when retrospective invokes it in mode:headless with a qualifying finding, or on direct request ("document this", "compound this fix").
+description: Document fixes/guidance in docs/solutions/ + CONCEPTS.md. /compound or $compound right after verifying a fix, when retrospective invokes it in mode:headless with a qualifying finding, or on request ("document this", "compound this fix").
 ---
 
 # Compound

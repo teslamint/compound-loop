@@ -1,6 +1,6 @@
 ---
 name: retrospective
-description: Measure outcomes against declared success criteria, reconcile carry-forward items, extract lessons, and feed the knowledge-compounding loop. /retrospective or $retrospective after a PR merges, at the end of a session or debugging arc, on direct request ("run a retro", "retrospective on this"), or when release-loop's Retro phase fires.
+description: Measure outcomes vs criteria, reconcile carry-forward, extract lessons, feed the knowledge loop. /retrospective or $retrospective after a PR merges, at session/debugging-arc end, on request ("run a retro", "retrospective on this"), or on release-loop's Retro phase.
 ---
 
 # Retrospective

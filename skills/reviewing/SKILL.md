@@ -1,6 +1,6 @@
 ---
 name: reviewing
-description: "Multi-lane code review producing verified, deduplicated findings (mode:agent JSON per review-envelope.schema.json, or markdown pipe tables), and disciplined consumption of reviews received from anyone else. /reviewing or $reviewing: mandatorily after each subagent task, after completing a major feature, or before merge; optionally when stuck, before refactoring, or after a complex bugfix; whenever release-loop's Review phase fires; or whenever external feedback (a human reviewer, a bot, another agent) needs disciplined evaluation before you implement it."
+description: "Multi-lane review: mode:agent JSON (review-envelope.schema.json) or markdown tables, plus consuming others' reviews. /reviewing or $reviewing -- mandatory after subagent tasks, major features, or before merge; optional when stuck, refactoring, after bugfixes, on release-loop's Review phase, or on external feedback needing disciplined evaluation."
 ---
 
 # Reviewing

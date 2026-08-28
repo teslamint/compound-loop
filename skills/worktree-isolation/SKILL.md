@@ -1,6 +1,6 @@
 ---
 name: worktree-isolation
-description: Use when starting feature work that needs isolation from the current workspace or before executing an implementation plan - ensures an isolated workspace exists via native tools or a git worktree fallback
+description: Use when starting feature work that needs isolation from the current workspace or before executing an implementation plan - via native tools or worktree fallback
 ---
 
 # Worktree Isolation

@@ -1,6 +1,6 @@
 ---
 name: designing
-description: Turn a feature idea into an approved, committed spec with measurable success criteria via collaborative dialogue. /designing or $designing when starting new feature work, when release-loop's Design phase fires, or whenever implementation is about to begin without an approved design -- including work that looks "too simple to need one".
+description: Turn an idea into an approved spec with measurable success criteria. /designing or $designing when starting new feature work, on release-loop's Design phase, or before implementation begins without an approved design -- including work that looks "too simple to need one".
 ---
 
 # Designing
