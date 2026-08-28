@@ -7,14 +7,14 @@
       "path": "skills/release-loop/SKILL.md",
       "heading": "# Release Loop",
       "text": "| 1 | Design | `designing` | **USER** — always human, never auto-skip |",
-      "sha256": "09d31c8d76568953540d81df92ebad27b6b29b685718ac4b0153046db1619fe4"
+      "sha256": "f11ce26aacf8dcb2ce56d5d22306c548a6d027fcc3d32838a519e79e0b27b5ca"
     },
     {
       "id": "resume-after-merge",
       "path": "skills/release-loop/SKILL.md",
       "heading": "## Approved-plan transition hooks",
       "text": "If the authoritative base ledger records `phase: ship` and `merged: true`, resume never re-enters pre-merge `shipping`.",
-      "sha256": "a9fdf4e9e3a54ff5543fb1134f25c64787de9ccde8e640ff13393445891ed4e4"
+      "sha256": "199e4ff7ce549a6da19dae2bcdb2f0dbdddef28cbfca9d396c9823b7a163c1c8"
     },
     {
       "id": "degraded-dispatch",
