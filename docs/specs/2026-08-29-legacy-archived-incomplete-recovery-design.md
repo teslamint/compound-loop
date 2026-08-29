@@ -1,6 +1,6 @@
 ---
 title: Legacy Archived-Incomplete Recovery
-status: approved
+status: draft
 date: 2026-08-29
 schema: spec/v1
 ---
@@ -78,7 +78,8 @@ narrow archive-evidence supersession rule.
 - R2: Define a current-session USER recovery gate for one exact packet.
 - R3: Define backup, authority, audit, executor claim, result, and receipt
   artifacts under fixed repository-relative roots.
-- R4: Add backup, audit, and restore CLI operations with deterministic JSON.
+- R4: Add request, backup, audit, and restore CLI operations plus an internal
+  gate-owned approval publisher, all with deterministic JSON.
 - R5: Enforce closed-root, no-symlink, manifest, ownership, destination, and
   atomic absent-target creation checks.
 - R6: Define legacy-equivalent pre-archive validation and one archive-evidence
@@ -112,21 +113,21 @@ contracts remain mandatory.
 
 ## Architecture
 
-The recovery has six ordered stages. Each stage consumes immutable,
-digest-pinned output from the previous stage.
+The recovery has seven ordered stages. After request initialization, each stage
+consumes immutable, digest-pinned output from the previous stage.
 
-1. **Approval** creates one request and one current-session USER answer for an
-   exact recovery packet.
-2. **Backup** copies the complete terminal archive to the fixed recovery backup
+1. **Request** claims recovery authority and records one exact recovery packet.
+2. **Approval** records one current-session USER answer for that request.
+3. **Backup** copies the complete terminal archive to the fixed recovery backup
    root. It verifies payload entries and both archive control files.
-3. **Authority audit** validates eligibility and every pinned input. It writes
+4. **Authority audit** validates eligibility and every pinned input. It writes
    one immutable accepted or rejected verdict.
-4. **Executor claim** uses create-exclusive semantics to write one immutable
+5. **Executor claim** uses create-exclusive semantics to write one immutable
    started claim before any restored-root mutation.
-5. **Restore** revalidates the backup against the audit-pinned digests, then
+6. **Restore** revalidates the backup against the audit-pinned digests, then
    copies the verified bytes to an atomically created original scoped root and
    writes one immutable executor result. It restores `progress.md` last.
-6. **Completion** records the recovery receipt, stages one final destination,
+7. **Completion** records the recovery receipt, stages one final destination,
    validates equivalent pre-archive evidence, transitions to done, and invokes
    the completed archive move under the supersession rule.
 
@@ -142,16 +143,26 @@ Recovery adds two closed physical-root families:
 - backup root: `.release-loop/recovery-backups/<recovery_id>`;
 - authority root: `.release-loop/recovery-authority/<recovery_id>`.
 
-`recovery_id` uses the existing safe slug grammar. It is unique per approved
-attempt. Request initialization requires both roots to be absent. Later
-commands resume only the same ID and exact create-once chain. An unrelated or
-malformed pre-existing root blocks. Neither root may contain a symlink. Every
-parent must resolve beneath its fixed family.
+`recovery_id` uses the existing safe slug grammar. `request-legacy-archive`
+accepts one canonical selected archived progress path, rejects zero, multiple,
+or non-scoped matches, and pins its uniquely resolved packet before it claims
+the authority root with one create-exclusive directory operation.
+Only that claimant may create the backup root. If backup-root creation fails,
+the claimant publishes `initialization-result.json`, schema
+`legacy-archive-recovery-initialization/v1`, with recovery ID, authority-root
+path, failure class, and timestamp. This terminal artifact is valid only before
+`request.json`; the ID is consumed and a later invocation rejects rather than
+retrying it. A new request uses a new ID. Later commands resume only the same
+complete create-once chain.
+An unrelated or malformed pre-existing root blocks. Neither root may contain a
+symlink. Every parent is traversed beneath its fixed family through verified
+directory descriptors.
 
 The backup root contains a byte-preserving copy of the terminal archive. The
-authority root contains create-once JSON artifacts. Both roots survive failed,
-cancelled, ambiguous, and successful restore operations. Final terminal
-verification may mark them retained; automatic deletion is outside this scope.
+authority root contains create-once JSON artifacts. Each root that was created
+survives failed, cancelled, ambiguous, and successful restore operations. Final
+terminal verification may mark them retained; automatic deletion is outside
+this scope.
 
 ## Recovery Gate and Artifact Chain
 
@@ -161,13 +172,16 @@ The recovery gate is separate from design and Ship gates. Its identifier is
 
 The authority root contains this ordered chain:
 
+0. `initialization-result.json` exists only for terminal backup-root creation
+   failure. It never participates in an accepted audit, executor, or receipt.
 1. `request.json`, schema `legacy-archive-recovery-request/v1`, pins the plan
    path and seal, archived progress path, archive destination, manifest digest,
    original artifact root, plan approval commit, contract introduction commit,
    recovery ID, mode, session ID, and `issued_at`.
 2. `approval.json`, schema `legacy-archive-recovery-approval/v1`, pins the
    request digest, answer, USER approver, session ID, `answered_at`, and one
-   at-most-once answer reservation.
+   at-most-once answer reservation. It also pins the reserved gate-answer
+   receipt path, SHA-256, gate ID, and answer-reservation nonce.
 3. `backup.json`, schema `legacy-archive-recovery-backup/v1`, pins the backup
    root, complete-tree digest, source manifest digest, ownership-journal
    digest, and each payload digest.
@@ -183,16 +197,25 @@ The authority root contains this ordered chain:
    approval, audit, backup, archive, successful result, plan seal, restored
    root, and the pre-receipt restored-generation digest.
 
-Every artifact uses canonical JSON and create-once publication. The executor
-creates `executor-started.json` with `O_CREAT|O_EXCL` or an equivalent atomic
-primitive. One winner may proceed. An existing claim blocks every executor,
-including the creator on rerun. A started claim without a result is
+Every artifact uses canonical JSON and create-once publication. Each final
+record publishes from a durable temporary file with a create-exclusive final
+operation; replacement is forbidden. Every recovery read and write uses a
+verified repository directory descriptor plus no-follow component opens. The
+executor creates `executor-started.json` with `O_CREAT|O_EXCL` or an equivalent
+atomic primitive. One winner may proceed. An existing claim blocks every
+executor, including the creator on rerun. A started claim without a result is
 `ambiguous`; it is never stale or automatically reclaimed.
 
-The gate request is pending until `approval.json` exists. The orchestrator may
-write `approval.json` only after it receives a current-session first-hand USER
-answer issued after `issued_at`. Cancellation writes the answer and starts no
-backup or audit.
+The release-loop gate request is pending until `approval.json` exists. Its
+owning gate handler invokes the internal approval publisher only after it
+receives a current-session first-hand USER answer issued after `issued_at`.
+The publisher consumes the handler's reserved gate-answer receipt, validates
+the request digest and session, then writes `approval.json` create-once.
+Audit revalidates the pinned receipt bytes, request digest, session, gate ID,
+answer, timestamp, and nonce before accepting. Unrelated, replayed, or swapped
+receipts reject.
+Cancellation writes the answer and starts no backup or audit. No CLI accepts a
+caller-supplied approval answer.
 
 The receipt never pins bytes that contain its own digest. The restore result
 defines the pre-receipt generation before any recovery or terminal Log line is
@@ -267,16 +290,19 @@ registered version gets a fixture.
 
 ## CLI Interface
 
-The three commands accept repository-relative inputs only:
+The four commands accept repository-relative inputs only:
 
 ```text
+run-artifact-integrity.py request-legacy-archive --repo . --recovery-id <id> --progress-path <archived-progress-path> --session <session-id>
 run-artifact-integrity.py backup-legacy-archive --repo . --recovery-id <id>
 run-artifact-integrity.py audit-legacy-archive --repo . --recovery-id <id>
 run-artifact-integrity.py restore-legacy-archive --repo . --recovery-id <id>
 ```
 
 Each command resolves its inputs from the authority chain. It does not accept
-replacement digests or paths on the command line. Backup success returns
+replacement digests or paths on the command line except the canonical selected
+archived progress path used only to create the request packet. Request returns
+`recovery_id` and `state`, and requires the current session identity. Backup success returns
 `backup_path`, `recovery_id`, and `state`. Audit returns `audit_path`,
 `recovery_id`, `state`, and `verdict`. Restore returns
 `archive_manifest_sha256`, `progress_path`, `recovery_id`, and `state`.
@@ -346,8 +372,8 @@ blocks. No resume step reallocates an identity or destination.
 
 ## Integration
 
-- `run-artifact-integrity.py` owns backup, audit, claim, restore, and archive
-  supersession validation.
+- `run-artifact-integrity.py` owns request, internal gate-owned approval
+  publication, backup, audit, claim, restore, and archive supersession validation.
 - `progress-schema.md` owns the recovery gate, receipt references, and terminal
   gate rule.
 - `transition-hooks.md` owns version registry dispatch and legacy validation
@@ -363,7 +389,7 @@ approved sealed plan without a pre-archive declaration, records merge and Retro
 evidence, archives the run incomplete, and proves ordinary completion rejects
 it.
 
-The positive path proves approval, backup-first ordering, complete backup
+The positive path proves request-first approval, backup-first ordering, complete backup
 validation, accepted audit, one atomic executor claim, progress-last restore,
 legacy-equivalent validation, supersession, and final completed archive. It
 compares payload entries against the source manifest. It validates the manifest
@@ -374,9 +400,13 @@ Negative fixtures cover invalid backups, payload or control-file mismatch,
 pending publication, foreign destinations, symlinks, escapes, nonempty
 targets, invalid plan seals, all ineligible contract classifications, supported
 V2, unsupported V3, missing or stale approvals, rejected audits, duplicate
-claims, stale receipts, and bypass attempts. Fault fixtures cover pre-claim
-cancellation, post-claim failure, missing result, rerun blocking, and every
-`G0` through `G3` completion commit point.
+claims, stale receipts, and bypass attempts. Request fixtures cover concurrent
+authority-root claims, backup-root creation failure, duplicate approval
+publication, unrelated or replayed gate-answer receipts, and consumed
+initialization IDs. Fault fixtures cover pre-claim
+cancellation, post-claim failure, missing result, rerun blocking, deterministic
+ancestor replacement with unchanged external sentinel bytes, and every `G0`
+through `G3` completion commit point.
 
 Parser fixtures assert classification, `parsed_version`, recovery eligibility,
 and ordinary lifecycle result for each boundary:
@@ -416,6 +446,10 @@ from both active manifests and preserve their complete trees.
   record or any other artifact. Create the absent exact scoped target with an
   atomic create-exclusive operation; `EEXIST` rejects. Recovery never restores
   into an existing active loop.
+- **A checked path could be replaced before its write.** Traverse recovery
+  roots from verified repository directory descriptors with no-follow component
+  opens and descriptor stat checks. A deterministic ancestor-replacement test
+  proves the external sentinel tree remains unchanged.
 - **An invalid backup could cause corrupted bytes to be restored.** The audit
   independently validates payload entries, both control files, and the
   complete-tree digest against the source archive. Restore repeats those
@@ -450,8 +484,9 @@ from both active manifests and preserve their complete trees.
 4. Unsafe path, plan, authority, receipt, and executor states fail before
    unauthorized restore mutation.
    - **Measured by**: `bash scripts/test-run-artifact-integrity.sh` requires
-     nonzero results and unchanged source archive and backup manifests.
-5. The three CLI commands have deterministic output and stable diagnostics.
+     nonzero results, unchanged source archive and backup manifests, and an
+     unchanged external sentinel tree for ancestor-replacement attacks.
+5. The four CLI commands have deterministic output and stable diagnostics.
    - **Measured by**: `bash scripts/test-run-artifact-integrity.sh` checks exact
      JSON key sets and diagnostic classes.
 6. An absent pre-archive contract has exactly one additional terminal
