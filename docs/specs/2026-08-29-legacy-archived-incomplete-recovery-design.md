@@ -1,6 +1,6 @@
 ---
 title: Legacy Archived-Incomplete Recovery
-status: draft
+status: approved
 date: 2026-08-29
 schema: spec/v1
 ---
