@@ -80,7 +80,7 @@ narrow archive-evidence supersession rule.
   artifacts under fixed repository-relative roots.
 - R4: Add backup, audit, and restore CLI operations with deterministic JSON.
 - R5: Enforce closed-root, no-symlink, manifest, ownership, destination, and
-  empty-target checks.
+  atomic absent-target creation checks.
 - R6: Define legacy-equivalent pre-archive validation and one archive-evidence
   supersession rule.
 - R7: Add positive, rejection, interruption, cancellation, rerun, and
@@ -123,8 +123,9 @@ digest-pinned output from the previous stage.
    one immutable accepted or rejected verdict.
 4. **Executor claim** uses create-exclusive semantics to write one immutable
    started claim before any restored-root mutation.
-5. **Restore** copies the exact payload to the original scoped root and writes
-   one immutable executor result. It restores `progress.md` last.
+5. **Restore** revalidates the backup against the audit-pinned digests, then
+   copies the verified bytes to an atomically created original scoped root and
+   writes one immutable executor result. It restores `progress.md` last.
 6. **Completion** records the recovery receipt, stages one final destination,
    validates equivalent pre-archive evidence, transitions to done, and invokes
    the completed archive move under the supersession rule.
@@ -410,22 +411,28 @@ from both active manifests and preserve their complete trees.
 
 ## Risks
 
-- **Restore could overwrite live state.** Require an absent or empty exact
-  scoped target before the claim and before the first target write.
-- **A forged backup could authorize corrupted bytes.** Validate payload
-  entries, both control files, and the complete-tree digest independently.
-- **Concurrent executors could split ownership.** Create one exclusive started
-  claim before target mutation. Never reclaim it automatically.
+- **Restore could overwrite live state.** Reject the target before the claim
+  and before the first target write if it contains a selected active progress
+  record or any other artifact. Create the absent exact scoped target with an
+  atomic create-exclusive operation; `EEXIST` rejects. Recovery never restores
+  into an existing active loop.
+- **An invalid backup could cause corrupted bytes to be restored.** The audit
+  independently validates payload entries, both control files, and the
+  complete-tree digest against the source archive. Restore repeats those
+  audit-pinned validations and writes only the verified bytes.
+- **Concurrent restore attempts could split executor ownership.** Create one
+  exclusive started claim before target mutation. Never reclaim it automatically.
 - **An absent declaration could weaken the terminal gate.** Accept only a valid
   receipt for lexical absence plus pinned pre-introduction provenance. Keep
   every registered validator unchanged.
-- **An unknown version could masquerade as newer authority.** Classify it as
-  `unsupported-version` and fail closed until an approved validator registers
-  it.
-- **Mixed archive markers could hide history.** Require the exact supersession
-  tuple and keep the incomplete source archive.
-- **A receipt could outlive approval.** Bind every chain artifact to the same
-  session, request, immutable predecessors, paths, and content digests.
+- **An unsupported version could dispatch to the wrong validator or bypass
+  validation.** Classify it as `unsupported-version` and fail closed until an
+  approved validator registers it.
+- **Mixed archive markers could select the wrong current archive mode.** Require
+  the exact supersession tuple and keep the incomplete source archive.
+- **A receipt could be detached from its approved recovery packet.** Bind every
+  chain artifact to the same session, request, immutable predecessors, paths,
+  and content digests.
 
 ## Success Criteria
 
