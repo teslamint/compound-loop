@@ -1,6 +1,6 @@
 ---
 title: Legacy Archived-Incomplete Recovery
-status: draft
+status: approved
 date: 2026-08-29
 schema: spec/v1
 ---
@@ -41,8 +41,8 @@ python3 run-artifact-integrity.py restore-legacy-archive \
 The command claims the authority once, then restores the exact original
 scoped artifact root. It restores `progress.md` last. It returns deterministic
 JSON containing the restored progress path, archive manifest digest, and
-state. The orchestrator records a `legacy_archive_recovery` receipt, validates
-equivalent pre-archive evidence, and calls the completed archive operation.
+state. The restore command records the recovery receipt. It validates
+equivalent pre-archive evidence and runs the completed archive operation.
 
 ### S3: Reject an ineligible or unsafe recovery
 
@@ -78,8 +78,9 @@ narrow archive-evidence supersession rule.
 - R2: Define a current-session USER recovery gate for one exact packet.
 - R3: Define backup, authority, audit, executor claim, result, and receipt
   artifacts under fixed repository-relative roots.
-- R4: Add request, backup, audit, and restore CLI operations plus an internal
-  gate-owned approval publisher, all with deterministic JSON.
+- R4: Add request, backup, audit, and restore CLI operations. The request
+  command has one gate-owner-only approval-publication mode. It reads a pinned
+  release-loop gate ledger and never accepts a caller-supplied approval value.
 - R5: Enforce closed-root, no-symlink, manifest, ownership, destination, and
   atomic absent-target creation checks.
 - R6: Define legacy-equivalent pre-archive validation and one archive-evidence
@@ -117,7 +118,9 @@ The recovery has seven ordered stages. After request initialization, each stage
 consumes immutable, digest-pinned output from the previous stage.
 
 1. **Request** claims recovery authority and records one exact recovery packet.
-2. **Approval** records one current-session USER answer for that request.
+2. **Approval** records one current-session USER answer in the pinned
+   release-loop gate ledger. The request command validates that receipt and
+   publishes the immutable recovery approval.
 3. **Backup** copies the complete terminal archive to the fixed recovery backup
    root. It verifies payload entries and both archive control files.
 4. **Authority audit** validates eligibility and every pinned input. It writes
@@ -144,9 +147,13 @@ Recovery adds two closed physical-root families:
 - authority root: `.release-loop/recovery-authority/<recovery_id>`.
 
 `recovery_id` uses the existing safe slug grammar. `request-legacy-archive`
-accepts one canonical selected archived progress path, rejects zero, multiple,
-or non-scoped matches, and pins its uniquely resolved packet before it claims
-the authority root with one create-exclusive directory operation.
+accepts one canonical selected archived progress path and one current
+release-loop gate-progress path. It rejects zero, multiple, or non-scoped
+archive matches. It resolves the archive manifest's pinned original artifact
+root, requires that root to be a safe `.release-loop/runs/<feature>` path, and
+derives the only restore target from it. It never accepts a restore target.
+It pins both progress paths and the derived target before it claims the
+authority root with one create-exclusive directory operation.
 Only that claimant may create the backup root. If backup-root creation fails,
 the claimant publishes `initialization-result.json`, schema
 `legacy-archive-recovery-initialization/v1`, with recovery ID, authority-root
@@ -158,11 +165,15 @@ An unrelated or malformed pre-existing root blocks. Neither root may contain a
 symlink. Every parent is traversed beneath its fixed family through verified
 directory descriptors.
 
-The backup root contains a byte-preserving copy of the terminal archive. The
-authority root contains create-once JSON artifacts. Each root that was created
-survives failed, cancelled, ambiguous, and successful restore operations. Final
-terminal verification may mark them retained; automatic deletion is outside
-this scope.
+The request creates an empty backup container only. The Backup stage copies the
+terminal archive only after `approval.json` exists. A completed backup root
+contains only the byte-preserving terminal archive copy. The authority root
+contains the create-once `backup.json` record. An interrupted copy without that
+authority record is ambiguous. It is never retried automatically. An operator
+resolves the container before a new recovery ID can start. Each created root
+survives failed, cancelled, ambiguous, and successful restore operations.
+Final terminal verification may mark them retained. Automatic deletion is
+outside this scope.
 
 ## Recovery Gate and Artifact Chain
 
@@ -178,44 +189,97 @@ The authority root contains this ordered chain:
    path and seal, archived progress path, archive destination, manifest digest,
    original artifact root, plan approval commit, contract introduction commit,
    recovery ID, mode, session ID, and `issued_at`.
-2. `approval.json`, schema `legacy-archive-recovery-approval/v1`, pins the
-   request digest, answer, USER approver, session ID, `answered_at`, and one
-   at-most-once answer reservation. It also pins the reserved gate-answer
-   receipt path, SHA-256, gate ID, and answer-reservation nonce.
-3. `backup.json`, schema `legacy-archive-recovery-backup/v1`, pins the backup
+2. `gate-receipt.json`, schema `legacy-archive-recovery-gate-receipt/v1`, is a
+   canonical JSON snapshot of the parsed gate receipt plus the exact
+   gate-ledger path and whole-file SHA-256 observed before the gate is cleared.
+   It pins the request digest, session ID, gate ID, issued and answer
+   timestamps, answer, and answer-reservation nonce.
+3. `approval.json`, schema `legacy-archive-recovery-approval/v1`, pins the
+   request digest and the exact `gate-receipt.json` path and SHA-256.
+4. `backup.json`, schema `legacy-archive-recovery-backup/v1`, pins the backup
    root, complete-tree digest, source manifest digest, ownership-journal
    digest, and each payload digest.
-4. `audit.json`, schema `legacy-archive-recovery-audit/v1`, pins the three prior
+5. `audit.json`, schema `legacy-archive-recovery-audit/v1`, pins the four prior
    artifact digests, every eligibility result, the observed contract version
    and classification, provenance verdict, auditor identity, and timestamp.
-5. `executor-started.json`, schema `legacy-archive-recovery-executor-start/v1`,
+6. `executor-started.json`, schema `legacy-archive-recovery-executor-start/v1`,
    pins the accepted audit digest, process identity, and start timestamp.
-6. `executor-result.json`, schema `legacy-archive-recovery-executor-result/v1`,
+7. `executor-result.json`, schema `legacy-archive-recovery-executor-result/v1`,
    pins the started claim, outcome, restored-root digest when available, and
    finish timestamp.
-7. `receipt.json`, schema `legacy-archive-recovery-receipt/v1`, pins the USER
+8. `receipt.json`, schema `legacy-archive-recovery-receipt/v1`, pins the USER
    approval, audit, backup, archive, successful result, plan seal, restored
    root, and the pre-receipt restored-generation digest.
+
+The audit reads plan authority only from the approved commit's frontmatter.
+It requires one top-level `status: approved` and one top-level `body_seal`.
+The stored seal must match the calculated body digest and the request pin.
+Missing, duplicate, nested, or mismatched authority fields reject.
+
+Progress scalar authority also comes only from top-level frontmatter fields.
+Structured gate and final-action blocks come only from that frontmatter.
+Body examples and body duplicates never provide or override authority.
 
 Every artifact uses canonical JSON and create-once publication. Each final
 record publishes from a durable temporary file with a create-exclusive final
 operation; replacement is forbidden. Every recovery read and write uses a
 verified repository directory descriptor plus no-follow component opens. The
-executor creates `executor-started.json` with `O_CREAT|O_EXCL` or an equivalent
-atomic primitive. One winner may proceed. An existing claim blocks every
+hard-linked `receipt.json` temporary remains as the destination-reservation
+transaction marker until the internal reservation file is durable. The shared
+authority lock and that same-inode marker allow same-ID adoption of only an
+empty exact destination or its exact reservation temporary. Any other entry
+rejects before recovery publication.
+Each archive publication writes a create-exclusive transaction ownership claim
+before its temporary bytes. A retry requires the exact claim, reservation,
+generation, and expected byte prefix before it appends or publishes. The
+publisher removes the claim only after final publication is durable. An
+unclaimed temporary is foreign even when its bytes match exactly.
+
+Recovery reserves its transaction-file namespace in every payload directory.
+Payload validation rejects the reservation name, its temporary, the progress
+temporary, and both archive-control temporaries. It also rejects every
+recovery owner-claim name and pending-publication name. This validation occurs
+before the request writes authority. It repeats before backup acceptance and
+final archive publication.
+
+The final archive journal must equal the journal derived from the pinned source
+journal and the final manifest. A resume compares the complete canonical bytes.
+Valid remaining rows are not sufficient. A missing source-owned row blocks the
+resume before mutation.
+
+This concurrency guarantee assumes every cooperative archive-family recovery
+writer holds the same authority lock. A writer with direct repository access
+that bypasses the protocol is outside the concurrency guarantee. Portable
+POSIX metadata cannot prove the creator of independently forged exact bytes.
+Observed foreign paths, bytes, or inode changes still fail closed.
+
+The executor creates `executor-started.json` with `O_CREAT|O_EXCL` or an
+equivalent atomic primitive. One winner may proceed. An existing claim blocks every
 executor, including the creator on rerun. A started claim without a result is
 `ambiguous`; it is never stale or automatically reclaimed.
 
-The release-loop gate request is pending until `approval.json` exists. Its
-owning gate handler invokes the internal approval publisher only after it
-receives a current-session first-hand USER answer issued after `issued_at`.
-The publisher consumes the handler's reserved gate-answer receipt, validates
-the request digest and session, then writes `approval.json` create-once.
-Audit revalidates the pinned receipt bytes, request digest, session, gate ID,
-answer, timestamp, and nonce before accepting. Unrelated, replayed, or swapped
-receipts reject.
-Cancellation writes the answer and starts no backup or audit. No CLI accepts a
-caller-supplied approval answer.
+The request identifies one live release-loop progress record as its gate
+ledger. The release-loop orchestrator owns that record. It issues the recovery
+gate, receives the first-hand current-session USER answer, and writes the
+standard at-most-once answer receipt before it invokes
+`request-legacy-archive --publish-approval`. That command reads only the
+request-pinned gate ledger. It validates the receipt's request digest, session,
+gate ID, issued and answer timestamps, answer reservation nonce, and the
+ledger digest. It publishes a canonical `gate-receipt.json` snapshot through
+the create-exclusive protocol. It then writes `approval.json`, which pins that
+snapshot's path and digest. It accepts no approval value, receipt path, digest,
+or replacement path from its caller. The orchestrator clears the pending gate
+and its live receipt only after it observes both publication results.
+
+This boundary makes receipt custody and byte integrity machine-verifiable. It
+does not authenticate a human in Python. First-hand USER consent remains the
+release-loop orchestrator's procedural authority. Audit rehashes and parses
+the immutable `gate-receipt.json` snapshot. It verifies the request digest,
+session, gate ID, answer, timestamps, nonce, and original gate-ledger digest
+before accepting. It never relies on the live ledger after the gate clears.
+Unrelated, replayed, or swapped receipts reject.
+Cancellation writes the cancelled gate result and starts no backup copy or
+audit.
 
 The receipt never pins bytes that contain its own digest. The restore result
 defines the pre-receipt generation before any recovery or terminal Log line is
@@ -233,6 +297,13 @@ The digest graph has no backward edge:
 
 No artifact pins its own bytes or any later generation.
 
+Each G1, G2, and G3 write fetches a fresh UTC timestamp. The write updates the
+top-level `updated` field and its generation Log line atomically. Each Log line
+records the predecessor's `updated` value for digest reconstruction. A retry
+adopts the timestamp from an exact durable progress temporary. It never
+generates different bytes for that started write. G1 must not precede either
+G0 `updated` or `request.issued_at`.
+
 ## Pre-Archive Contract Classification
 
 The parser inspects Markdown headings only. It recognizes a versioned contract
@@ -246,6 +317,14 @@ declaration with this canonical heading syntax:
 its canonical decimal string, not a machine integer. This representation
 handles an arbitrarily large unknown version without overflow. The registry
 pins each supported version's exact title and body validator.
+
+The parser ignores headings inside fenced code blocks. It accepts up to three
+leading spaces as Markdown indentation for an ATX heading. A near-match Setext
+heading is a declaration candidate, but it is malformed canonical syntax.
+
+Progress and plan frontmatter use exact delimiter lines. Only a column-zero
+line containing `---` closes frontmatter. A scalar value containing `---`
+cannot hide later duplicate or structured authority.
 
 The initial registry has one entry. Version `"2"` requires the exact title
 `Verify the archived generation` and the existing V2 body validator. This
@@ -283,6 +362,24 @@ also verifies that the introduction commit contains the exact registered V2
 heading and contract bytes. Missing Git objects, equality, non-ancestry, blob
 mismatch, or changed introduction bytes reject recovery.
 
+Terminal eligibility requires one valid timezone-bearing top-level `updated`
+timestamp. The audit captures one timestamp and uses it in `audit.json`. It
+requires this nondecreasing sequence:
+
+```text
+ship_approved.at
+  <= final_action.updated
+  == ship: merged Log timestamp
+  <= retro: committed Log timestamp
+  == top-level updated
+  <= request.issued_at
+  <= audit.timestamp
+```
+
+The equalities prove each atomic lifecycle write. The audit rejects a missing,
+malformed, future, nonmonotonic, or atomically inconsistent value before any
+executor claim or restore mutation.
+
 The audit records classification, `parsed_version`, and each provenance result.
 It stores `null` for the version when no canonical version can be extracted,
 including absence and malformed headings. Each classification and every
@@ -293,7 +390,8 @@ registered version gets a fixture.
 The four commands accept repository-relative inputs only:
 
 ```text
-run-artifact-integrity.py request-legacy-archive --repo . --recovery-id <id> --progress-path <archived-progress-path> --session <session-id>
+run-artifact-integrity.py request-legacy-archive --repo . --recovery-id <id> --progress-path <archived-progress-path> --gate-progress-path <live-gate-progress-path> --session <session-id>
+run-artifact-integrity.py request-legacy-archive --repo . --recovery-id <id> --publish-approval
 run-artifact-integrity.py backup-legacy-archive --repo . --recovery-id <id>
 run-artifact-integrity.py audit-legacy-archive --repo . --recovery-id <id>
 run-artifact-integrity.py restore-legacy-archive --repo . --recovery-id <id>
@@ -302,11 +400,13 @@ run-artifact-integrity.py restore-legacy-archive --repo . --recovery-id <id>
 Each command resolves its inputs from the authority chain. It does not accept
 replacement digests or paths on the command line except the canonical selected
 archived progress path used only to create the request packet. Request returns
-`recovery_id` and `state`, and requires the current session identity. Backup success returns
-`backup_path`, `recovery_id`, and `state`. Audit returns `audit_path`,
+`recovery_id` and `state`, and requires the current session identity. Backup
+success returns `backup_path`, `recovery_id`, and `state`. Audit returns `audit_path`,
 `recovery_id`, `state`, and `verdict`. Restore returns
 `archive_manifest_sha256`, `progress_path`, `recovery_id`, and `state`.
-Failures return nonzero, one stable diagnostic class, and no success JSON.
+Operational and integrity failures return nonzero, one stable diagnostic class,
+and no success JSON. A completed semantic audit may return zero with the
+canonical `verdict: rejected` result. That verdict never authorizes restore.
 
 The audit reads archive, backup, plan, Git, and authority artifacts. Its only
 write is its immutable verdict artifact. It never writes an archive, backup,
@@ -319,12 +419,14 @@ The orchestrator publishes receipt `R` outside the restored root. It then
 reserves one new terminal destination and atomically creates `G1` by appending
 one `legacy_archive_recovery: staged` line and one normal
 `retro: archive-destination` line. Both lines name `R`, `G0`, and the new
-destination. The phase remains nonterminal, and no archive byte moves.
+destination. G1 updates `updated` and records its prior value. The phase remains
+nonterminal, and no archive byte moves.
 
 Legacy-equivalent pre-archive validation checks `G1`, `R`, the reserved
 destination, and the source archive. Acceptance creates `G2` by appending one
 `legacy-pre-archive-verification: accepted` line that names the `G1` and
-receipt digests. Completion then creates `G3` by atomically setting
+receipt digests. G2 updates `updated` and records the G1 value. Completion then
+creates `G3` by atomically setting
 `phase: done` and `phase_status: complete` with its evidence line. Only `G3`
 may enter the completed archive move. The move reuses the reserved destination
 and moves `progress.md` last.
@@ -418,7 +520,14 @@ and ordinary lifecycle result for each boundary:
 - mixed V2 and V3 candidates;
 - two malformed candidates;
 - case, separator, and one- or two-edit near-match headings;
+- fenced pseudo-headings, indented ATX headings, and Setext headings;
 - a body-only mention with no declaration heading.
+
+Integrity fixtures reject reserved payload names at any depth. They reject
+nested or duplicate top-level authority fields. They also remove one valid
+owned row from a completed archive and prove that resume rejects unchanged
+payload bytes. Delimiter-shadow fixtures place `---` in a scalar value and
+prove that later duplicate progress, gate, status, and seal fields reject.
 
 Provenance fixtures pair lexical absence with both outcomes. A pre-introduction
 approval commit with matching plan bytes may continue. A post-introduction plan
