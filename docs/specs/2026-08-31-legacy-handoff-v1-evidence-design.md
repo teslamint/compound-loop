@@ -1,6 +1,6 @@
 ---
 title: Legacy Handoff V1 Evidence
-status: draft
+status: approved
 date: 2026-08-31
 schema: spec/v1
 ---
