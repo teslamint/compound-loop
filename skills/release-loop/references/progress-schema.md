@@ -181,7 +181,7 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 ## Rules
 
 - `artifact_root` equals the exact repo-relative directory that contains the selected progress record. New scoped records require this field. Legacy records require `artifact_root: .release-loop`. A legacy record without that field cannot resume.
-- The four closed physical-root families are scoped active state, legacy active state, terminal archives, and transition handoff.
+- The four ordinary lifecycle artifact-root families are the four closed physical-root families: scoped active state, legacy active state, terminal archives, and transition handoff.
 - `recovery-authority/` and `recovery-backups/` are fixed internal persistent recovery families under `.release-loop/`. Legacy handoff preserves them at the base and rejects them at the source. They are never active transfer roots.
 - Scoped active state permits only the selected `.release-loop/runs/<run_id>` root. Legacy active state includes the root progress file, known working directories, publisher state, corrupt backups, and accepted V1 evidence.
 - Terminal archive state permits only the collision-resolved `.release-loop/archive/<destination>` root. Handoff state permits only `.release-loop/.handoff`.

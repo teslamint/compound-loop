@@ -360,6 +360,8 @@ def parse_frontmatter(
         key, value = line.split(":", 1)
         key = key.strip()
         if key in values:
+            if key in PROTECTED_V1_KEYS:
+                reject("legacy V1 ownership", f"duplicate top-level field {key}")
             reject(duplicate_kind, f"duplicate top-level field {key}")
         values[key] = value.strip()
     schema = values.get("schema", "")
