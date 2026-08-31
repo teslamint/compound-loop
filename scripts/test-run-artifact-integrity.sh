@@ -1328,6 +1328,19 @@ def assert_blocked_preserves(action, sentinel_path: Path, before: bytes, diagnos
     assert sentinel_path.read_bytes() == before
 
 
+def assert_blocked_snapshots(action, source: Path, base: Path, diagnostic: str) -> None:
+    source_before = matrix_fixture_snapshot(source)
+    base_before = matrix_fixture_snapshot(base)
+    try:
+        action()
+    except Blocked as exc:
+        assert diagnostic in str(exc), str(exc)
+    else:
+        raise AssertionError("attack did not block")
+    assert matrix_fixture_snapshot(source) == source_before
+    assert matrix_fixture_snapshot(base) == base_before
+
+
 def require_phase_consumer_contract(texts: dict[str, str] | None = None) -> None:
     selected = texts or PHASE_CONSUMERS
     shared = ("exact repo-relative `progress_path`", "`artifact_root = dirname(progress_path)`")
@@ -6805,6 +6818,7 @@ def run_case(name: str) -> None:
             history = legacy_path.parent / "v1/history"
             history.mkdir()
             (history / "prior.md").write_text("prior\n", encoding="utf-8")
+            source_before = matrix_fixture_snapshot(source)
             try:
                 handoff_scope(
                     source, base, str(legacy_path.relative_to(source)),
@@ -6814,11 +6828,17 @@ def run_case(name: str) -> None:
                 assert "injected handoff interruption" in str(exc), str(exc)
             else:
                 raise AssertionError("V1 file-level interruption did not fire")
+            assert matrix_fixture_snapshot(source) == source_before
             marker = base / ".release-loop/.handoff/legacy.json"
-            assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "incomplete"
+            marker_before_retry = marker.read_bytes()
+            assert json.loads(marker_before_retry)["status"] == "incomplete"
             partial = filesystem_manifest(base / ".release-loop/v1")
             complete = filesystem_manifest(source / ".release-loop/v1")
             assert partial and partial != complete
+            assert all(complete.get(relative) == value for relative, value in partial.items())
+            base_before_retry = matrix_fixture_snapshot(base)
+            assert marker.read_bytes() == marker_before_retry
+            assert matrix_fixture_snapshot(base) == base_before_retry
             result = handoff_scope(
                 source, base, str(legacy_path.relative_to(source)),
                 legacy_destination=".release-loop",
@@ -6834,17 +6854,32 @@ def run_case(name: str) -> None:
             (markerless_target / "pilot-approval.md").write_bytes(
                 (markerless_source / ".release-loop/v1/pilot-approval.md").read_bytes()
             )
-            try:
-                handoff_scope(
+            assert_blocked_snapshots(
+                lambda: handoff_scope(
                     markerless_source, markerless_base,
                     str(markerless_progress.relative_to(markerless_source)),
                     legacy_destination=".release-loop",
-                )
-            except Blocked as exc:
-                assert "collision" in str(exc), str(exc)
-            else:
-                raise AssertionError("markerless V1 subset did not block")
+                ),
+                markerless_source, markerless_base, "collision",
+            )
             assert not (markerless_base / ".release-loop/.handoff/legacy.json").exists()
+
+            index_source = new_repo(tmp, "v1-mismatch-source-markerless-index")
+            index_base = new_repo(tmp, "v1-mismatch-base-markerless-index")
+            index_progress = write_legacy_v1(index_source)
+            indexed = index_base / ".release-loop/v1/index-only.md"
+            indexed.parent.mkdir(parents=True)
+            indexed.write_text("indexed\n", encoding="utf-8")
+            git(index_base, "add", "-f", str(indexed.relative_to(index_base)))
+            indexed.unlink()
+            assert_blocked_snapshots(
+                lambda: handoff_scope(
+                    index_source, index_base, str(index_progress.relative_to(index_source)),
+                    legacy_destination=".release-loop",
+                ),
+                index_source, index_base, "collision",
+            )
+            assert not (index_base / ".release-loop/.handoff/legacy.json").exists()
             for mutation in ("changed", "extra", "index-only"):
                 source = new_repo(tmp, f"v1-mismatch-source-{mutation}")
                 base = new_repo(tmp, f"v1-mismatch-base-{mutation}")
@@ -6871,18 +6906,13 @@ def run_case(name: str) -> None:
                     indexed.write_text("indexed\n", encoding="utf-8")
                     git(base, "add", "-f", str(indexed.relative_to(base)))
                     indexed.unlink()
-                marker = base / ".release-loop/.handoff/legacy.json"
-                marker_before = marker.read_bytes()
-                try:
-                    handoff_scope(
+                assert_blocked_snapshots(
+                    lambda: handoff_scope(
                         source, base, str(legacy_path.relative_to(source)),
                         legacy_destination=".release-loop",
-                    )
-                except Blocked as exc:
-                    assert "mismatch" in str(exc) or "collision" in str(exc), str(exc)
-                else:
-                    raise AssertionError(f"V1 destination {mutation} did not block")
-                assert marker.read_bytes() == marker_before
+                    ),
+                    source, base, "collision" if mutation == "index-only" else "mismatch",
+                )
         elif name == "legacy_handoff_v1_symlinks":
             for mutation in ("root", "nested"):
                 source = new_repo(tmp, f"v1-symlink-source-{mutation}")
@@ -6896,16 +6926,56 @@ def run_case(name: str) -> None:
                     history = source / ".release-loop/v1/history"
                     history.mkdir()
                     (history / "linked.md").symlink_to(source / "README.md")
-                try:
-                    handoff_scope(
+                assert_blocked_snapshots(
+                    lambda: handoff_scope(
                         source, base, str(legacy_path.relative_to(source)),
                         legacy_destination=".release-loop",
-                    )
-                except Blocked as exc:
-                    assert "symlink" in str(exc) or "V1 root" in str(exc), str(exc)
-                else:
-                    raise AssertionError(f"V1 {mutation} symlink did not block")
+                    ),
+                    source, base, "V1 root" if mutation == "root" else "symlink",
+                )
                 assert not (base / ".release-loop/.handoff/legacy.json").exists()
+
+            destination_root_source = new_repo(tmp, "v1-destination-root-symlink-source")
+            destination_root_base = new_repo(tmp, "v1-destination-root-symlink-base")
+            destination_root_progress = write_legacy_v1(destination_root_source)
+            destination_real = destination_root_base / ".release-loop/v1-real"
+            destination_real.mkdir(parents=True)
+            (destination_root_base / ".release-loop/v1").symlink_to(
+                destination_real, target_is_directory=True
+            )
+            assert_blocked_snapshots(
+                lambda: handoff_scope(
+                    destination_root_source, destination_root_base,
+                    str(destination_root_progress.relative_to(destination_root_source)),
+                    legacy_destination=".release-loop",
+                ),
+                destination_root_source, destination_root_base, "symlink",
+            )
+            assert not (destination_root_base / ".release-loop/.handoff/legacy.json").exists()
+
+            destination_nested_source = new_repo(tmp, "v1-destination-nested-symlink-source")
+            destination_nested_base = new_repo(tmp, "v1-destination-nested-symlink-base")
+            destination_nested_progress = write_legacy_v1(destination_nested_source)
+            try:
+                handoff_scope(
+                    destination_nested_source, destination_nested_base,
+                    str(destination_nested_progress.relative_to(destination_nested_source)),
+                    legacy_destination=".release-loop", failure="handoff-after-copy-one-file",
+                )
+            except Blocked:
+                pass
+            else:
+                raise AssertionError("V1 file-level interruption did not fire")
+            nested_link = destination_nested_base / ".release-loop/v1/linked.md"
+            nested_link.symlink_to(destination_nested_base / "README.md")
+            assert_blocked_snapshots(
+                lambda: handoff_scope(
+                    destination_nested_source, destination_nested_base,
+                    str(destination_nested_progress.relative_to(destination_nested_source)),
+                    legacy_destination=".release-loop",
+                ),
+                destination_nested_source, destination_nested_base, "symlink",
+            )
         elif name == "legacy_handoff_source_changed":
             source = repo
             base = new_repo(tmp, "v1-source-changed-base")
@@ -6920,15 +6990,13 @@ def run_case(name: str) -> None:
             else:
                 raise AssertionError("V1 file-level interruption did not fire")
             (source / ".release-loop/v1/generation-receipt.md").write_text("changed\n", encoding="utf-8")
-            try:
-                handoff_scope(
+            assert_blocked_snapshots(
+                lambda: handoff_scope(
                     source, base, str(legacy_path.relative_to(source)),
                     legacy_destination=".release-loop",
-                )
-            except Blocked as exc:
-                assert "active manifest changed" in str(exc), str(exc)
-            else:
-                raise AssertionError("changed V1 source did not block")
+                ),
+                source, base, "active manifest changed",
+            )
         elif name == "legacy_handoff_complete_rerun":
             source = repo
             base = new_repo(tmp, "v1-complete-rerun-base")
