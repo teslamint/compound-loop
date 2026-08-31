@@ -565,33 +565,230 @@ def legacy_manifest_digest(entries: list[dict[str, object]]) -> str:
     return hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def validate_v1_top_level_syntax(frontmatter_text: str) -> None:
-    protected = r"(?:pre_merge_verification|v1)"
-    if re.search(rf"^{protected}:\s*$", frontmatter_text, re.MULTILINE) is None:
+PROTECTED_V1_KEYS = frozenset(("pre_merge_verification", "v1"))
+YAML_DOUBLE_QUOTED_ESCAPES = {
+    "0": "\0",
+    "a": "\a",
+    "b": "\b",
+    "t": "\t",
+    "n": "\n",
+    "v": "\v",
+    "f": "\f",
+    "r": "\r",
+    "e": "\x1b",
+    " ": " ",
+    '"': '"',
+    "/": "/",
+    "\\": "\\",
+    "N": "\u0085",
+    "_": "\u00a0",
+    "L": "\u2028",
+    "P": "\u2029",
+}
+
+
+def _yaml_double_quoted_value(value: str, start: int = 0) -> tuple[str, int] | None:
+    if start >= len(value) or value[start] != '"':
+        return None
+    result: list[str] = []
+    index = start + 1
+    while index < len(value):
+        character = value[index]
+        if character == '"':
+            return "".join(result), index + 1
+        if character != "\\":
+            result.append(character)
+            index += 1
+            continue
+        index += 1
+        if index >= len(value):
+            return None
+        escape = value[index]
+        if escape in YAML_DOUBLE_QUOTED_ESCAPES:
+            result.append(YAML_DOUBLE_QUOTED_ESCAPES[escape])
+            index += 1
+            continue
+        width = {"x": 2, "u": 4, "U": 8}.get(escape)
+        if width is None or index + width >= len(value):
+            return None
+        digits = value[index + 1:index + width + 1]
+        if not re.fullmatch(rf"[0-9A-Fa-f]{{{width}}}", digits):
+            return None
+        result.append(chr(int(digits, 16)))
+        index += width + 1
+    return None
+
+
+def _yaml_single_quoted_value(value: str, start: int = 0) -> tuple[str, int] | None:
+    if start >= len(value) or value[start] != "'":
+        return None
+    result: list[str] = []
+    index = start + 1
+    while index < len(value):
+        character = value[index]
+        if character != "'":
+            result.append(character)
+            index += 1
+            continue
+        if index + 1 < len(value) and value[index + 1] == "'":
+            result.append("'")
+            index += 2
+            continue
+        return "".join(result), index + 1
+    return None
+
+
+def _yaml_prefix(value: str, start: int) -> tuple[str, str, int] | None:
+    if start >= len(value) or value[start] not in "!&*":
+        return None
+    prefix = value[start]
+    index = start + 1
+    if prefix == "!" and index < len(value) and value[index] == "<":
+        end = value.find(">", index + 1)
+        if end < 0:
+            return None
+        return prefix, value[start:end + 1], end + 1
+    while index < len(value) and not value[index].isspace():
+        index += 1
+    return prefix, value[start:index], index
+
+
+def _yaml_plain_token(value: str, start: int) -> tuple[str, int] | None:
+    index = start
+    while index < len(value) and not value[index].isspace():
+        index += 1
+    token = value[start:index]
+    return (token, index) if token else None
+
+
+def _yaml_scalar(value: str, start: int, anchors: dict[str, str]) -> tuple[str, int] | None:
+    while start < len(value) and value[start].isspace():
+        start += 1
+    if start >= len(value):
+        return None
+    if value[start] == '"':
+        return _yaml_double_quoted_value(value, start)
+    if value[start] == "'":
+        return _yaml_single_quoted_value(value, start)
+    if value[start] == "*":
+        prefix = _yaml_prefix(value, start)
+        if prefix is None:
+            return None
+        alias = prefix[1][1:]
+        resolved = anchors.get(alias)
+        return (resolved, prefix[2]) if resolved is not None else None
+    return _yaml_plain_token(value, start)
+
+
+def _yaml_key(value: str, anchors: dict[str, str]) -> tuple[str, bool, str | None] | None:
+    start = 0
+    prefixes: list[tuple[str, str]] = []
+    while True:
+        while start < len(value) and value[start].isspace():
+            start += 1
+        prefix = _yaml_prefix(value, start)
+        if prefix is None or prefix[0] == "*":
+            break
+        prefixes.append((prefix[0], prefix[1]))
+        start = prefix[2]
+    while start < len(value) and value[start].isspace():
+        start += 1
+    if start < len(value) and value[start] == "*":
+        prefix = _yaml_prefix(value, start)
+        if prefix is None:
+            return None
+        alias = prefix[1][1:]
+        resolved = anchors.get(alias, alias if alias in PROTECTED_V1_KEYS else "")
+        if not resolved:
+            return None
+        anchor = next((token[1][1:] for token in prefixes if token[0] == "&"), None)
+        return resolved, False, anchor
+    scalar = _yaml_scalar(value, start, anchors)
+    if scalar is None:
+        return None
+    resolved, end = scalar
+    anchor = next((token[1][1:] for token in prefixes if token[0] == "&"), None)
+    if not resolved:
+        return None
+    canonical = not prefixes and value == resolved
+    return resolved, canonical, anchor
+
+
+def _yaml_mapping_colon(line: str) -> int | None:
+    quote: str | None = None
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if quote is not None:
+            if quote == '"' and character == "\\":
+                index += 2
+                continue
+            if character == quote:
+                if quote == "'" and index + 1 < len(line) and line[index + 1] == "'":
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if character in "'\"":
+            quote = character
+        elif character == "#" and (index == 0 or line[index - 1].isspace()):
+            return None
+        elif character == ":" and (index + 1 == len(line) or line[index + 1].isspace() or line[index + 1] in "{}[],"):
+            return index
+        index += 1
+    return None
+
+
+def _yaml_top_level_anchors(line: str, anchors: dict[str, str]) -> None:
+    if line[:1].isspace():
         return
-    protected_aliases = set()
+    colon = _yaml_mapping_colon(line)
+    if colon is None:
+        return
+    value = line[colon + 1:]
+    start = 0
+    anchor: str | None = None
+    while True:
+        while start < len(value) and value[start].isspace():
+            start += 1
+        prefix = _yaml_prefix(value, start)
+        if prefix is None or prefix[0] == "*":
+            break
+        if prefix[0] == "&":
+            anchor = prefix[1][1:]
+        start = prefix[2]
+    if anchor is None:
+        return
+    scalar = _yaml_scalar(value, start, anchors)
+    if scalar is not None:
+        anchors[anchor] = scalar[0]
+
+
+def validate_v1_top_level_syntax(frontmatter_text: str) -> None:
+    anchors: dict[str, str] = {}
     for line in frontmatter_text.splitlines():
-        explicit = re.fullmatch(rf"\?\s+(?:!!\S+\s+)?&([^\s]+)\s+({protected})", line)
+        if not line or line.lstrip().startswith("#"):
+            continue
+        _yaml_top_level_anchors(line, anchors)
+        indentation = len(line) - len(line.lstrip(" \t"))
+        if indentation > 0 and indentation != 1 and not line.startswith("\t"):
+            continue
+        candidate = line.lstrip(" \t") if indentation else line
+        explicit = candidate.startswith("?")
         if explicit:
-            protected_aliases.add(explicit.group(1))
-    for line in frontmatter_text.splitlines():
-        if not line or line.startswith("#"):
+            candidate = candidate[1:].lstrip()
+        colon = _yaml_mapping_colon(candidate) if not explicit else None
+        key_text = candidate[:colon] if colon is not None else candidate
+        parsed = _yaml_key(key_text, anchors)
+        if parsed is None:
             continue
-        if re.fullmatch(r"[A-Za-z0-9_]+:.*", line):
+        resolved, canonical, anchor = parsed
+        if anchor is not None:
+            anchors[anchor] = resolved
+        if resolved not in PROTECTED_V1_KEYS:
             continue
-        if re.fullmatch(rf"\s*(?:{protected})\s*:", line):
-            reject("legacy V1 ownership", "noncanonical top-level key")
-        if re.fullmatch(rf"\s*['\"]{protected}['\"]\s*:", line):
-            reject("legacy V1 ownership", "noncanonical top-level key")
-        if re.fullmatch(rf"\s*(?:(?:!!\S+|&\S+)\s+)+{protected}\s*:", line):
-            reject("legacy V1 ownership", "noncanonical top-level key")
-        explicit = re.fullmatch(rf"\s*\?\s+(?:(?:!!\S+|&\S+)\s+)*({protected}|\*[^\s]+)\s*", line)
-        if explicit and (
-            explicit.group(1) in {"v1", "pre_merge_verification", "*v1", "*pre_merge_verification"}
-            or explicit.group(1)[1:] in protected_aliases
-        ):
-            reject("legacy V1 ownership", "noncanonical top-level key")
-        if re.fullmatch(rf"\s*\*{protected}\s*:", line):
+        if not canonical or indentation == 1 or line.startswith("\t") or explicit:
             reject("legacy V1 ownership", "noncanonical top-level key")
 
 

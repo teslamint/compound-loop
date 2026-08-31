@@ -6932,6 +6932,21 @@ def run_case(name: str) -> None:
                 valid_base / ".release-loop/v1"
             )
 
+            nested_unknown_source = new_repo(tmp, "v1-nested-unknown-source")
+            nested_unknown_base = new_repo(tmp, "v1-nested-unknown-base")
+            nested_unknown_progress = write_legacy_v1(nested_unknown_source)
+            edit_progress(
+                nested_unknown_progress,
+                "final_action:\n",
+                'future:\n  "v1": {status: started}\nfinal_action:\n',
+            )
+            assert handoff_scope(
+                nested_unknown_source,
+                nested_unknown_base,
+                str(nested_unknown_progress.relative_to(nested_unknown_source)),
+                legacy_destination=".release-loop",
+            )["cleanup_permitted"] is True
+
             pre_v1_source = new_repo(tmp, "v1-pre-v1-source")
             pre_v1_base = new_repo(tmp, "v1-pre-v1-base")
             pre_v1_progress = write_legacy(pre_v1_source)
@@ -7003,6 +7018,12 @@ def run_case(name: str) -> None:
                 ("duplicate-top-v1-anchored", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n&owned v1:\n  status: started\nfinal_action:\n")),
                 ("duplicate-top-v1-alias", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n*v1:\n  status: started\nfinal_action:\n")),
                 ("duplicate-top-pre-merge-explicit-tagged", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n? !!str pre_merge_verification\n:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-inline-double-quoted", lambda source, path: edit_progress(path, "final_action:\n", 'shadow: sentinel\n"v1": {status: started}\nfinal_action:\n')),
+                ("duplicate-top-v1-inline-double-quoted-comment", lambda source, path: edit_progress(path, "final_action:\n", 'shadow: sentinel\n"v1": # duplicate\nfinal_action:\n')),
+                ("duplicate-top-v1-inline-tagged", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n!!str v1: {status: started}\nfinal_action:\n")),
+                ("duplicate-top-v1-inline-anchored", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n&owned v1: {status: started}\nfinal_action:\n")),
+                ("duplicate-top-v1-escaped-double-quoted", lambda source, path: edit_progress(path, "final_action:\n", 'shadow: sentinel\n"v\\x31": {status: started}\nfinal_action:\n')),
+                ("duplicate-top-v1-anchored-alias", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\nseed: &owned v1\n*owned: {status: started}\nfinal_action:\n")),
                 ("duplicate-nested", lambda source, path: edit_progress(path, "  accepted_at:", "  status: accepted\n  accepted_at:")),
                 ("malformed-indent", lambda source, path: edit_progress(path, "  pilot_approval_path:", " pilot_approval_path:")),
                 ("missing-key", lambda source, path: edit_progress(path, "  accepted_at: 2026-08-23T00:00:00Z\n", "")),
