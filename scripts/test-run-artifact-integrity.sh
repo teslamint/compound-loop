@@ -6912,6 +6912,15 @@ def run_case(name: str) -> None:
             valid_source = repo
             valid_base = new_repo(tmp, "v1-valid-base")
             valid_progress = write_legacy_v1(valid_source)
+
+            def edit_progress(path, old, new):
+                path.write_text(path.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+
+            edit_progress(
+                valid_progress,
+                "final_action:\n",
+                'future-field: accepted\nfuture.field: accepted\n"future_field": accepted\nfinal_action:\n',
+            )
             (valid_progress.parent / "v1/history").mkdir()
             (valid_progress.parent / "v1/history/prior.md").write_text("prior\n", encoding="utf-8")
             result = handoff_scope(
@@ -6951,9 +6960,6 @@ def run_case(name: str) -> None:
                 assert not marker.exists(), slug
                 assert filesystem_manifest(source) == source_before, slug
                 assert filesystem_manifest(base) == base_before, slug
-
-            def edit_progress(path, old, new):
-                path.write_text(path.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
 
             def replace_digest(path, prefix):
                 lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -6995,6 +7001,7 @@ def run_case(name: str) -> None:
                 ("duplicate-top-v1-explicit", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n? v1\n:\n  status: started\nfinal_action:\n")),
                 ("duplicate-top-v1-tagged", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n!!str v1:\n  status: started\nfinal_action:\n")),
                 ("duplicate-top-v1-anchored", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n&owned v1:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-alias", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n*v1:\n  status: started\nfinal_action:\n")),
                 ("duplicate-top-pre-merge-explicit-tagged", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n? !!str pre_merge_verification\n:\n  status: started\nfinal_action:\n")),
                 ("duplicate-nested", lambda source, path: edit_progress(path, "  accepted_at:", "  status: accepted\n  accepted_at:")),
                 ("malformed-indent", lambda source, path: edit_progress(path, "  pilot_approval_path:", " pilot_approval_path:")),

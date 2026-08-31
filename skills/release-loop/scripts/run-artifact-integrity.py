@@ -569,10 +569,29 @@ def validate_v1_top_level_syntax(frontmatter_text: str) -> None:
     protected = r"(?:pre_merge_verification|v1)"
     if re.search(rf"^{protected}:\s*$", frontmatter_text, re.MULTILINE) is None:
         return
+    protected_aliases = set()
     for line in frontmatter_text.splitlines():
-        if not line or line[0].isspace() or line.startswith("#"):
+        explicit = re.fullmatch(rf"\?\s+(?:!!\S+\s+)?&([^\s]+)\s+({protected})", line)
+        if explicit:
+            protected_aliases.add(explicit.group(1))
+    for line in frontmatter_text.splitlines():
+        if not line or line.startswith("#"):
             continue
-        if re.fullmatch(r"[A-Za-z0-9_]+:.*", line) is None:
+        if re.fullmatch(r"[A-Za-z0-9_]+:.*", line):
+            continue
+        if re.fullmatch(rf"\s*(?:{protected})\s*:", line):
+            reject("legacy V1 ownership", "noncanonical top-level key")
+        if re.fullmatch(rf"\s*['\"]{protected}['\"]\s*:", line):
+            reject("legacy V1 ownership", "noncanonical top-level key")
+        if re.fullmatch(rf"\s*(?:(?:!!\S+|&\S+)\s+)+{protected}\s*:", line):
+            reject("legacy V1 ownership", "noncanonical top-level key")
+        explicit = re.fullmatch(rf"\s*\?\s+(?:(?:!!\S+|&\S+)\s+)*({protected}|\*[^\s]+)\s*", line)
+        if explicit and (
+            explicit.group(1) in {"v1", "pre_merge_verification", "*v1", "*pre_merge_verification"}
+            or explicit.group(1)[1:] in protected_aliases
+        ):
+            reject("legacy V1 ownership", "noncanonical top-level key")
+        if re.fullmatch(rf"\s*\*{protected}\s*:", line):
             reject("legacy V1 ownership", "noncanonical top-level key")
 
 
@@ -597,6 +616,9 @@ def structured_progress_blocks(text: str) -> dict[str, dict[str, str] | None]:
                     reject("legacy V1 ownership", f"malformed block {name}")
                 selected[name] = {}
                 active = name
+            continue
+        if active is not None and line and not line[0].isspace() and ":" in line:
+            active = None
             continue
         if active is None:
             continue
