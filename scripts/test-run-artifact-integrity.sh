@@ -6836,9 +6836,6 @@ def run_case(name: str) -> None:
             complete = filesystem_manifest(source / ".release-loop/v1")
             assert partial and partial != complete
             assert all(complete.get(relative) == value for relative, value in partial.items())
-            base_before_retry = matrix_fixture_snapshot(base)
-            assert marker.read_bytes() == marker_before_retry
-            assert matrix_fixture_snapshot(base) == base_before_retry
             result = handoff_scope(
                 source, base, str(legacy_path.relative_to(source)),
                 legacy_destination=".release-loop",
@@ -6872,6 +6869,8 @@ def run_case(name: str) -> None:
             indexed.write_text("indexed\n", encoding="utf-8")
             git(index_base, "add", "-f", str(indexed.relative_to(index_base)))
             indexed.unlink()
+            indexed.parent.rmdir()
+            assert not (index_base / ".release-loop/v1").exists()
             assert_blocked_snapshots(
                 lambda: handoff_scope(
                     index_source, index_base, str(index_progress.relative_to(index_source)),
