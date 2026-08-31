@@ -166,6 +166,12 @@ CASES = (
     "handoff_same_checkout",
     "legacy_handoff_success",
     "legacy_handoff_v1_ownership",
+    "legacy_handoff_v1_success",
+    "legacy_handoff_v1_partial_directory_rerun",
+    "legacy_handoff_v1_destination_mismatch",
+    "legacy_handoff_v1_symlinks",
+    "legacy_handoff_source_changed",
+    "legacy_handoff_complete_rerun",
     "legacy_handoff_cli_contract",
     "legacy_handoff_incomplete_rerun",
     "legacy_handoff_collision",
@@ -6774,6 +6780,170 @@ def run_case(name: str) -> None:
             )
             for slug, mutate in mutations:
                 rejected_v1(slug, mutate)
+        elif name == "legacy_handoff_v1_success":
+            source = repo
+            base = new_repo(tmp, "v1-success-base")
+            legacy_path = write_legacy_v1(source)
+            history = legacy_path.parent / "v1/history/nested"
+            history.mkdir(parents=True)
+            (history / "prior.md").write_bytes(b"prior\x00bytes\n")
+            source_manifest = filesystem_manifest(legacy_path.parent / "v1")
+            result = handoff_scope(
+                source, base, str(legacy_path.relative_to(source)),
+                legacy_destination=".release-loop",
+            )
+            assert result["cleanup_permitted"] is True
+            assert filesystem_manifest(base / ".release-loop/v1") == source_manifest
+            assert (base / ".release-loop/progress.md").read_bytes() == legacy_path.read_bytes()
+            assert discover(base, ".release-loop/progress.md") == (
+                "resume", base / ".release-loop/progress.md",
+            )
+        elif name == "legacy_handoff_v1_partial_directory_rerun":
+            source = repo
+            base = new_repo(tmp, "v1-partial-base")
+            legacy_path = write_legacy_v1(source)
+            history = legacy_path.parent / "v1/history"
+            history.mkdir()
+            (history / "prior.md").write_text("prior\n", encoding="utf-8")
+            try:
+                handoff_scope(
+                    source, base, str(legacy_path.relative_to(source)),
+                    legacy_destination=".release-loop", failure="handoff-after-copy-one-file",
+                )
+            except Blocked as exc:
+                assert "injected handoff interruption" in str(exc), str(exc)
+            else:
+                raise AssertionError("V1 file-level interruption did not fire")
+            marker = base / ".release-loop/.handoff/legacy.json"
+            assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "incomplete"
+            partial = filesystem_manifest(base / ".release-loop/v1")
+            complete = filesystem_manifest(source / ".release-loop/v1")
+            assert partial and partial != complete
+            result = handoff_scope(
+                source, base, str(legacy_path.relative_to(source)),
+                legacy_destination=".release-loop",
+            )
+            assert result["cleanup_permitted"] is True
+            assert filesystem_manifest(base / ".release-loop/v1") == complete
+        elif name == "legacy_handoff_v1_destination_mismatch":
+            markerless_source = new_repo(tmp, "v1-mismatch-source-markerless")
+            markerless_base = new_repo(tmp, "v1-mismatch-base-markerless")
+            markerless_progress = write_legacy_v1(markerless_source)
+            markerless_target = markerless_base / ".release-loop/v1"
+            markerless_target.mkdir(parents=True)
+            (markerless_target / "pilot-approval.md").write_bytes(
+                (markerless_source / ".release-loop/v1/pilot-approval.md").read_bytes()
+            )
+            try:
+                handoff_scope(
+                    markerless_source, markerless_base,
+                    str(markerless_progress.relative_to(markerless_source)),
+                    legacy_destination=".release-loop",
+                )
+            except Blocked as exc:
+                assert "collision" in str(exc), str(exc)
+            else:
+                raise AssertionError("markerless V1 subset did not block")
+            assert not (markerless_base / ".release-loop/.handoff/legacy.json").exists()
+            for mutation in ("changed", "extra", "index-only"):
+                source = new_repo(tmp, f"v1-mismatch-source-{mutation}")
+                base = new_repo(tmp, f"v1-mismatch-base-{mutation}")
+                legacy_path = write_legacy_v1(source)
+                try:
+                    handoff_scope(
+                        source, base, str(legacy_path.relative_to(source)),
+                        legacy_destination=".release-loop", failure="handoff-after-copy-one-file",
+                    )
+                except Blocked:
+                    pass
+                else:
+                    raise AssertionError("V1 file-level interruption did not fire")
+                if mutation == "changed":
+                    partial_file = next(
+                        path for path in (base / ".release-loop/v1").rglob("*")
+                        if path.is_file()
+                    )
+                    partial_file.write_bytes(b"changed\n")
+                elif mutation == "extra":
+                    (base / ".release-loop/v1/extra.md").write_text("extra\n", encoding="utf-8")
+                else:
+                    indexed = base / ".release-loop/v1/index-only.md"
+                    indexed.write_text("indexed\n", encoding="utf-8")
+                    git(base, "add", "-f", str(indexed.relative_to(base)))
+                    indexed.unlink()
+                marker = base / ".release-loop/.handoff/legacy.json"
+                marker_before = marker.read_bytes()
+                try:
+                    handoff_scope(
+                        source, base, str(legacy_path.relative_to(source)),
+                        legacy_destination=".release-loop",
+                    )
+                except Blocked as exc:
+                    assert "mismatch" in str(exc) or "collision" in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"V1 destination {mutation} did not block")
+                assert marker.read_bytes() == marker_before
+        elif name == "legacy_handoff_v1_symlinks":
+            for mutation in ("root", "nested"):
+                source = new_repo(tmp, f"v1-symlink-source-{mutation}")
+                base = new_repo(tmp, f"v1-symlink-base-{mutation}")
+                legacy_path = write_legacy_v1(source)
+                if mutation == "root":
+                    root = source / ".release-loop/v1"
+                    root.rename(source / ".release-loop/v1-real")
+                    root.symlink_to(source / ".release-loop/v1-real", target_is_directory=True)
+                else:
+                    history = source / ".release-loop/v1/history"
+                    history.mkdir()
+                    (history / "linked.md").symlink_to(source / "README.md")
+                try:
+                    handoff_scope(
+                        source, base, str(legacy_path.relative_to(source)),
+                        legacy_destination=".release-loop",
+                    )
+                except Blocked as exc:
+                    assert "symlink" in str(exc) or "V1 root" in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"V1 {mutation} symlink did not block")
+                assert not (base / ".release-loop/.handoff/legacy.json").exists()
+        elif name == "legacy_handoff_source_changed":
+            source = repo
+            base = new_repo(tmp, "v1-source-changed-base")
+            legacy_path = write_legacy_v1(source)
+            try:
+                handoff_scope(
+                    source, base, str(legacy_path.relative_to(source)),
+                    legacy_destination=".release-loop", failure="handoff-after-copy-one-file",
+                )
+            except Blocked:
+                pass
+            else:
+                raise AssertionError("V1 file-level interruption did not fire")
+            (source / ".release-loop/v1/generation-receipt.md").write_text("changed\n", encoding="utf-8")
+            try:
+                handoff_scope(
+                    source, base, str(legacy_path.relative_to(source)),
+                    legacy_destination=".release-loop",
+                )
+            except Blocked as exc:
+                assert "active manifest changed" in str(exc), str(exc)
+            else:
+                raise AssertionError("changed V1 source did not block")
+        elif name == "legacy_handoff_complete_rerun":
+            source = repo
+            base = new_repo(tmp, "v1-complete-rerun-base")
+            legacy_path = write_legacy_v1(source)
+            first = handoff_scope(
+                source, base, str(legacy_path.relative_to(source)),
+                legacy_destination=".release-loop",
+            )
+            before = filesystem_manifest(base / ".release-loop")
+            second = handoff_scope(
+                source, base, str(legacy_path.relative_to(source)),
+                legacy_destination=".release-loop",
+            )
+            assert first["cleanup_permitted"] is True and second["cleanup_permitted"] is True
+            assert filesystem_manifest(base / ".release-loop") == before
         elif name == "legacy_handoff_cli_contract":
             missing_source = new_repo(tmp, "cli-missing-source")
             missing_base = new_repo(tmp, "cli-missing-base")

@@ -45,6 +45,7 @@ TEST_FAILURES = frozenset((
     "archive-after-manifest-final",
     "handoff-after-marker",
     "handoff-after-copy-one",
+    "handoff-after-copy-one-file",
     "publish-before-final",
     "recovery-backup-create",
     "recovery-before-copy-ancestor",
@@ -715,7 +716,7 @@ def legacy_git_active_paths(repo: Path) -> list[str]:
     return active
 
 
-def legacy_copy_child(child: Path, destination_root: Path) -> None:
+def legacy_copy_child(child: Path, destination_root: Path, inject_after_file: bool = False) -> None:
     destination_root.mkdir(parents=True, exist_ok=True)
     target = destination_root / child.name
     if target.exists() or target.is_symlink():
@@ -732,6 +733,8 @@ def legacy_copy_child(child: Path, destination_root: Path) -> None:
             else:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(path.read_bytes())
+                if inject_after_file:
+                    reject("injected handoff interruption", path.relative_to(child).as_posix())
     else:
         target.write_bytes(child.read_bytes())
 
@@ -764,6 +767,8 @@ def legacy_handoff(
         payload = legacy_read_marker(marker, expected_fields)
         if payload["manifest_sha256"] != digest:
             reject("legacy handoff source", "active manifest changed since marker creation")
+        if legacy_git_active_paths(base_repo):
+            reject("legacy handoff collision", "base active legacy state is present in the index")
         destination_children = legacy_scan_children(base_repo, destination, allow_persistent=True)
         observed_entries = archive_manifest_entries(destination, destination_children)
         if payload["status"] == "complete":
@@ -780,11 +785,12 @@ def legacy_handoff(
         legacy_write_marker(marker, {**expected_fields, "manifest_sha256": digest, "status": "incomplete"})
     present_names = {child.name for child in destination_children}
     inject_after_copy = test_failure("handoff-after-copy-one")
+    inject_after_file = test_failure("handoff-after-copy-one-file")
     for child in source_children:
         if child.name not in present_names:
-            legacy_copy_child(child, destination)
+            legacy_copy_child(child, destination, inject_after_file)
         elif child.is_dir():
-            copy_missing(child, destination / child.name)
+            copy_missing(child, destination / child.name, inject_after_file)
         else:
             continue
         if inject_after_copy:
@@ -4762,7 +4768,7 @@ def tree_manifest(root: Path) -> dict[str, bytes | None]:
     return manifest
 
 
-def copy_missing(source: Path, target: Path) -> None:
+def copy_missing(source: Path, target: Path, inject_after_file: bool = False) -> None:
     source_manifest = tree_manifest(source)
     target_manifest = tree_manifest(target) if target.exists() else {}
     extras = sorted(set(target_manifest) - set(source_manifest))
@@ -4781,6 +4787,8 @@ def copy_missing(source: Path, target: Path) -> None:
         elif relative not in target_manifest:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(data)
+            if inject_after_file:
+                reject("injected handoff interruption", relative)
 
 
 def handoff(
