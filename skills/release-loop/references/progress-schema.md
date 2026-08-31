@@ -2,6 +2,8 @@
 
 The selected progress path is the loop's single durable state record (`enforces: P8`). New loops use `.release-loop/runs/<feature_slug>/progress.md`. A valid legacy run can retain `.release-loop/progress.md`. The file contains YAML frontmatter and a human-readable Log section. Consumers reject unknown `schema:` versions.
 
+Top-level scalar fields start at column zero. Indented fields belong only to their parent blocks. They never override top-level fields. Consumers reject a duplicate top-level key. Only an exact column-zero `---` line closes frontmatter. A scalar containing `---` never changes that boundary.
+
 ```markdown
 ---
 schema: release-loop/v1
@@ -50,6 +52,20 @@ gate_answer_receipt:
   gate_issued_at: <same timestamp as pending_gate.issued_at>
   answer: approve | revise | merge | nonmerge
   reserved_at: <ISO-8601 timestamp at or after issued_at>
+
+# Optional legacy archived-incomplete recovery gate.
+recovery_gate:
+  id: legacy-archive-recovery-approval
+  issued_at: <ISO-8601 timestamp>
+  expected_answer_class: approve-exact-recovery-or-cancel
+recovery_gate_receipt:
+  gate_id: legacy-archive-recovery-approval
+  gate_issued_at: <same timestamp as recovery_gate>
+  answer: approved | cancelled
+  session: <current session identity>
+  nonce: <non-empty reservation nonce>
+  request_sha256: <request record SHA-256>
+  reserved_at: <ISO-8601 timestamp>
 
 # Final-action record (preparation evidence, never approval — see Rules)
 final_action:
@@ -152,7 +168,8 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 ## Rules
 
 - `artifact_root` equals the exact repo-relative directory that contains the selected progress record. New scoped records require this field. Legacy records require `artifact_root: .release-loop`. A legacy record without that field cannot resume.
-- The four closed physical-root families are scoped active state, legacy active state, terminal archives, and transition handoff.
+- The four ordinary lifecycle artifact-root families are scoped active state, legacy active state, terminal archives, and transition handoff.
+- `recovery-authority/` and `recovery-backups/` are fixed internal persistent recovery families under `.release-loop/`. Legacy handoff preserves them at the base and rejects them at the source. They are never active transfer roots.
 - Scoped active state permits only the selected `.release-loop/runs/<run_id>` root. Legacy active state permits the root progress file and its four known sibling directories.
 - Terminal archive state permits only the collision-resolved `.release-loop/archive/<destination>` root. Handoff state permits only `.release-loop/.handoff`.
 - Reject every symlink in each existing source or destination component. Also reject absolute paths, parent escapes, and physical parents outside the applicable closed root.
@@ -165,7 +182,15 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - Before sending one answer, atomically write `gate_answer_receipt` and a reservation Log line. A receipt is at-most-once delivery evidence, not proof that the answer reached the session. Resume never sends another answer while a receipt exists; it blocks for first-hand reconciliation.
 - After the owning phase observes the answer, it validates a timezone-bearing outcome timestamp at or after `issued_at`. It then atomically removes the gate and receipt, changes the status, writes approval when applicable, and appends the outcome Log line.
 - Resume sends one answer only when the gate ID, phase, answer class, issue timestamp, absent approval, and absent receipt match. Missing, duplicate, stale, mismatched, unknown, already-approved, or previously reserved state blocks without sending an answer.
+- Legacy archive recovery is a separate local gate. The orchestrator records the first-hand current-session answer in its pinned gate ledger, and the artifact CLI snapshots that receipt before publishing approval. Python validates custody and digests; it does not authenticate a human.
+- The recovery gate stays pending until both `gate-receipt.json` and `approval.json` exist. Clear the gate and its live receipt atomically after both create-once records validate. A cancelled answer records cancellation and starts no backup.
 - V1 acceptance is required before `shipping` starts. V2 acceptance is required before `phase: done`. Each record uses the exact generation digest and transitions only from `started` to `accepted` with Log evidence.
+- An ordinary lifecycle still requires its declared supported pre-archive contract. Recovery cannot replace V2 or a later registered contract.
+- Recovery uses the fixed sequence G0, receipt R, G1, G2, and G3. G1 and G2 keep the phase nonterminal. Only recovery generation G3 may use the terminal archive exception.
+- A recovery receipt pins the request, approval snapshot, accepted audit, backup record, source archive, restored G0 digest, and pre-receipt generation. Each later generation pins its predecessor and the same recovery ID.
+- Each G1, G2, and G3 write fetches a fresh timestamp and atomically updates `updated`. Its evidence records `prior-updated` for predecessor reconstruction. G1 cannot precede G0 `updated` or `request.issued_at`. A retry reuses an exact durable progress temporary only when its timestamp satisfies that bound.
+- Legacy archive recovery audit requires `ship_approved.at <= final_action.updated == ship: merged <= retro: committed == updated <= request.issued_at <= audit.timestamp`. It rejects every missing, malformed, future, nonmonotonic, or unequal atomic-write timestamp before restore.
+- Missing, stale, malformed, duplicate, replayed, swapped, or caller-overridden recovery evidence blocks before the terminal exception.
 - Timestamps are ISO-8601 with timezone, **fetched fresh via command (`date -u +%Y-%m-%dT%H:%M:%SZ`) at each write — never estimated or interpolated** (pilot-proven: estimated timestamps produced a non-monotonic log).
 - **Status flips are atomic with their evidence**: changing `phase`/`phase_status` and writing the explaining Log line (plus `blocked_reason` when the status is blocked) happen in the same edit — a bare `blocked` with `blocked_reason: null` is a schema violation, not a placeholder.
 - Corrupt/unparsable file on resume → rebuild frontmatter from git evidence (branch, committed artifacts, PR state via `gh pr view`), keep the old file as `progress.md.corrupt-<timestamp>`, and note the rebuild in the Log. A stored `feature:` that fails the `feature_slug` invariant is the same class of corruption.

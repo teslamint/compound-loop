@@ -20,6 +20,7 @@ from datetime import timezone
 from decimal import Decimal
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -6859,6 +6860,310 @@ def validate_gate_group(mutation_rows):
     return len(gate_rows), controls
 
 
+def load_artifact_integrity_module():
+    path = root / "skills/release-loop/scripts/run-artifact-integrity.py"
+    spec = importlib.util.spec_from_file_location("release_loop_artifact_integrity", path)
+    if spec is None or spec.loader is None:
+        fail("production artifact-integrity module is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
+def validate_recovery_contract():
+    artifact = load_artifact_integrity_module()
+    controls = 0
+    mutations = 0
+
+    v2 = (
+        f"## Release-loop pre-archive verification V2: {artifact.CONTRACT_V2_TITLE}\n\n"
+        f"{artifact.CONTRACT_V2_BODY}\n"
+    )
+    classifier_cases = (
+        ("supported-v2", v2, "supported"),
+        (
+            "unsupported-v3",
+            v2.replace("verification V2:", "verification V3:", 1),
+            "unsupported-version",
+        ),
+        (
+            "malformed",
+            v2.replace("verification V2:", "verification V02:", 1),
+            "malformed",
+        ),
+        ("duplicate", v2 + "\n" + v2, "duplicate"),
+        ("absent", "# Approved plan\n\nNo declaration heading.\n", "absent-legacy-shape"),
+    )
+    for label, plan_text, expected in classifier_cases:
+        actual = artifact.classify_pre_archive_contract(plan_text)["classification"]
+        if actual != expected:
+            fail(f"production recovery classifier mismatch: {label}: {actual}")
+        if label == "absent":
+            controls += 1
+        else:
+            if actual == "absent-legacy-shape":
+                fail(f"production recovery classifier admitted ordinary evidence: {label}")
+            mutations += 1
+    original_body = artifact.CONTRACT_V2_BODY
+    try:
+        artifact.CONTRACT_V2_BODY = original_body + "!"
+        if artifact.classify_pre_archive_contract(v2)["classification"] != "unverifiable":
+            fail("production V2 body mutation was accepted")
+    finally:
+        artifact.CONTRACT_V2_BODY = original_body
+    mutations += 1
+
+    audit_cases = (
+        ("legacy_archive_recovery_parser_provenance_matrix", True),
+        ("legacy_archive_recovery_rejects_frontmatter_shadowing", False),
+        ("legacy_archive_recovery_rejects_invalid_terminal_updated", False),
+        ("legacy_archive_recovery_timestamps_each_generation", False),
+    )
+    for case_name, control in audit_cases:
+        audit_case = subprocess.run(
+            ["bash", "scripts/test-run-artifact-integrity.sh", case_name],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        marker = f"ok:   [run-artifact-integrity] {case_name}"
+        if audit_case.returncode != 0 or marker not in audit_case.stdout:
+            fail(f"production recovery audit case failed: {case_name}: {audit_case.stderr.strip()}")
+        if control:
+            controls += 1
+        else:
+            mutations += 1
+
+    with tempfile.TemporaryDirectory(prefix="release-recovery-gate-") as temp_value:
+        repo = Path(temp_value)
+        progress = repo / ".release-loop/runs/gate/progress.md"
+        progress.parent.mkdir(parents=True)
+
+        def gate_text(receipt_rows=()):
+            receipt = ""
+            if receipt_rows:
+                receipt = "recovery_gate_receipt:\n" + "".join(
+                    f"  {key}: {value}\n" for key, value in receipt_rows
+                )
+            return (
+                "---\n"
+                "schema: release-loop/v1\n"
+                "feature: gate\n"
+                "artifact_root: .release-loop/runs/gate\n"
+                "phase_status: waiting-user\n"
+                "recovery_gate:\n"
+                "  id: legacy-archive-recovery-approval\n"
+                "  issued_at: 2026-08-30T01:00:00Z\n"
+                "  expected_answer_class: approve-exact-recovery-or-cancel\n"
+                f"{receipt}"
+                "---\n"
+            )
+
+        valid_receipt = (
+            ("gate_id", "legacy-archive-recovery-approval"),
+            ("gate_issued_at", "2026-08-30T01:00:00Z"),
+            ("answer", "approved"),
+            ("session", "session-one"),
+            ("nonce", "nonce-one"),
+            ("request_sha256", "a" * 64),
+            ("reserved_at", "2026-08-30T01:00:01Z"),
+        )
+        progress.write_text(gate_text(valid_receipt), encoding="utf-8")
+        artifact.read_recovery_gate(
+            repo,
+            ".release-loop/runs/gate/progress.md",
+            "session-one",
+            expected_request_sha256="a" * 64,
+        )
+        controls += 1
+        gate_mutants = (
+            ("missing", (), "missing recovery_gate_receipt"),
+            (
+                "stale",
+                tuple(
+                    (key, "2026-08-30T00:59:59Z" if key == "reserved_at" else value)
+                    for key, value in valid_receipt
+                ),
+                "reservation precedes gate issue",
+            ),
+            (
+                "override",
+                tuple(
+                    (key, "b" * 64 if key == "request_sha256" else value)
+                    for key, value in valid_receipt
+                ),
+                "request digest mismatch",
+            ),
+        )
+        for label, receipt_rows, diagnostic in gate_mutants:
+            progress.write_text(gate_text(receipt_rows), encoding="utf-8")
+            try:
+                artifact.read_recovery_gate(
+                    repo,
+                    ".release-loop/runs/gate/progress.md",
+                    "session-one",
+                    expected_request_sha256="a" * 64,
+                )
+            except artifact.Blocked as exc:
+                if diagnostic not in str(exc):
+                    fail(f"production recovery gate diagnostic mismatch: {label}: {exc}")
+            else:
+                fail(f"production recovery gate mutant accepted: {label}")
+            mutations += 1
+
+        arguments = artifact.parser().parse_args([
+            "request-legacy-archive",
+            "--repo",
+            str(repo),
+            "--recovery-id",
+            "recovery-one",
+            "--publish-approval",
+            "--session",
+            "caller-override",
+        ])
+        try:
+            artifact.execute(arguments)
+        except artifact.Blocked as exc:
+            if "approval publication accepts only --repo and --recovery-id" not in str(exc):
+                fail(f"production approval override diagnostic mismatch: {exc}")
+        else:
+            fail("production approval caller override was accepted")
+        mutations += 1
+
+    with tempfile.TemporaryDirectory(prefix="release-recovery-terminal-") as temp_value:
+        repo = Path(temp_value)
+        archive_root = repo / ".release-loop/archive/recovered"
+        archive_root.mkdir(parents=True)
+        progress = archive_root / "progress.md"
+        g0_timestamp = "2026-08-30T01:00:00Z"
+        g1_timestamp = "2026-08-30T01:00:01Z"
+        g2_timestamp = "2026-08-30T01:00:02Z"
+        g3_timestamp = "2026-08-30T01:00:03Z"
+        source = ".release-loop/archive/original"
+        destination = ".release-loop/archive/recovered"
+        recovery_id = "recovery-one"
+        receipt_digest = "b" * 64
+        g0_text = (
+            "---\n"
+            "schema: release-loop/v1\n"
+            "feature: alpha\n"
+            "phase: retro\n"
+            "phase_status: in-progress\n"
+            f"updated: {g0_timestamp}\n"
+            "---\n\n"
+            "## Log\n\n"
+            f"- {g0_timestamp} archived-incomplete: archive-destination: {source}\n"
+        )
+        progress.write_text(g0_text, encoding="utf-8")
+        archive_fd = os.open(archive_root, artifact.DIRECTORY_OPEN_FLAGS)
+        repo_fd = os.open(repo, artifact.DIRECTORY_OPEN_FLAGS)
+        try:
+            g0 = artifact.recovery_generation_at(archive_fd)
+            request = {
+                "recovery_id": recovery_id,
+                "archive_destination": source,
+                "restore_target": ".release-loop/runs/alpha",
+                "issued_at": g0_timestamp,
+            }
+            receipt = {"g0_sha256": g0}
+            g1_text = g0_text.replace(
+                f"updated: {g0_timestamp}\n",
+                f"updated: {g1_timestamp}\n",
+                1,
+            ) + (
+                f"- {g1_timestamp} legacy_archive_recovery: staged: recovery-id={recovery_id} "
+                f"receipt-sha256={receipt_digest} g0-sha256={g0} destination={destination} "
+                f"prior-updated={g0_timestamp}\n"
+                f"- {g1_timestamp} retro: archive-destination: {destination} recovery-id={recovery_id} "
+                f"receipt-sha256={receipt_digest} g0-sha256={g0}\n"
+            )
+            progress.write_text(g1_text, encoding="utf-8")
+            g1 = artifact.recovery_generation_at(archive_fd)
+            g2_text = g1_text.replace(
+                f"updated: {g1_timestamp}\n",
+                f"updated: {g2_timestamp}\n",
+                1,
+            ) + (
+                f"- {g2_timestamp} legacy-pre-archive-verification: accepted: recovery-id={recovery_id} "
+                f"receipt-sha256={receipt_digest} g1-sha256={g1} destination={destination} "
+                f"source={source} prior-updated={g1_timestamp}\n"
+            )
+            progress.write_text(g2_text, encoding="utf-8")
+            g2 = artifact.recovery_generation_at(archive_fd)
+            g3_text = g2_text.replace("phase: retro\n", "phase: done\n", 1).replace(
+                "phase_status: in-progress\n", "phase_status: complete\n", 1
+            ).replace(
+                f"updated: {g2_timestamp}\n",
+                f"updated: {g3_timestamp}\n",
+                1,
+            ) + (
+                f"- {g3_timestamp} legacy_archive_recovery: completed: recovery-id={recovery_id} "
+                f"receipt-sha256={receipt_digest} g2-sha256={g2} destination={destination} "
+                f"prior-phase=retro prior-status=in-progress prior-updated={g2_timestamp}\n"
+            )
+            source_journal_data = artifact.canonical_json({
+                "schema": "phase-artifact-ownership/v1",
+                "owned": {},
+                "pending": None,
+            })
+
+            for state, progress_text, accepted in (
+                ("G1", g1_text, False),
+                ("G2", g2_text, False),
+                ("G3", g3_text, True),
+            ):
+                progress.write_text(progress_text, encoding="utf-8")
+                for control_name in (artifact.ARCHIVE_MANIFEST_NAME, artifact.JOURNAL_NAME):
+                    control_path = archive_root / control_name
+                    if control_path.exists():
+                        control_path.unlink()
+                entries = artifact.recovery_tree_at(
+                    archive_fd,
+                    exclude=artifact.RECOVERY_CONTROL_NAMES,
+                )
+                manifest_data = artifact.canonical_json({
+                    "schema": artifact.ARCHIVE_MANIFEST_SCHEMA,
+                    "entries": entries,
+                })
+                (archive_root / artifact.ARCHIVE_MANIFEST_NAME).write_bytes(manifest_data)
+                manifest_digest = hashlib.sha256(manifest_data).hexdigest()
+                destination_journal_data = artifact.recovery_archive_journal_bytes(
+                    source_journal_data,
+                    entries,
+                    manifest_digest,
+                )
+                (archive_root / artifact.JOURNAL_NAME).write_bytes(destination_journal_data)
+                try:
+                    artifact.validate_recovery_archive_at(
+                        repo_fd,
+                        archive_fd,
+                        destination,
+                        request,
+                        receipt,
+                        receipt_digest,
+                        source_journal_data,
+                        reserved=False,
+                    )
+                except artifact.Blocked as exc:
+                    if accepted or "completed recovery state is invalid" not in str(exc):
+                        fail(f"production terminal recovery mismatch: {state}: {exc}")
+                else:
+                    if not accepted:
+                        fail(f"production terminal recovery accepted {state}")
+                    controls += 1
+                if not accepted:
+                    mutations += 1
+        finally:
+            os.close(archive_fd)
+            os.close(repo_fd)
+    return controls, mutations
+
+
 def grade_mutation(mutation, cases_by_id, clauses_by_id, disabled_graders=frozenset()):
     mutation_id = mutation["id"]
     case = cases_by_id[mutation["case_id"]]
@@ -7153,6 +7458,7 @@ if mode == "gate":
         if (root / relative_path).read_text(encoding="utf-8").count(literal) != 1:
             fail(f"pending gate source contract mismatch: {relative_path}")
     gate_mutations, gate_controls = validate_gate_group(load_json(data_root / "mutations.json")["mutations"])
+    recovery_controls, recovery_mutations = validate_recovery_contract()
 if mode == "preflight":
     preflight_adapters, preflight_calls, preflight_negatives, preflight_auth_events = validate_preflight()
 if mode == "resource":
@@ -7349,7 +7655,8 @@ if mode == "fixture":
 if mode == "gate":
     print(
         "ok:   release-loop pending gates "
-        f"mutations={gate_mutations} controls={gate_controls}"
+        f"mutations={gate_mutations} controls={gate_controls} "
+        f"recovery_controls={recovery_controls} recovery_mutations={recovery_mutations}"
     )
 if mode == "preflight":
     print(

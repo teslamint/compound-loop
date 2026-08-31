@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 import shutil
@@ -20,6 +21,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 
 
 CASE = sys.argv[1]
@@ -75,6 +77,65 @@ CASES = (
     "archive_progress_commit_recovery",
     "archive_requires_persisted_destination",
     "archive_incomplete_run",
+    "legacy_archive_recovery_request",
+    "legacy_archive_recovery_lifecycle",
+    "legacy_archive_recovery_success",
+    "legacy_archive_recovery_requires_terminal_evidence",
+    "legacy_archive_recovery_rejects_unmerged_ship",
+    "legacy_archive_recovery_rejects_unexecuted_final_action",
+    "legacy_archive_recovery_rejects_uncommitted_retro",
+    "legacy_archive_recovery_rejects_retro_before_ship",
+    "legacy_archive_recovery_rejects_wrong_final_action_kind",
+    "legacy_archive_recovery_rejects_draft_plan",
+    "legacy_archive_recovery_rejects_plan_seal_mismatch",
+    "legacy_archive_recovery_rejects_missing_introduction_object",
+    "legacy_archive_recovery_ancestor_replacement",
+    "legacy_archive_recovery_resume_after_g0",
+    "legacy_archive_recovery_resume_after_receipt",
+    "legacy_archive_recovery_resume_after_g1",
+    "legacy_archive_recovery_resume_after_g2",
+    "legacy_archive_recovery_resume_after_g3",
+    "legacy_archive_recovery_generation_tamper",
+    "legacy_archive_recovery_rejects_tampered_g0_result",
+    "legacy_archive_recovery_rejects_tampered_receipt",
+    "legacy_archive_recovery_rejects_tampered_g1",
+    "legacy_archive_recovery_rejects_tampered_g2",
+    "legacy_archive_recovery_rejects_tampered_g3",
+    "legacy_archive_recovery_restore_rejects_deleted_gate_receipt",
+    "legacy_archive_recovery_restore_rejects_tampered_gate_receipt",
+    "legacy_archive_recovery_rejects_foreign_destination_before_g1",
+    "legacy_archive_recovery_rejects_backup_change_before_copy",
+    "legacy_archive_recovery_rejects_source_change_before_copy",
+    "legacy_archive_recovery_target_create_swap",
+    "legacy_archive_recovery_before_g1_ancestor",
+    "legacy_archive_recovery_cleanup_foreign_preserves_g3",
+    "legacy_archive_recovery_resume_after_cleanup_one",
+    "legacy_archive_recovery_progress_after_binding_swap",
+    "legacy_archive_recovery_rejects_concurrent_restore",
+    "legacy_archive_recovery_records_rejected_audit",
+    "legacy_archive_recovery_backup_revalidates_gate_receipt",
+    "legacy_archive_recovery_rejects_unsafe_journal_entries",
+    "legacy_archive_recovery_resumes_archive_publication_faults",
+    "legacy_archive_recovery_resumes_atomic_temp_publications",
+    "legacy_archive_recovery_rejects_terminal_evidence_mutants",
+    "legacy_archive_recovery_serializes_audit_and_restore",
+    "legacy_archive_recovery_parser_provenance_matrix",
+    "legacy_archive_recovery_resumes_after_gate_receipt",
+    "legacy_archive_recovery_resumes_after_destination_mkdir",
+    "legacy_archive_recovery_completed_archive_is_idempotent",
+    "legacy_archive_recovery_rejects_foreign_publication_temporaries",
+    "legacy_archive_recovery_resumes_owned_prefix_temporary",
+    "legacy_archive_recovery_blocks_generation_change_before_progress_replace",
+    "legacy_archive_recovery_blocks_foreign_partial_destination_before_mutation",
+    "legacy_archive_recovery_preserves_nonmanifest_owned_journal_row",
+    "legacy_archive_recovery_rejects_reserved_payload_collisions",
+    "legacy_archive_recovery_rejects_frontmatter_shadowing",
+    "legacy_archive_recovery_revalidates_completed_owned_rows",
+    "legacy_archive_recovery_markdown_heading_boundaries",
+    "legacy_archive_recovery_rejects_plan_frontmatter_attacks",
+    "legacy_archive_recovery_rejects_body_structural_authority",
+    "legacy_archive_recovery_timestamps_each_generation",
+    "legacy_archive_recovery_rejects_invalid_terminal_updated",
     "archive_incomplete_missing_phase",
     "archive_incomplete_missing_phase_status",
     "archive_incomplete_unknown_phase",
@@ -113,6 +174,7 @@ CASES = (
     "legacy_handoff_symlinks",
     "legacy_handoff_marker_schema",
     "legacy_handoff_complete_destination_regression",
+    "legacy_handoff_preserves_recovery_roots",
     "legacy_handoff_partial_directory_rerun",
     "archive_direct_escape",
     "archive_parent_escape",
@@ -289,7 +351,12 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["SKILL"], "A published progress record remains resumable."),
         (selected["SCHEMA"], "artifact_root: .release-loop/runs/<feature_slug>"),
         (selected["SCHEMA"], "Legacy records require `artifact_root: .release-loop`."),
-        (selected["SCHEMA"], "The four closed physical-root families are"),
+        (selected["SCHEMA"], "The four ordinary lifecycle artifact-root families are"),
+        (
+            selected["SCHEMA"],
+            "`recovery-authority/` and `recovery-backups/` are fixed internal persistent recovery families",
+        ),
+        (selected["SCHEMA"], "They are never active transfer roots."),
         (selected["SCHEMA"], "Reject every symlink in each existing source or destination component"),
         (selected["ARCHIVE"], "Move scoped `progress.md` last as the archive commit point."),
         (selected["ARCHIVE"], "reuse the exact recorded archive destination"),
@@ -298,6 +365,8 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["HOOKS"], "Make the base owner discover and resume that exact progress path."),
         (selected["HOOKS"], "Cancellation preserves the source worktree."),
         (selected["HOOKS"], "are never active transfer bytes"),
+        (selected["HOOKS"], "`recovery-authority/` and `recovery-backups/` are persistent siblings"),
+        (selected["HOOKS"], "At the source, legacy handoff rejects every persistent sibling"),
         (selected["SKILL"], "adds `--legacy-destination .release-loop`"),
         (selected["SKILL"], "directory containing the loaded `SKILL.md`"),
         (selected["SKILL"], "temporary regular file under `<artifact_root>/.tmp/`"),
@@ -350,6 +419,172 @@ def new_repo(tmp: Path, name: str = "repo") -> Path:
     DISPOSABLE_REPOS.append(resolved)
     DISPOSABLE_PRE_STATES[str(resolved)] = matrix_fixture_snapshot(resolved)
     return resolved
+
+
+def add_recovery_provenance(
+    repo: Path,
+    progress_path: Path,
+    *,
+    install_alternate: bool = True,
+    plan_variant: str = "approved",
+) -> None:
+    introduction = "08e12a82752847b3bead5a96fd251b4ad58eae1b"
+    approval = "295909c66be802fd8ce5c37d91367da11fd93acd"
+    plan_frontmatter_variants = {
+        "missing-body-seal",
+        "duplicate-body-seal",
+        "mismatch-body-seal",
+        "duplicate-status",
+        "delimiter-body-seal-shadow",
+        "delimiter-status-shadow",
+    }
+    if plan_variant in plan_frontmatter_variants:
+        plan_path = "docs/plans/recovery-provenance-fixture.md"
+        contract = HOOKS
+        body = "# Recovery Provenance Fixture\n\nThis approved plan records fixture work.\n"
+        body_digest = hashlib.sha256(("\n" + body).encode("utf-8")).hexdigest()
+        frontmatter = [
+            "schema: plan/v1",
+            "title: Recovery provenance fixture",
+            "type: feat",
+            "status: approved",
+            f"body_seal: {body_digest}",
+        ]
+        if plan_variant == "missing-body-seal":
+            frontmatter = [line for line in frontmatter if not line.startswith("body_seal:")]
+        elif plan_variant == "duplicate-body-seal":
+            frontmatter.append(f"body_seal: {body_digest}")
+        elif plan_variant == "mismatch-body-seal":
+            frontmatter[-1] = "body_seal: " + ("0" * 64 if body_digest != "0" * 64 else "1" * 64)
+        elif plan_variant == "duplicate-status":
+            frontmatter.append("status: approved")
+        elif plan_variant in {"delimiter-body-seal-shadow", "delimiter-status-shadow"}:
+            shadow = (
+                "body_seal: " + "0" * 64
+                if plan_variant == "delimiter-body-seal-shadow"
+                else "status: draft"
+            )
+            deceptive_body = f"\n{shadow}\n---\n{body}"
+            body_digest = hashlib.sha256(deceptive_body.encode("utf-8")).hexdigest()
+            frontmatter[-1] = f"body_seal: {body_digest}"
+            frontmatter.append("note: ---")
+        plan_file = repo / plan_path
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        if plan_variant in {"delimiter-body-seal-shadow", "delimiter-status-shadow"}:
+            plan_text = "---\n" + "\n".join(frontmatter) + f"\n{shadow}\n---\n" + body
+        else:
+            plan_text = "---\n" + "\n".join(frontmatter) + "\n---\n" + body
+        plan_file.write_text(plan_text, encoding="utf-8")
+        git(repo, "add", plan_path)
+        git(repo, "commit", "-qm", f"fixture plan {plan_variant}")
+        approval = git(repo, "rev-parse", "HEAD")
+        source_objects = Path(git(ROOT, "rev-parse", "--git-path", "objects")).resolve()
+        alternates = repo / ".git/objects/info/alternates"
+        alternates.parent.mkdir(parents=True, exist_ok=True)
+        alternates.write_text(f"{source_objects}\n", encoding="utf-8")
+        git(repo, "replace", "--graft", introduction, approval)
+        git(repo, "merge-base", "--is-ancestor", approval, introduction)
+        seal = body_digest
+    elif plan_variant == "draft":
+        plan_path = "docs/plans/2026-07-16-001-feat-signal-drift-check-plan.md"
+    elif plan_variant in {
+        "approved",
+        "seal-mismatch",
+        "approval-equals-introduction",
+        "nonancestor-approval",
+        "approval-blob-mismatch",
+        "post-introduction-absence",
+    }:
+        plan_path = "docs/plans/2026-08-23-001-fix-run-artifact-integrity-plan.md"
+    elif plan_variant not in plan_frontmatter_variants:
+        raise AssertionError(f"unknown recovery plan variant: {plan_variant}")
+    if plan_variant == "approval-equals-introduction":
+        approval = introduction
+    elif plan_variant in {"nonancestor-approval", "post-introduction-absence"}:
+        approval = git(ROOT, "rev-parse", "HEAD")
+    if plan_variant not in plan_frontmatter_variants:
+        plan_blob = subprocess.run(
+            ("git", "show", f"{approval}:{plan_path}"),
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout
+        plan_text = plan_blob.decode("utf-8")
+        seal = hashlib.sha256(plan_text.split("---", 2)[2].encode("utf-8")).hexdigest()
+        if plan_variant in {"seal-mismatch", "approval-blob-mismatch"}:
+            seal = "0" * 64 if seal != "0" * 64 else "1" * 64
+    if install_alternate:
+        source_objects = Path(git(ROOT, "rev-parse", "--git-path", "objects")).resolve()
+        alternates = repo / ".git/objects/info/alternates"
+        alternates.parent.mkdir(parents=True, exist_ok=True)
+        alternates.write_text(f"{source_objects}\n", encoding="utf-8")
+    text = progress_path.read_text(encoding="utf-8")
+    text = text.replace(
+        "phase: implement\n",
+        f"plan: {plan_path}\n"
+        f"plan_approval_commit: {approval}\n"
+        f"plan_seal: {seal}\n"
+        f"contract_introduction_commit: {introduction}\n"
+        "phase: implement\n",
+        1,
+    )
+    progress_path.write_text(text, encoding="utf-8")
+
+
+def add_recovery_terminal_evidence(
+    repo: Path,
+    progress_path: Path,
+    *,
+    retro_before_ship: bool = False,
+) -> None:
+    git(repo, "branch", "-M", "main")
+    retro_path = repo / "docs/retros/2026-08-30-fixture-retro.md"
+    if retro_before_ship:
+        retro_path.parent.mkdir(parents=True, exist_ok=True)
+        retro_path.write_text("# Fixture Retro\n\nCommitted recovery evidence.\n", encoding="utf-8")
+        git(repo, "add", str(retro_path.relative_to(repo)))
+        git(repo, "commit", "-qm", "fixture retro before ship")
+        retro_commit = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-qb", "feat/fixture")
+    (repo / "feature.txt").write_text("merged feature\n", encoding="utf-8")
+    git(repo, "add", "feature.txt")
+    git(repo, "commit", "-qm", "fixture feature")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "--ff-only", "feat/fixture")
+    ship_commit = git(repo, "rev-parse", "HEAD")
+    if not retro_before_ship:
+        retro_path.parent.mkdir(parents=True, exist_ok=True)
+        retro_path.write_text("# Fixture Retro\n\nCommitted recovery evidence.\n", encoding="utf-8")
+        git(repo, "add", str(retro_path.relative_to(repo)))
+        git(repo, "commit", "-qm", "fixture retro")
+        retro_commit = git(repo, "rev-parse", "HEAD")
+    text = progress_path.read_text(encoding="utf-8")
+    text = text.replace("phase: implement\n", "phase: retro\n", 1)
+    text = text.replace("branch: feat/fixture\n", "branch: main\n", 1)
+    text = text.replace(
+        "flags: []\n",
+        "flags: []\n"
+        "retro: docs/retros/2026-08-30-fixture-retro.md\n"
+        "ship_approved: {by: user, at: 2026-08-30T04:56:00Z, conditions: \"CI green, no open P0\"}\n"
+        "merged: true\n",
+        1,
+    )
+    text = text.replace("  status: predicted\n", "  status: executed\n", 1)
+    text = text.replace("  command: null\n", "  command: git merge --ff-only feat/fixture\n", 1)
+    terminal_updated = "2026-08-30T04:57:00Z" if retro_before_ship else "2026-08-30T04:59:00Z"
+    text = text.replace("updated: 2026-08-23T00:00:00Z\n", f"updated: {terminal_updated}\n", 1)
+    text = text.replace("  updated: 2026-08-23T00:00:00Z\n", "  updated: 2026-08-30T04:57:00Z\n", 1)
+    if retro_before_ship:
+        text += (
+            f"- 2026-08-30T04:55:00Z retro: committed ({retro_commit})\n"
+            f"- 2026-08-30T04:57:00Z ship: merged ({ship_commit})\n"
+        )
+    else:
+        text += (
+            f"- 2026-08-30T04:57:00Z ship: merged ({ship_commit})\n"
+            f"- 2026-08-30T04:59:00Z retro: committed ({retro_commit})\n"
+        )
+    progress_path.write_text(text, encoding="utf-8")
 
 
 def new_history_repo(tmp: Path, conflict: bool = False, name: str = "repo") -> Path:
@@ -477,10 +712,13 @@ def run_cli(
     failure: str | None = None,
     cli: Path = CLI,
     cwd: Path = ROOT,
+    environment_overrides: dict[str, str] | None = None,
 ) -> dict[str, object]:
     if not cli.is_file():
         raise AssertionError(f"packaged run-artifact CLI absent: {cli}")
     environment = os.environ.copy()
+    if environment_overrides is not None:
+        environment.update(environment_overrides)
     if failure is not None:
         environment["RUN_ARTIFACT_INTEGRITY_TEST_FAIL"] = failure
     argv = [sys.executable, str(cli), command, *args]
@@ -631,6 +869,44 @@ def filesystem_manifest(root: Path) -> dict[str, tuple[str, bytes | str | None]]
     return manifest
 
 
+def fixture_generation_sha256(root: Path, progress_override: bytes | None = None) -> str:
+    entries: list[dict[str, object]] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        assert not path.is_symlink(), f"generation contains symlink: {relative}"
+        if path.is_dir():
+            entries.append({"kind": "directory", "path": relative})
+        else:
+            data = progress_override if relative == "progress.md" and progress_override is not None else path.read_bytes()
+            entries.append({
+                "kind": "file",
+                "path": relative,
+                "sha256": hashlib.sha256(data).hexdigest(),
+            })
+    encoded = json.dumps({"entries": entries}, sort_keys=True, separators=(",", ":")) + "\n"
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def archive_payload_generation_sha256(manifest_path: Path) -> str:
+    raw = manifest_path.read_bytes()
+    manifest = json.loads(raw)
+    assert manifest.get("schema") == "archive-source-manifest/v1", manifest
+    assert isinstance(manifest.get("entries"), list), manifest
+    assert raw == (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    encoded = json.dumps({"entries": manifest["entries"]}, sort_keys=True, separators=(",", ":")) + "\n"
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def recovery_progress_lines(text: str) -> tuple[str, ...]:
+    markers = (
+        "retro: archive-destination:",
+        "legacy_archive_recovery: staged:",
+        "legacy-pre-archive-verification: accepted:",
+        "legacy_archive_recovery: completed:",
+    )
+    return tuple(line for line in text.splitlines() if any(marker in line for marker in markers))
+
+
 def write_matrix_observation(
     case: str,
     repo: Path,
@@ -758,6 +1034,200 @@ def persist_archive_evidence(path: Path, destination: str, mode: str) -> None:
     else:
         raise AssertionError(f"unknown fixture archive mode: {mode}")
     path.write_text(text + marker, encoding="utf-8")
+
+
+def recovery_gate(repo: Path) -> Path:
+    gate = initialize(repo, "gate")
+    gate.write_text(
+        gate.read_text(encoding="utf-8").replace(
+            "phase: implement\nphase_status: in-progress\n",
+            "phase: implement\nphase_status: waiting-user\n",
+            1,
+        ).replace(
+            "final_action:\n",
+            "recovery_gate:\n"
+            "  id: legacy-archive-recovery-approval\n"
+            "  issued_at: 2026-08-30T05:00:00Z\n"
+            "  expected_answer_class: approve-exact-recovery-or-cancel\n"
+            "final_action:\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    return gate
+
+
+def recovery_archive(
+    repo: Path,
+    terminal_variant: str = "valid",
+    *,
+    extra_payload: bool = False,
+    install_alternate: bool = True,
+    plan_variant: str = "approved",
+    frontmatter_variant: str | None = None,
+) -> tuple[str, Path]:
+    archived_source = initialize(repo, "alpha")
+    add_recovery_provenance(
+        repo,
+        archived_source,
+        install_alternate=install_alternate,
+        plan_variant=plan_variant,
+    )
+    add_recovery_terminal_evidence(
+        repo,
+        archived_source,
+        retro_before_ship=terminal_variant == "retro-before-ship",
+    )
+    text = archived_source.read_text(encoding="utf-8")
+    if terminal_variant == "unmerged-ship":
+        text = text.replace("merged: true\n", "merged: false\n", 1)
+    elif terminal_variant == "unexecuted-final-action":
+        text = text.replace("  status: executed\n", "  status: predicted\n", 1)
+    elif terminal_variant == "uncommitted-retro":
+        uncommitted = repo / "docs/retros/2026-08-30-uncommitted-retro.md"
+        uncommitted.write_text("# Uncommitted Retro\n", encoding="utf-8")
+        text = text.replace(
+            "retro: docs/retros/2026-08-30-fixture-retro.md\n",
+            "retro: docs/retros/2026-08-30-uncommitted-retro.md\n",
+            1,
+        )
+    elif terminal_variant == "wrong-final-action-kind":
+        text = text.replace("  kind: merge-to-base\n", "  kind: publish-release\n", 1)
+    elif terminal_variant == "same-ship-retro-commit":
+        ship_match = re.search(r"ship: merged \(([0-9a-f]{40})\)", text)
+        assert ship_match is not None
+        text = re.sub(
+            r"retro: committed \([0-9a-f]{40}\)",
+            f"retro: committed ({ship_match.group(1)})",
+            text,
+            count=1,
+        )
+    elif terminal_variant == "ship-approval-shape":
+        text = text.replace(
+            'ship_approved: {by: user, at: 2026-08-30T04:56:00Z, conditions: "CI green, no open P0"}\n',
+            "ship_approved: approved\n",
+            1,
+        )
+    elif terminal_variant == "ship-approval-by":
+        text = text.replace("ship_approved: {by: user,", "ship_approved: {by: automation,", 1)
+    elif terminal_variant == "ship-approval-time":
+        text = text.replace(
+            "ship_approved: {by: user, at: 2026-08-30T04:56:00Z,",
+            "ship_approved: {by: user, at: not-a-timestamp,",
+            1,
+        )
+    elif terminal_variant == "retro-before-ship":
+        pass
+    elif terminal_variant != "valid":
+        raise AssertionError(f"unknown recovery terminal variant: {terminal_variant}")
+    if frontmatter_variant is not None:
+        field, shape = frontmatter_variant.rsplit("-", 1)
+        field_lines = {
+            "phase_status": "phase_status: in-progress",
+            "merged": "merged: true",
+            "branch": "branch: main",
+            "base_branch": "base_branch: main",
+            "ship_approved": 'ship_approved: {by: user, at: 2026-08-30T04:56:00Z, conditions: "CI green, no open P0"}',
+        }
+        original = field_lines[field]
+        invalid = {
+            "phase_status": "complete",
+            "merged": "false",
+            "branch": "wrong-branch",
+            "base_branch": "wrong-base",
+            "ship_approved": "approved",
+        }[field]
+        if shape == "nested":
+            text = text.replace(original + "\n", f"shadow_{field}:\n  {field}: {invalid}\n", 1)
+        elif shape == "duplicate":
+            text = text.replace(original + "\n", original + f"\n{field}: {invalid}\n", 1)
+        else:
+            raise AssertionError(f"unknown frontmatter shape: {shape}")
+    archived_source.write_text(text, encoding="utf-8")
+    if extra_payload:
+        reports = archived_source.parent / "reports"
+        reports.mkdir()
+        (reports / "evidence.md").write_bytes(b"RECOVERY PAYLOAD\n")
+    destination = ".release-loop/archive/2026-08-30-alpha-incomplete"
+    archive_scope(repo, str(archived_source.relative_to(repo)), destination, mode="incomplete")
+    return destination, recovery_gate(repo)
+
+
+def prepare_recovery_for_restore(
+    repo: Path,
+    recovery_id: str,
+) -> tuple[str, Path, Path]:
+    destination, gate = recovery_archive(repo)
+    run_cli(
+        "request-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+        "--progress-path", f"{destination}/progress.md", "--gate-progress-path",
+        str(gate.relative_to(repo)), "--session", "fixture-session",
+    )
+    authority = repo / f".release-loop/recovery-authority/{recovery_id}"
+    approve_recovery_fixture(repo, recovery_id, authority, gate)
+    run_cli("backup-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id)
+    run_cli("audit-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id)
+    backup = repo / f".release-loop/recovery-backups/{recovery_id}"
+    return destination, authority, backup
+
+
+def approve_recovery_fixture(
+    repo: Path,
+    recovery_id: str,
+    authority: Path,
+    gate: Path,
+) -> None:
+    write_recovery_gate_approval_fixture(authority, gate)
+    run_cli("request-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id, "--publish-approval")
+
+
+def write_recovery_gate_approval_fixture(authority: Path, gate: Path) -> None:
+    gate.write_text(
+        gate.read_text(encoding="utf-8").replace(
+            "final_action:\n",
+            "recovery_gate_receipt:\n"
+            "  gate_id: legacy-archive-recovery-approval\n"
+            "  gate_issued_at: 2026-08-30T05:00:00Z\n"
+            "  answer: approved\n"
+            "  session: fixture-session\n"
+            "  nonce: fixture-nonce\n"
+            f"  request_sha256: {hashlib.sha256((authority / 'request.json').read_bytes()).hexdigest()}\n"
+            "  reserved_at: 2026-08-30T05:01:00Z\n"
+            "final_action:\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+
+def audit_rejected_recovery_fixture(
+    repo: Path,
+    recovery_id: str,
+    destination: str,
+    gate: Path,
+) -> tuple[Path, Path]:
+    requested = run_cli(
+        "request-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+        "--progress-path", f"{destination}/progress.md",
+        "--gate-progress-path", str(gate.relative_to(repo)), "--session", "fixture-session",
+    )
+    assert requested == {"recovery_id": recovery_id, "state": "requested"}, requested
+    authority = repo / f".release-loop/recovery-authority/{recovery_id}"
+    backup = repo / f".release-loop/recovery-backups/{recovery_id}"
+    approve_recovery_fixture(repo, recovery_id, authority, gate)
+    backed_up = run_cli(
+        "backup-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+    )
+    assert backed_up["state"] == "backed-up", backed_up
+    audited = run_cli(
+        "audit-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+    )
+    assert audited["state"] == "audited", audited
+    assert audited["verdict"] == "rejected", audited
+    audit = json.loads((authority / "audit.json").read_bytes())
+    assert audit["schema"] == "legacy-archive-recovery-audit/v1", audit
+    assert audit["verdict"] == "rejected", audit
+    return authority, backup
 
 
 def handoff_scope(
@@ -3096,6 +3566,2706 @@ def run_case(name: str) -> None:
             assert "phase: implement\n" in text
             assert "phase_status: in-progress\n" in text
             assert f"archived-incomplete: archive-destination: {destination}" in text
+        elif name == "legacy_archive_recovery_request":
+            archived_source = initialize(repo, "alpha")
+            add_recovery_provenance(repo, archived_source)
+            add_recovery_terminal_evidence(repo, archived_source)
+            destination = ".release-loop/archive/2026-08-30-alpha-incomplete"
+            archive_scope(
+                repo,
+                str(archived_source.relative_to(repo)),
+                destination,
+                mode="incomplete",
+            )
+            gate = initialize(repo, "gate")
+            gate_text = gate.read_text(encoding="utf-8")
+            gate_text = gate_text.replace(
+                "phase: implement\nphase_status: in-progress\n",
+                "phase: implement\nphase_status: waiting-user\n",
+                1,
+            ).replace(
+                "final_action:\n",
+                "recovery_gate:\n"
+                "  id: legacy-archive-recovery-approval\n"
+                "  issued_at: 2026-08-30T05:00:00Z\n"
+                "  expected_answer_class: approve-exact-recovery-or-cancel\n"
+                "final_action:\n",
+                1,
+            )
+            gate.write_text(gate_text, encoding="utf-8")
+            payload = run_cli(
+                "request-legacy-archive",
+                "--repo", str(repo),
+                "--recovery-id", "recovery-alpha",
+                "--progress-path", f"{destination}/progress.md",
+                "--gate-progress-path", str(gate.relative_to(repo)),
+                "--session", "fixture-session",
+            )
+            assert payload["recovery_id"] == "recovery-alpha", payload
+            assert payload["state"] == "requested", payload
+            authority = repo / ".release-loop/recovery-authority/recovery-alpha"
+            backup = repo / ".release-loop/recovery-backups/recovery-alpha"
+            assert (authority / "request.json").is_file(), authority
+            assert backup.is_dir() and not any(backup.iterdir()), backup
+            gate.write_text(
+                gate.read_text(encoding="utf-8").replace(
+                    "final_action:\n",
+                    "recovery_gate_receipt:\n"
+                    "  gate_id: legacy-archive-recovery-approval\n"
+                    "  gate_issued_at: 2026-08-30T05:00:00Z\n"
+                    "  answer: approved\n"
+                    "  session: fixture-session\n"
+                    "  nonce: fixture-nonce\n"
+                    f"  request_sha256: {hashlib.sha256((authority / 'request.json').read_bytes()).hexdigest()}\n"
+                    "  reserved_at: 2026-08-30T05:01:00Z\n"
+                    "final_action:\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            approved = run_cli(
+                "request-legacy-archive",
+                "--repo", str(repo),
+                "--recovery-id", "recovery-alpha",
+                "--publish-approval",
+            )
+            assert approved == {"recovery_id": "recovery-alpha", "state": "approved"}, approved
+            assert (authority / "gate-receipt.json").is_file()
+            assert (authority / "approval.json").is_file()
+        elif name in {"legacy_archive_recovery_lifecycle", "legacy_archive_recovery_success"}:
+            archived_source = initialize(repo, "alpha")
+            add_recovery_provenance(repo, archived_source)
+            add_recovery_terminal_evidence(repo, archived_source)
+            destination = ".release-loop/archive/2026-08-30-alpha-incomplete"
+            archive_scope(repo, str(archived_source.relative_to(repo)), destination, mode="incomplete")
+            source_archive = repo / destination
+            source_archive_before = filesystem_manifest(source_archive)
+            source_manifest = source_archive / ".archive-source-manifest.json"
+            source_manifest_sha256 = hashlib.sha256(source_manifest.read_bytes()).hexdigest()
+            expected_g0_sha256 = archive_payload_generation_sha256(source_manifest)
+            gate = initialize(repo, "gate")
+            gate_text = gate.read_text(encoding="utf-8").replace(
+                "phase: implement\nphase_status: in-progress\n",
+                "phase: implement\nphase_status: waiting-user\n",
+                1,
+            ).replace(
+                "final_action:\n",
+                "recovery_gate:\n"
+                "  id: legacy-archive-recovery-approval\n"
+                "  issued_at: 2026-08-30T05:00:00Z\n"
+                "  expected_answer_class: approve-exact-recovery-or-cancel\n"
+                "final_action:\n",
+                1,
+            )
+            gate.write_text(gate_text, encoding="utf-8")
+            run_cli(
+                "request-legacy-archive", "--repo", str(repo), "--recovery-id", "recovery-alpha",
+                "--progress-path", f"{destination}/progress.md", "--gate-progress-path",
+                str(gate.relative_to(repo)), "--session", "fixture-session",
+            )
+            gate.write_text(
+                gate.read_text(encoding="utf-8").replace(
+                    "final_action:\n",
+                    "recovery_gate_receipt:\n"
+                    "  gate_id: legacy-archive-recovery-approval\n"
+                    "  gate_issued_at: 2026-08-30T05:00:00Z\n"
+                    "  answer: approved\n"
+                    "  session: fixture-session\n"
+                    "  nonce: fixture-nonce\n"
+                    f"  request_sha256: {hashlib.sha256((repo / '.release-loop/recovery-authority/recovery-alpha/request.json').read_bytes()).hexdigest()}\n"
+                    "  reserved_at: 2026-08-30T05:01:00Z\n"
+                    "final_action:\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            run_cli("request-legacy-archive", "--repo", str(repo), "--recovery-id", "recovery-alpha", "--publish-approval")
+            backup_result = run_cli("backup-legacy-archive", "--repo", str(repo), "--recovery-id", "recovery-alpha")
+            assert backup_result["state"] == "backed-up", backup_result
+            audit_result = run_cli("audit-legacy-archive", "--repo", str(repo), "--recovery-id", "recovery-alpha")
+            assert audit_result["verdict"] == "accepted", audit_result
+            restore_result = run_cli("restore-legacy-archive", "--repo", str(repo), "--recovery-id", "recovery-alpha")
+            assert restore_result["state"] == "archived", restore_result
+            assert filesystem_manifest(source_archive) == source_archive_before
+            assert not (repo / ".release-loop/runs/alpha").exists()
+            request = json.loads(
+                (repo / ".release-loop/recovery-authority/recovery-alpha/request.json").read_bytes()
+            )
+            completed = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered/progress.md"
+            )
+            assert completed.is_file()
+            assert (repo / destination / "progress.md").is_file()
+            completed_text = completed.read_text(encoding="utf-8")
+            assert f"archived-incomplete: archive-destination: {destination}" in completed_text
+            assert "legacy_archive_recovery: staged:" in completed_text
+            assert "legacy-pre-archive-verification: accepted:" in completed_text
+            assert "legacy_archive_recovery: completed:" in completed_text
+            authority = repo / ".release-loop/recovery-authority/recovery-alpha"
+            receipt = json.loads((authority / "receipt.json").read_text(encoding="utf-8"))
+            executor_result = json.loads((authority / "executor-result.json").read_text(encoding="utf-8"))
+            assert receipt["approval_sha256"] == hashlib.sha256((authority / "approval.json").read_bytes()).hexdigest()
+            assert receipt["source_archive_manifest_sha256"] == source_manifest_sha256
+            assert executor_result["restored_root_sha256"] == expected_g0_sha256
+            assert receipt["g0_sha256"] == expected_g0_sha256
+            assert f"receipt-sha256={hashlib.sha256((authority / 'receipt.json').read_bytes()).hexdigest()}" in completed_text
+        elif name == "legacy_archive_recovery_requires_terminal_evidence":
+            archived_source = initialize(repo, "alpha")
+            add_recovery_provenance(repo, archived_source)
+            destination = ".release-loop/archive/2026-08-30-alpha-incomplete"
+            archive_scope(repo, str(archived_source.relative_to(repo)), destination, mode="incomplete")
+            gate = initialize(repo, "gate")
+            gate.write_text(
+                gate.read_text(encoding="utf-8").replace(
+                    "phase: implement\nphase_status: in-progress\n",
+                    "phase: implement\nphase_status: waiting-user\n",
+                    1,
+                ).replace(
+                    "final_action:\n",
+                    "recovery_gate:\n"
+                    "  id: legacy-archive-recovery-approval\n"
+                    "  issued_at: 2026-08-30T05:00:00Z\n"
+                    "  expected_answer_class: approve-exact-recovery-or-cancel\n"
+                    "final_action:\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            authority, backup = audit_rejected_recovery_fixture(
+                repo,
+                "recovery-ineligible",
+                destination,
+                gate,
+            )
+            assert (authority / "audit.json").is_file(), authority
+            assert (authority / "backup.json").is_file(), authority
+            assert filesystem_manifest(archive_root) == archive_before, archive_root
+            assert not (repo / ".release-loop/runs/alpha").exists(), repo
+        elif name in {
+            "legacy_archive_recovery_rejects_unmerged_ship",
+            "legacy_archive_recovery_rejects_unexecuted_final_action",
+            "legacy_archive_recovery_rejects_uncommitted_retro",
+            "legacy_archive_recovery_rejects_retro_before_ship",
+            "legacy_archive_recovery_rejects_wrong_final_action_kind",
+        }:
+            terminal_variant = {
+                "legacy_archive_recovery_rejects_unmerged_ship": "unmerged-ship",
+                "legacy_archive_recovery_rejects_unexecuted_final_action": "unexecuted-final-action",
+                "legacy_archive_recovery_rejects_uncommitted_retro": "uncommitted-retro",
+                "legacy_archive_recovery_rejects_retro_before_ship": "retro-before-ship",
+                "legacy_archive_recovery_rejects_wrong_final_action_kind": "wrong-final-action-kind",
+            }[name]
+            destination, gate = recovery_archive(repo, terminal_variant)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            recovery_id = terminal_variant
+            authority, backup = audit_rejected_recovery_fixture(
+                repo,
+                recovery_id,
+                destination,
+                gate,
+            )
+            assert filesystem_manifest(archive_root) == archive_before
+            assert (authority / "audit.json").is_file()
+            assert (authority / "backup.json").is_file()
+            assert not (repo / ".release-loop/runs/alpha").exists()
+        elif name in {
+            "legacy_archive_recovery_rejects_draft_plan",
+            "legacy_archive_recovery_rejects_plan_seal_mismatch",
+        }:
+            plan_variant = {
+                "legacy_archive_recovery_rejects_draft_plan": "draft",
+                "legacy_archive_recovery_rejects_plan_seal_mismatch": "seal-mismatch",
+            }[name]
+            destination, gate = recovery_archive(repo, plan_variant=plan_variant)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            recovery_id = plan_variant
+            authority, backup = audit_rejected_recovery_fixture(
+                repo,
+                recovery_id,
+                destination,
+                gate,
+            )
+            assert filesystem_manifest(archive_root) == archive_before
+            assert (authority / "audit.json").is_file()
+            assert (authority / "backup.json").is_file()
+            assert not (repo / ".release-loop/runs/alpha").exists()
+        elif name == "legacy_archive_recovery_rejects_missing_introduction_object":
+            destination, gate = recovery_archive(repo, install_alternate=False)
+            assert not (repo / ".git/objects/info/alternates").exists()
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            authority, backup = audit_rejected_recovery_fixture(
+                repo,
+                "missing-introduction-object",
+                destination,
+                gate,
+            )
+            assert filesystem_manifest(archive_root) == archive_before
+            assert (authority / "audit.json").is_file()
+            assert (authority / "backup.json").is_file()
+            assert not (repo / ".release-loop/runs/alpha").exists()
+        elif name == "legacy_archive_recovery_ancestor_replacement":
+            destination, authority, backup = prepare_recovery_for_restore(repo, "recovery-ancestor")
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            external = tmp / "external-recovery-target"
+            (external / "nested").mkdir(parents=True)
+            (external / "sentinel.txt").write_bytes(b"EXTERNAL RECOVERY SENTINEL\n")
+            (external / "nested/kept.txt").write_bytes(b"KEEP\n")
+            external_before = filesystem_manifest(external)
+            MATRIX_EXTERNAL_ROOT = external
+            MATRIX_EXTERNAL_PRE_STATE = fixture_root_snapshot(external)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", "recovery-ancestor",
+                    failure="recovery-before-copy-ancestor",
+                    environment_overrides={"RUN_ARTIFACT_INTEGRITY_TEST_REPLACE_TARGET": str(external)},
+                ),
+                sent,
+                before,
+                "path boundary",
+            )
+            runs_root = repo / ".release-loop/runs"
+            assert runs_root.is_symlink(), "ancestor-replacement hook did not replace the runs root"
+            assert Path(os.readlink(runs_root)).resolve() == external.resolve()
+            assert filesystem_manifest(external) == external_before
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+            assert not (authority / "executor-result.json").exists()
+            assert not (authority / "receipt.json").exists()
+        elif name in {
+            "legacy_archive_recovery_resume_after_g0",
+            "legacy_archive_recovery_resume_after_receipt",
+            "legacy_archive_recovery_resume_after_g1",
+            "legacy_archive_recovery_resume_after_g2",
+            "legacy_archive_recovery_resume_after_g3",
+        }:
+            stage = name[len("legacy_archive_recovery_resume_"):]
+            hook = "recovery-" + stage.replace("after_", "after-")
+            recovery_id = "resume-" + stage.replace("_", "-")
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            expected_g0_sha256 = archive_payload_generation_sha256(
+                archive_root / ".archive-source-manifest.json"
+            )
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure=hook,
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            result_path = authority / "executor-result.json"
+            receipt_path = authority / "receipt.json"
+            target_progress = repo / ".release-loop/runs/alpha/progress.md"
+            assert result_path.is_file(), f"{stage} did not preserve the G0 result"
+            assert target_progress.is_file(), f"{stage} did not preserve restored progress"
+            assert receipt_path.is_file() is (stage != "after_g0")
+            result_before = result_path.read_bytes()
+            receipt_before = receipt_path.read_bytes() if receipt_path.is_file() else None
+            result_payload = json.loads(result_before)
+            assert result_payload["restored_root_sha256"] == expected_g0_sha256
+            if receipt_before is not None:
+                assert json.loads(receipt_before)["g0_sha256"] == expected_g0_sha256
+            interrupted_text = target_progress.read_text(encoding="utf-8")
+            interrupted_lines = recovery_progress_lines(interrupted_text)
+            interrupted_progress = target_progress.read_bytes()
+            assert interrupted_text.count("archived-incomplete: archive-destination:") == 1
+            g1_sha256 = None
+            g2_sha256 = None
+            if stage in {"after_g0", "after_receipt"}:
+                assert "legacy_archive_recovery: staged:" not in interrupted_text
+                assert "legacy-pre-archive-verification: accepted:" not in interrupted_text
+                assert "legacy_archive_recovery: completed:" not in interrupted_text
+            elif stage == "after_g1":
+                assert interrupted_text.count("legacy_archive_recovery: staged:") == 1
+                assert interrupted_text.count("retro: archive-destination:") == 1
+                assert "legacy-pre-archive-verification: accepted:" not in interrupted_text
+                assert "phase: retro\n" in interrupted_text
+                assert "phase_status: in-progress\n" in interrupted_text
+                g1_sha256 = fixture_generation_sha256(target_progress.parent)
+            elif stage == "after_g2":
+                assert interrupted_text.count("legacy_archive_recovery: staged:") == 1
+                assert interrupted_text.count("legacy-pre-archive-verification: accepted:") == 1
+                assert "legacy_archive_recovery: completed:" not in interrupted_text
+                assert "phase: retro\n" in interrupted_text
+                assert "phase_status: in-progress\n" in interrupted_text
+                accepted_line = next(
+                    line for line in interrupted_lines
+                    if "legacy-pre-archive-verification: accepted:" in line
+                )
+                g1_progress = interrupted_text.replace(accepted_line + "\n", "", 1).encode("utf-8")
+                reconstructed_g1_sha256 = fixture_generation_sha256(
+                    target_progress.parent,
+                    progress_override=g1_progress,
+                )
+                assert f"g1-sha256={reconstructed_g1_sha256}" in accepted_line
+                g2_sha256 = fixture_generation_sha256(target_progress.parent)
+            else:
+                assert interrupted_text.count("legacy_archive_recovery: staged:") == 1
+                assert interrupted_text.count("legacy-pre-archive-verification: accepted:") == 1
+                assert interrupted_text.count("legacy_archive_recovery: completed:") == 1
+                assert "phase: done\n" in interrupted_text
+                assert "phase_status: complete\n" in interrupted_text
+            if stage in {"after_g1", "after_g2"}:
+                staged_destination = re.search(
+                    r"retro: archive-destination: (\S+)",
+                    interrupted_text,
+                )
+                assert staged_destination is not None
+                assert_blocked_preserves(
+                    lambda: run_cli(
+                        "archive", "--repo", str(repo),
+                        "--progress-path", str(target_progress.relative_to(repo)),
+                        "--destination", staged_destination.group(1),
+                    ),
+                    sent,
+                    before,
+                    "recovery archive state",
+                )
+                assert target_progress.read_bytes() == interrupted_progress
+            resumed = run_cli(
+                "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+            )
+            assert resumed["state"] == "archived", resumed
+            assert result_path.read_bytes() == result_before
+            if receipt_before is not None:
+                assert receipt_path.read_bytes() == receipt_before
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+            completed = repo / str(resumed["progress_path"])
+            if stage == "after_g3":
+                assert completed.read_bytes() == interrupted_progress
+            completed_text = completed.read_text(encoding="utf-8")
+            completed_lines = recovery_progress_lines(completed_text)
+            for line in interrupted_lines:
+                assert completed_lines.count(line) == 1, line
+            assert completed_text.count("archived-incomplete: archive-destination:") == 1
+            assert completed_text.count("legacy_archive_recovery: staged:") == 1
+            assert completed_text.count("legacy-pre-archive-verification: accepted:") == 1
+            assert completed_text.count("legacy_archive_recovery: completed:") == 1
+            receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            receipt_payload = json.loads(receipt_path.read_bytes())
+            assert receipt_payload["g0_sha256"] == expected_g0_sha256
+            staged_line = next(line for line in completed_lines if "legacy_archive_recovery: staged:" in line)
+            destination_line = next(line for line in completed_lines if "retro: archive-destination:" in line)
+            accepted_line = next(
+                line for line in completed_lines
+                if "legacy-pre-archive-verification: accepted:" in line
+            )
+            completed_line = next(line for line in completed_lines if "legacy_archive_recovery: completed:" in line)
+            completed_destination = re.search(r"retro: archive-destination: (\S+)", destination_line)
+            assert completed_destination is not None
+            assert resumed["progress_path"] == completed_destination.group(1) + "/progress.md"
+            for line in (staged_line, destination_line):
+                assert f"receipt-sha256={receipt_sha256}" in line
+                assert f"g0-sha256={expected_g0_sha256}" in line
+                assert completed_destination.group(1) in line
+            assert f"receipt-sha256={receipt_sha256}" in accepted_line
+            if g1_sha256 is not None:
+                assert f"g1-sha256={g1_sha256}" in accepted_line
+            if g2_sha256 is not None:
+                assert f"g2-sha256={g2_sha256}" in completed_line
+        elif name == "legacy_archive_recovery_generation_tamper":
+            destination, authority, backup = prepare_recovery_for_restore(repo, "recovery-generation-tamper")
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", "recovery-generation-tamper",
+                    failure="recovery-after-g1",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            target_progress = repo / ".release-loop/runs/alpha/progress.md"
+            target_progress.write_text(
+                target_progress.read_text(encoding="utf-8") + "\n# TAMPERED RECOVERY GENERATION\n",
+                encoding="utf-8",
+            )
+            tampered_progress = target_progress.read_bytes()
+            result_path = authority / "executor-result.json"
+            receipt_path = authority / "receipt.json"
+            result_before = result_path.read_bytes()
+            receipt_before = receipt_path.read_bytes()
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", "recovery-generation-tamper",
+                ),
+                sent,
+                before,
+                "recovery generation",
+            )
+            assert target_progress.read_bytes() == tampered_progress
+            assert result_path.read_bytes() == result_before
+            assert receipt_path.read_bytes() == receipt_before
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+        elif name in {
+            "legacy_archive_recovery_rejects_tampered_g0_result",
+            "legacy_archive_recovery_rejects_tampered_receipt",
+            "legacy_archive_recovery_rejects_tampered_g1",
+            "legacy_archive_recovery_rejects_tampered_g2",
+            "legacy_archive_recovery_rejects_tampered_g3",
+        }:
+            tamper_stage = name[len("legacy_archive_recovery_rejects_tampered_"):]
+            hook = {
+                "g0_result": "recovery-after-g0",
+                "receipt": "recovery-after-receipt",
+                "g1": "recovery-after-g1",
+                "g2": "recovery-after-g2",
+                "g3": "recovery-after-g3",
+            }[tamper_stage]
+            recovery_id = "tamper-" + tamper_stage.replace("_", "-")
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure=hook,
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            if tamper_stage in {"g1", "g2", "g3"}:
+                assert recovered.is_dir(), recovered
+                recovered_before = filesystem_manifest(recovered)
+                assert set(recovered_before) == {
+                    ".legacy-archive-recovery-reservation.json"
+                }, recovered_before
+            else:
+                assert not recovered.exists(), recovered
+                recovered_before = None
+            target_progress = repo / ".release-loop/runs/alpha/progress.md"
+            result_path = authority / "executor-result.json"
+            receipt_path = authority / "receipt.json"
+            if tamper_stage == "g0_result":
+                mutated_path = result_path
+                payload = json.loads(mutated_path.read_bytes())
+                payload["restored_root_sha256"] = "0" * 64
+                mutated_path.write_text(
+                    json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+            elif tamper_stage == "receipt":
+                mutated_path = receipt_path
+                payload = json.loads(mutated_path.read_bytes())
+                payload["g0_sha256"] = "0" * 64
+                mutated_path.write_text(
+                    json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                mutated_path = target_progress
+                digest_key = {
+                    "g1": "receipt-sha256",
+                    "g2": "g1-sha256",
+                    "g3": "g2-sha256",
+                }[tamper_stage]
+                mutated_text, replacements = re.subn(
+                    rf"{digest_key}=[0-9a-f]{{64}}",
+                    f"{digest_key}={'0' * 64}",
+                    target_progress.read_text(encoding="utf-8"),
+                    count=1,
+                )
+                assert replacements == 1, f"missing {digest_key} mutation target"
+                target_progress.write_text(mutated_text, encoding="utf-8")
+            mutated_bytes = mutated_path.read_bytes()
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                ),
+                sent,
+                before,
+                "recovery restore" if tamper_stage == "receipt" else "recovery generation",
+            )
+            assert mutated_path.read_bytes() == mutated_bytes
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+            if recovered_before is None:
+                assert not recovered.exists(), recovered
+            else:
+                assert filesystem_manifest(recovered) == recovered_before
+        elif name in {
+            "legacy_archive_recovery_restore_rejects_deleted_gate_receipt",
+            "legacy_archive_recovery_restore_rejects_tampered_gate_receipt",
+        }:
+            recovery_id = (
+                "deleted-gate-receipt"
+                if name.endswith("deleted_gate_receipt")
+                else "tampered-gate-receipt"
+            )
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            gate_receipt = authority / "gate-receipt.json"
+            if name.endswith("deleted_gate_receipt"):
+                gate_receipt.unlink()
+                diagnostic = "recovery authority"
+            else:
+                payload = json.loads(gate_receipt.read_bytes())
+                payload["answer"] = "cancelled"
+                gate_receipt.write_text(
+                    json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                diagnostic = "recovery restore"
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                ),
+                sent,
+                before,
+                diagnostic,
+            )
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+            assert not (repo / ".release-loop/runs/alpha").exists()
+            assert not (authority / "executor-started.json").exists()
+            assert not (authority / "executor-result.json").exists()
+            assert not (authority / "receipt.json").exists()
+            assert not recovered.exists()
+        elif name == "legacy_archive_recovery_rejects_foreign_destination_before_g1":
+            recovery_id = "foreign-destination"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            expected_g0_sha256 = archive_payload_generation_sha256(
+                archive_root / ".archive-source-manifest.json"
+            )
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo),
+                    "--recovery-id", recovery_id,
+                    failure="recovery-after-receipt",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            receipt_digest = hashlib.sha256((authority / "receipt.json").read_bytes()).hexdigest()
+            recovered.mkdir()
+            reservation = {
+                "schema": "legacy-archive-recovery-reservation/v1",
+                "recovery_id": recovery_id,
+                "receipt_sha256": receipt_digest,
+                "g0_sha256": expected_g0_sha256,
+                "destination": recovered.relative_to(repo).as_posix(),
+            }
+            (recovered / ".legacy-archive-recovery-reservation.json").write_text(
+                json.dumps(reservation, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            (recovered / "foreign.txt").write_bytes(b"FOREIGN DESTINATION\n")
+            foreign_before = filesystem_manifest(recovered)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo),
+                    "--recovery-id", recovery_id,
+                ),
+                sent,
+                before,
+                "recovery archive",
+            )
+            target = repo / ".release-loop/runs/alpha"
+            target_progress = target / "progress.md"
+            target_text = target_progress.read_text(encoding="utf-8")
+            assert fixture_generation_sha256(target) == expected_g0_sha256
+            assert target_progress.read_bytes() == (backup / "progress.md").read_bytes()
+            assert "phase: retro\n" in target_text
+            assert "phase_status: in-progress\n" in target_text
+            assert "legacy_archive_recovery: staged:" not in target_text
+            assert "legacy-pre-archive-verification: accepted:" not in target_text
+            assert "legacy_archive_recovery: completed:" not in target_text
+            result = json.loads((authority / "executor-result.json").read_bytes())
+            receipt = json.loads((authority / "receipt.json").read_bytes())
+            assert result["restored_root_sha256"] == expected_g0_sha256
+            assert receipt["g0_sha256"] == expected_g0_sha256
+            assert filesystem_manifest(recovered) == foreign_before
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+        elif name in {
+            "legacy_archive_recovery_rejects_backup_change_before_copy",
+            "legacy_archive_recovery_rejects_source_change_before_copy",
+        }:
+            selector = "backup" if "backup_change" in name else "source"
+            recovery_id = f"{selector}-change-before-copy"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-before-copy-source-change",
+                    environment_overrides={"RUN_ARTIFACT_INTEGRITY_TEST_MUTATE_SOURCE": selector},
+                ),
+                sent,
+                before,
+                "recovery restore",
+            )
+            archive_after = filesystem_manifest(archive_root)
+            backup_after = filesystem_manifest(backup)
+            selected_before = backup_before if selector == "backup" else archive_before
+            selected_after = backup_after if selector == "backup" else archive_after
+            assert set(selected_after) == set(selected_before)
+            for relative, entry in selected_before.items():
+                if relative == "progress.md":
+                    assert selected_after[relative] == (
+                        "file",
+                        entry[1] + b"\n# INJECTED SOURCE CHANGE\n",
+                    )
+                else:
+                    assert selected_after[relative] == entry
+            if selector == "backup":
+                assert archive_after == archive_before
+            else:
+                assert backup_after == backup_before
+            target = repo / ".release-loop/runs/alpha"
+            assert target.is_dir() and filesystem_manifest(target) == {}
+            assert (authority / "executor-started.json").is_file()
+            assert not (authority / "executor-result.json").exists()
+            assert not (authority / "receipt.json").exists()
+            assert not recovered.exists()
+        elif name == "legacy_archive_recovery_target_create_swap":
+            recovery_id = "target-create-swap"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            external = tmp / "external-created-target"
+            (external / "nested").mkdir(parents=True)
+            (external / "sentinel.txt").write_bytes(b"CREATED TARGET SENTINEL\n")
+            (external / "nested/kept.txt").write_bytes(b"KEEP CREATED TARGET\n")
+            external_before = filesystem_manifest(external)
+            MATRIX_EXTERNAL_ROOT = external
+            MATRIX_EXTERNAL_PRE_STATE = fixture_root_snapshot(external)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-target-create-swap",
+                    environment_overrides={"RUN_ARTIFACT_INTEGRITY_TEST_REPLACE_TARGET": str(external)},
+                ),
+                sent,
+                before,
+                "path boundary",
+            )
+            target = repo / ".release-loop/runs/alpha"
+            displaced = repo / f".release-loop/runs/alpha.created-{recovery_id}"
+            assert target.is_dir() and not target.is_symlink()
+            assert displaced.is_dir() and filesystem_manifest(displaced) == {}
+            assert (target.stat().st_dev, target.stat().st_ino) != (
+                displaced.stat().st_dev,
+                displaced.stat().st_ino,
+            )
+            assert filesystem_manifest(target) == external_before
+            assert filesystem_manifest(external) == external_before
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+            assert (authority / "executor-started.json").is_file()
+            assert not (authority / "executor-result.json").exists()
+            assert not (authority / "receipt.json").exists()
+            assert not (repo / ".release-loop/archive/2026-08-30-alpha-recovered").exists()
+        elif name == "legacy_archive_recovery_before_g1_ancestor":
+            recovery_id = "before-g1-ancestor"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            expected_g0_sha256 = archive_payload_generation_sha256(
+                archive_root / ".archive-source-manifest.json"
+            )
+            external = tmp / "external-before-g1"
+            (external / "nested").mkdir(parents=True)
+            (external / "sentinel.txt").write_bytes(b"BEFORE G1 SENTINEL\n")
+            (external / "nested/kept.txt").write_bytes(b"KEEP BEFORE G1\n")
+            external_before = filesystem_manifest(external)
+            MATRIX_EXTERNAL_ROOT = external
+            MATRIX_EXTERNAL_PRE_STATE = fixture_root_snapshot(external)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-before-g1-ancestor",
+                    environment_overrides={"RUN_ARTIFACT_INTEGRITY_TEST_REPLACE_TARGET": str(external)},
+                ),
+                sent,
+                before,
+                "path boundary",
+            )
+            runs_root = repo / ".release-loop/runs"
+            displaced_runs = repo / (
+                ".release-loop/runs.recovery-displaced-"
+                f"recovery-before-g1-ancestor-{recovery_id}"
+            )
+            retained_target = displaced_runs / "alpha"
+            retained_progress = retained_target / "progress.md"
+            retained_text = retained_progress.read_text(encoding="utf-8")
+            assert runs_root.is_symlink() and Path(os.readlink(runs_root)).resolve() == external.resolve()
+            assert fixture_generation_sha256(retained_target) == expected_g0_sha256
+            assert retained_progress.read_bytes() == (backup / "progress.md").read_bytes()
+            assert "phase: retro\n" in retained_text
+            assert "phase_status: in-progress\n" in retained_text
+            assert "legacy_archive_recovery: staged:" not in retained_text
+            assert "legacy-pre-archive-verification: accepted:" not in retained_text
+            assert "legacy_archive_recovery: completed:" not in retained_text
+            result = json.loads((authority / "executor-result.json").read_bytes())
+            receipt = json.loads((authority / "receipt.json").read_bytes())
+            assert result["restored_root_sha256"] == expected_g0_sha256
+            assert receipt["g0_sha256"] == expected_g0_sha256
+            assert filesystem_manifest(external) == external_before
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            if recovered.exists():
+                assert set(filesystem_manifest(recovered)) == {
+                    ".legacy-archive-recovery-reservation.json"
+                }
+        elif name == "legacy_archive_recovery_cleanup_foreign_preserves_g3":
+            recovery_id = "cleanup-foreign-preserves-g3"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-after-g3",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            target = repo / ".release-loop/runs/alpha"
+            g3_before = filesystem_manifest(target)
+            g3_progress = (target / "progress.md").read_bytes()
+            result_path = authority / "executor-result.json"
+            receipt_path = authority / "receipt.json"
+            result_before = result_path.read_bytes()
+            receipt_before = receipt_path.read_bytes()
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-before-cleanup-foreign",
+                ),
+                sent,
+                before,
+                "recovery archive",
+            )
+            g3_after = filesystem_manifest(target)
+            assert set(g3_after) == {*g3_before, ".injected-foreign-cleanup"}
+            for relative, entry in g3_before.items():
+                assert g3_after[relative] == entry
+            assert g3_after[".injected-foreign-cleanup"] == ("file", b"FOREIGN\n")
+            assert (target / "progress.md").read_bytes() == g3_progress
+            assert result_path.read_bytes() == result_before
+            assert receipt_path.read_bytes() == receipt_before
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_resume_after_cleanup_one":
+            recovery_id = "resume-after-cleanup-one"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-after-cleanup-one",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            target = repo / ".release-loop/runs/alpha"
+            cleanup = repo / (
+                ".release-loop/runs/.alpha.legacy-recovery-cleanup-"
+                f"{recovery_id}"
+            )
+            destination_before = filesystem_manifest(recovered)
+            destination_identity = (recovered.stat().st_dev, recovered.stat().st_ino)
+            expected_g3 = {
+                relative: entry
+                for relative, entry in destination_before.items()
+                if relative not in {
+                    ".archive-source-manifest.json",
+                    ".legacy-archive-recovery-reservation.json",
+                    ".phase-artifact-ownership.json",
+                }
+            }
+            assert not target.exists(), target
+            assert cleanup.is_dir() and not cleanup.is_symlink(), cleanup
+            partial_target = filesystem_manifest(cleanup)
+            assert set(partial_target) < set(expected_g3), (partial_target, expected_g3)
+            missing_entries = set(expected_g3) - set(partial_target)
+            assert len(missing_entries) == 1, missing_entries
+            for relative, entry in partial_target.items():
+                assert expected_g3[relative] == entry, relative
+            result_path = authority / "executor-result.json"
+            receipt_path = authority / "receipt.json"
+            result_before = result_path.read_bytes()
+            receipt_before = receipt_path.read_bytes()
+            resumed = run_cli(
+                "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+            )
+            assert resumed["state"] == "archived", resumed
+            assert resumed["progress_path"] == recovered.relative_to(repo).as_posix() + "/progress.md"
+            assert not target.exists(), target
+            assert not cleanup.exists(), cleanup
+            assert (recovered.stat().st_dev, recovered.stat().st_ino) == destination_identity
+            destination_after = filesystem_manifest(recovered)
+            reservation = ".legacy-archive-recovery-reservation.json"
+            assert reservation in destination_before, destination_before
+            assert set(destination_after) == set(destination_before) - {reservation}, destination_after
+            for relative, entry in destination_after.items():
+                assert destination_before[relative] == entry, relative
+            assert result_path.read_bytes() == result_before, result_path
+            assert receipt_path.read_bytes() == receipt_before, receipt_path
+            assert filesystem_manifest(archive_root) == archive_before, archive_root
+            assert filesystem_manifest(backup) == backup_before, backup
+        elif name == "legacy_archive_recovery_progress_after_binding_swap":
+            recovery_id = "progress-after-binding-swap"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            expected_g0_sha256 = archive_payload_generation_sha256(
+                archive_root / ".archive-source-manifest.json"
+            )
+            external = tmp / "external-progress-after-binding"
+            external.mkdir()
+            external_sentinel = external / "sentinel.txt"
+            external_sentinel.write_bytes(b"PROGRESS BINDING SENTINEL\n")
+            sentinel_before = external_sentinel.read_bytes()
+            MATRIX_EXTERNAL_ROOT = external
+            MATRIX_EXTERNAL_PRE_STATE = fixture_root_snapshot(external)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-progress-after-binding-swap",
+                    environment_overrides={"RUN_ARTIFACT_INTEGRITY_TEST_REPLACE_TARGET": str(external)},
+                ),
+                sent,
+                before,
+                "path boundary",
+            )
+            target = repo / ".release-loop/runs/alpha"
+            retained_target = external / f"{recovery_id}-retained-target"
+            retained_progress = retained_target / "progress.md"
+            retained_text = retained_progress.read_text(encoding="utf-8")
+            assert external_sentinel.read_bytes() == sentinel_before
+            assert target.is_dir() and filesystem_manifest(target) == {}
+            assert fixture_generation_sha256(retained_target) == expected_g0_sha256
+            assert retained_progress.read_bytes() == (backup / "progress.md").read_bytes()
+            assert "phase: retro\n" in retained_text
+            assert "phase_status: in-progress\n" in retained_text
+            assert "legacy_archive_recovery: staged:" not in retained_text
+            assert "retro: archive-destination:" not in retained_text
+            assert "legacy-pre-archive-verification: accepted:" not in retained_text
+            assert "legacy_archive_recovery: completed:" not in retained_text
+            result = json.loads((authority / "executor-result.json").read_bytes())
+            receipt = json.loads((authority / "receipt.json").read_bytes())
+            assert result["restored_root_sha256"] == expected_g0_sha256
+            assert receipt["g0_sha256"] == expected_g0_sha256
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_rejects_concurrent_restore":
+            recovery_id = "concurrent-restore"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-after-g0",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            assert (authority / "executor-result.json").is_file()
+            assert not (authority / "receipt.json").exists()
+            target = repo / ".release-loop/runs/alpha"
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            assert not recovered.exists(), recovered
+            control = tmp / "concurrent-restore-lock-control"
+            control.mkdir()
+            ready = control / "ready"
+            release = control / "release"
+            first_environment = os.environ.copy()
+            first_environment["RUN_ARTIFACT_INTEGRITY_TEST_HOLD_RECOVERY_LOCK"] = str(control)
+            first = subprocess.Popen(
+                (
+                    sys.executable,
+                    str(CLI),
+                    "restore-legacy-archive",
+                    "--repo",
+                    str(repo),
+                    "--recovery-id",
+                    recovery_id,
+                ),
+                cwd=ROOT,
+                env=first_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                deadline = time.monotonic() + 5
+                while not ready.is_file():
+                    if first.poll() is not None:
+                        first_stdout, first_stderr = first.communicate()
+                        raise AssertionError(
+                            "first restore exited before holding recovery lock: "
+                            f"stdout={first_stdout!r} stderr={first_stderr!r}"
+                        )
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("first restore did not report held recovery lock")
+                    time.sleep(0.01)
+                authority_locked = filesystem_manifest(authority)
+                target_locked = filesystem_manifest(target)
+                destination_locked = filesystem_manifest(recovered) if recovered.exists() else None
+                assert_blocked_preserves(
+                    lambda: run_cli(
+                        "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    ),
+                    sent,
+                    before,
+                    "recovery restore",
+                )
+                assert filesystem_manifest(authority) == authority_locked
+                assert filesystem_manifest(target) == target_locked
+                if destination_locked is None:
+                    assert not recovered.exists(), recovered
+                else:
+                    assert filesystem_manifest(recovered) == destination_locked
+                assert filesystem_manifest(archive_root) == archive_before
+                assert filesystem_manifest(backup) == backup_before
+                release.write_bytes(b"release\n")
+                first_stdout, first_stderr = first.communicate(timeout=10)
+                assert first.returncode == 0, (first.returncode, first_stdout, first_stderr)
+                assert first_stderr == "", first_stderr
+                first_payload = json.loads(first_stdout)
+                assert first_stdout == (
+                    json.dumps(first_payload, sort_keys=True, separators=(",", ":")) + "\n"
+                )
+                assert first_payload["state"] == "archived", first_payload
+            finally:
+                if not release.exists():
+                    release.write_bytes(b"release\n")
+                if first.poll() is None:
+                    first.kill()
+                    first.communicate()
+            assert not target.exists(), target
+            destination_identity = (recovered.stat().st_dev, recovered.stat().st_ino)
+            destination_after_first = filesystem_manifest(recovered)
+            authority_after_first = filesystem_manifest(authority)
+            resumed = run_cli(
+                "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+            )
+            assert resumed["state"] == "archived", resumed
+            assert (recovered.stat().st_dev, recovered.stat().st_ino) == destination_identity
+            assert filesystem_manifest(recovered) == destination_after_first
+            assert filesystem_manifest(authority) == authority_after_first
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_records_rejected_audit":
+            for variant, options in (
+                ("ineligible", {"terminal_variant": "unmerged-ship"}),
+                ("provenance", {"plan_variant": "seal-mismatch"}),
+            ):
+                candidate = new_repo(tmp, f"rejected-audit-{variant}")
+                recovery_id = f"rejected-{variant}"
+                destination, gate = recovery_archive(candidate, **options)
+                archive_root = candidate / destination
+                archive_before = filesystem_manifest(archive_root)
+                requested = run_cli(
+                    "request-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                    "--progress-path", f"{destination}/progress.md",
+                    "--gate-progress-path", str(gate.relative_to(candidate)),
+                    "--session", "fixture-session",
+                )
+                assert requested == {"recovery_id": recovery_id, "state": "requested"}, requested
+                authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                backup = candidate / f".release-loop/recovery-backups/{recovery_id}"
+                request_path = authority / "request.json"
+                request = json.loads(request_path.read_bytes())
+                assert request["schema"] == "legacy-archive-recovery-request/v1", request
+                assert request["archived_progress_path"] == f"{destination}/progress.md", request
+                assert request["archive_destination"] == destination, request
+                assert request["restore_target"] == ".release-loop/runs/alpha", request
+                assert request["plan_path"] and request["plan_seal"], request
+                assert filesystem_manifest(backup) == {}
+                approve_recovery_fixture(candidate, recovery_id, authority, gate)
+                backed_up = run_cli(
+                    "backup-legacy-archive", "--repo", str(candidate), "--recovery-id", recovery_id,
+                )
+                assert backed_up["state"] == "backed-up", backed_up
+                audited = run_cli(
+                    "audit-legacy-archive", "--repo", str(candidate), "--recovery-id", recovery_id,
+                )
+                assert audited["state"] == "audited", audited
+                assert audited["verdict"] == "rejected", audited
+                audit_path = authority / "audit.json"
+                audit_bytes = audit_path.read_bytes()
+                audit = json.loads(audit_bytes)
+                assert audit_bytes == (
+                    json.dumps(audit, sort_keys=True, separators=(",", ":")) + "\n"
+                ).encode("utf-8")
+                assert audit["schema"] == "legacy-archive-recovery-audit/v1", audit
+                assert audit["verdict"] == "rejected", audit
+                assert audit["request_sha256"] == hashlib.sha256(request_path.read_bytes()).hexdigest()
+                assert filesystem_manifest(archive_root) == archive_before
+                audit_before = audit_path.read_bytes()
+                assert_blocked_preserves(
+                    lambda: run_cli(
+                        "restore-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                    ),
+                    sent,
+                    before,
+                    "recovery restore",
+                )
+                assert audit_path.read_bytes() == audit_before
+                assert not (candidate / ".release-loop/runs/alpha").exists()
+        elif name == "legacy_archive_recovery_backup_revalidates_gate_receipt":
+            for mutation in ("deleted", "tampered"):
+                candidate = new_repo(tmp, f"backup-gate-receipt-{mutation}")
+                recovery_id = f"backup-gate-{mutation}"
+                destination, gate = recovery_archive(candidate)
+                run_cli(
+                    "request-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                    "--progress-path", f"{destination}/progress.md",
+                    "--gate-progress-path", str(gate.relative_to(candidate)),
+                    "--session", "fixture-session",
+                )
+                authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                backup = candidate / f".release-loop/recovery-backups/{recovery_id}"
+                approve_recovery_fixture(candidate, recovery_id, authority, gate)
+                authority_before = filesystem_manifest(authority)
+                archive_root = candidate / destination
+                archive_before = filesystem_manifest(archive_root)
+                gate_receipt = authority / "gate-receipt.json"
+                if mutation == "deleted":
+                    gate_receipt.unlink()
+                else:
+                    receipt = json.loads(gate_receipt.read_bytes())
+                    receipt["answer"] = "cancelled"
+                    gate_receipt.write_text(
+                        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+                        encoding="utf-8",
+                    )
+                mutated_authority = filesystem_manifest(authority)
+                assert filesystem_manifest(backup) == {}
+                assert_blocked_preserves(
+                    lambda: run_cli(
+                        "backup-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                    ),
+                    sent,
+                    before,
+                    "recovery backup",
+                )
+                assert filesystem_manifest(backup) == {}
+                assert not (authority / "backup.json").exists()
+                assert filesystem_manifest(authority) == mutated_authority
+                assert filesystem_manifest(archive_root) == archive_before
+                assert authority_before != mutated_authority
+        elif name == "legacy_archive_recovery_rejects_unsafe_journal_entries":
+            for mutation in ("unsafe-path", "missing-final", "digest-mismatch"):
+                candidate = new_repo(tmp, f"unsafe-journal-{mutation}")
+                recovery_id = f"unsafe-journal-{mutation}"
+                destination, gate = recovery_archive(candidate)
+                archive_root = candidate / destination
+                journal_path = archive_root / ".phase-artifact-ownership.json"
+                journal = json.loads(journal_path.read_bytes())
+                if mutation == "unsafe-path":
+                    journal["owned"]["../outside"] = "0" * 64
+                elif mutation == "missing-final":
+                    journal["owned"]["reports/missing.md"] = "0" * 64
+                else:
+                    journal["owned"]["progress.md"] = "0" * 64
+                journal_path.write_text(
+                    json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                archive_before = filesystem_manifest(archive_root)
+                assert_blocked_preserves(
+                    lambda: run_cli(
+                        "request-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                        "--progress-path", f"{destination}/progress.md",
+                        "--gate-progress-path", str(gate.relative_to(candidate)),
+                        "--session", "fixture-session",
+                    ),
+                    sent,
+                    before,
+                    "archive destination conflict",
+                )
+                assert filesystem_manifest(archive_root) == archive_before
+                assert not (candidate / f".release-loop/recovery-authority/{recovery_id}").exists()
+                assert not (candidate / f".release-loop/recovery-backups/{recovery_id}").exists()
+        elif name == "legacy_archive_recovery_rejects_terminal_evidence_mutants":
+            for variant in (
+                "same-ship-retro-commit",
+                "ship-approval-shape",
+                "ship-approval-by",
+                "ship-approval-time",
+            ):
+                candidate = new_repo(tmp, f"terminal-mutant-{variant}")
+                recovery_id = f"terminal-mutant-{variant}"
+                destination, gate = recovery_archive(candidate, terminal_variant=variant)
+                archive_root = candidate / destination
+                archive_before = filesystem_manifest(archive_root)
+                requested = run_cli(
+                    "request-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                    "--progress-path", f"{destination}/progress.md",
+                    "--gate-progress-path", str(gate.relative_to(candidate)),
+                    "--session", "fixture-session",
+                )
+                assert requested["state"] == "requested", requested
+                authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                approve_recovery_fixture(candidate, recovery_id, authority, gate)
+                run_cli(
+                    "backup-legacy-archive", "--repo", str(candidate), "--recovery-id", recovery_id,
+                )
+                audited = run_cli(
+                    "audit-legacy-archive", "--repo", str(candidate), "--recovery-id", recovery_id,
+                )
+                assert audited["verdict"] == "rejected", audited
+                audit_path = authority / "audit.json"
+                audit = json.loads(audit_path.read_bytes())
+                assert audit["verdict"] == "rejected", audit
+                assert filesystem_manifest(archive_root) == archive_before
+                assert not (candidate / ".release-loop/runs/alpha").exists()
+        elif name == "legacy_archive_recovery_serializes_audit_and_restore":
+            recovery_id = "audit-restore-lock"
+            destination, gate = recovery_archive(repo)
+            run_cli(
+                "request-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                "--progress-path", f"{destination}/progress.md",
+                "--gate-progress-path", str(gate.relative_to(repo)), "--session", "fixture-session",
+            )
+            authority = repo / f".release-loop/recovery-authority/{recovery_id}"
+            backup = repo / f".release-loop/recovery-backups/{recovery_id}"
+            approve_recovery_fixture(repo, recovery_id, authority, gate)
+            run_cli("backup-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id)
+            archive_root = repo / destination
+            control = tmp / "audit-restore-lock-control"
+            control.mkdir()
+            ready = control / "ready"
+            release = control / "release"
+            audit_environment = os.environ.copy()
+            audit_environment["RUN_ARTIFACT_INTEGRITY_TEST_HOLD_RECOVERY_LOCK"] = str(control)
+            auditor = subprocess.Popen(
+                (
+                    sys.executable,
+                    str(CLI),
+                    "audit-legacy-archive",
+                    "--repo",
+                    str(repo),
+                    "--recovery-id",
+                    recovery_id,
+                ),
+                cwd=ROOT,
+                env=audit_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                deadline = time.monotonic() + 5
+                while not ready.is_file():
+                    if auditor.poll() is not None:
+                        audit_stdout, audit_stderr = auditor.communicate()
+                        raise AssertionError(
+                            "audit exited before holding recovery lock: "
+                            f"stdout={audit_stdout!r} stderr={audit_stderr!r}"
+                        )
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("audit did not report held recovery lock")
+                    time.sleep(0.01)
+                authority_locked = filesystem_manifest(authority)
+                backup_locked = filesystem_manifest(backup)
+                archive_locked = filesystem_manifest(archive_root)
+                assert not (repo / ".release-loop/runs/alpha").exists()
+                assert not (repo / ".release-loop/archive/2026-08-30-alpha-recovered").exists()
+                assert_blocked_preserves(
+                    lambda: run_cli(
+                        "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    ),
+                    sent,
+                    before,
+                    "recovery restore",
+                )
+                assert filesystem_manifest(authority) == authority_locked
+                assert filesystem_manifest(backup) == backup_locked
+                assert filesystem_manifest(archive_root) == archive_locked
+                assert not (repo / ".release-loop/runs/alpha").exists()
+                assert not (repo / ".release-loop/archive/2026-08-30-alpha-recovered").exists()
+                release.write_bytes(b"release\n")
+                audit_stdout, audit_stderr = auditor.communicate(timeout=10)
+                assert auditor.returncode == 0, (auditor.returncode, audit_stdout, audit_stderr)
+                assert audit_stderr == "", audit_stderr
+                audit_payload = json.loads(audit_stdout)
+                assert audit_payload["verdict"] == "accepted", audit_payload
+            finally:
+                if not release.exists():
+                    release.write_bytes(b"release\n")
+                if auditor.poll() is None:
+                    auditor.kill()
+                    auditor.communicate()
+            restored = run_cli(
+                "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+            )
+            assert restored["state"] == "archived", restored
+        elif name == "legacy_archive_recovery_resumes_archive_publication_faults":
+            reservation_repo = new_repo(tmp, "resume-reservation-temp")
+            reservation_id = "resume-reservation-temp"
+            destination, authority, backup = prepare_recovery_for_restore(
+                reservation_repo,
+                reservation_id,
+            )
+            archive_root = reservation_repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(reservation_repo),
+                    "--recovery-id", reservation_id,
+                    failure="recovery-after-receipt",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = reservation_repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(reservation_repo),
+                    "--recovery-id", reservation_id,
+                    failure="recovery-reservation-temp-only",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            reservation_identity = (recovered.stat().st_dev, recovered.stat().st_ino)
+            assert set(filesystem_manifest(recovered)) == {
+                ".legacy-archive-recovery-reservation.json.tmp"
+            }
+            resumed = run_cli(
+                "restore-legacy-archive", "--repo", str(reservation_repo),
+                "--recovery-id", reservation_id,
+            )
+            assert resumed["state"] == "archived", resumed
+            assert (recovered.stat().st_dev, recovered.stat().st_ino) == reservation_identity
+            assert not (reservation_repo / ".release-loop/runs/alpha").exists()
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+
+            for stage, hook in (
+                ("manifest", "recovery-archive-manifest-only"),
+                ("journal", "recovery-archive-journal-only"),
+                ("payload", "recovery-archive-payload-mid-file"),
+                ("progress", "recovery-archive-before-progress"),
+            ):
+                candidate = new_repo(tmp, f"resume-archive-{stage}")
+                recovery_id = f"resume-archive-{stage}"
+                destination, gate = recovery_archive(candidate, extra_payload=True)
+                run_cli(
+                    "request-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                    "--progress-path", f"{destination}/progress.md",
+                    "--gate-progress-path", str(gate.relative_to(candidate)),
+                    "--session", "fixture-session",
+                )
+                authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                backup = candidate / f".release-loop/recovery-backups/{recovery_id}"
+                approve_recovery_fixture(candidate, recovery_id, authority, gate)
+                run_cli(
+                    "backup-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                )
+                run_cli(
+                    "audit-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                )
+                archive_root = candidate / destination
+                archive_before = filesystem_manifest(archive_root)
+                backup_before = filesystem_manifest(backup)
+                assert_blocked_preserves(
+                    lambda candidate=candidate, recovery_id=recovery_id: run_cli(
+                        "restore-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                        failure="recovery-after-g3",
+                    ),
+                    sent,
+                    before,
+                    "injected recovery interruption",
+                )
+                target = candidate / ".release-loop/runs/alpha"
+                expected_g3 = filesystem_manifest(target)
+                request = json.loads((authority / "request.json").read_bytes())
+                recovered = candidate / (
+                    f".release-loop/archive/{request['issued_at'][:10]}-"
+                    f"{request['feature']}-recovered"
+                )
+                result_before = (authority / "executor-result.json").read_bytes()
+                receipt_before = (authority / "receipt.json").read_bytes()
+                assert_blocked_preserves(
+                    lambda candidate=candidate, recovery_id=recovery_id, hook=hook: run_cli(
+                        "restore-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                        failure=hook,
+                    ),
+                    sent,
+                    before,
+                    "injected recovery interruption",
+                )
+                partial = filesystem_manifest(recovered)
+                control_names = {
+                    ".archive-source-manifest.json",
+                    ".legacy-archive-recovery-reservation.json",
+                    ".phase-artifact-ownership.json",
+                }
+                if stage == "manifest":
+                    assert set(partial) == {
+                        ".archive-source-manifest.json",
+                        ".legacy-archive-recovery-reservation.json",
+                    }, partial
+                elif stage == "journal":
+                    assert set(partial) == control_names, partial
+                else:
+                    published_payload = {
+                        relative: entry
+                        for relative, entry in partial.items()
+                        if relative not in control_names
+                    }
+                    if stage == "payload":
+                        assert published_payload, partial
+                        assert set(published_payload) < set(expected_g3), partial
+                    else:
+                        assert set(published_payload) == set(expected_g3) - {"progress.md"}, partial
+                    for relative, entry in published_payload.items():
+                        assert expected_g3[relative] == entry, relative
+                destination_identity = (recovered.stat().st_dev, recovered.stat().st_ino)
+                resumed = run_cli(
+                    "restore-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                )
+                assert resumed["state"] == "archived", resumed
+                assert (recovered.stat().st_dev, recovered.stat().st_ino) == destination_identity
+                completed = filesystem_manifest(recovered)
+                completed_payload = {
+                    relative: entry
+                    for relative, entry in completed.items()
+                    if relative not in {
+                        ".archive-source-manifest.json",
+                        ".phase-artifact-ownership.json",
+                    }
+                }
+                assert completed_payload == expected_g3
+                assert not target.exists(), target
+                assert (authority / "executor-result.json").read_bytes() == result_before
+                assert (authority / "receipt.json").read_bytes() == receipt_before
+                assert filesystem_manifest(archive_root) == archive_before
+                assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_resumes_atomic_temp_publications":
+            receipt_repo = new_repo(tmp, "resume-receipt-temp")
+            receipt_id = "resume-receipt-temp"
+            destination, authority, backup = prepare_recovery_for_restore(receipt_repo, receipt_id)
+            archive_root = receipt_repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(receipt_repo),
+                    "--recovery-id", receipt_id,
+                    failure="recovery-receipt-temp-only",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            target = receipt_repo / ".release-loop/runs/alpha"
+            target_before = filesystem_manifest(target)
+            assert (authority / ".receipt.json.tmp").is_file()
+            assert not (authority / "receipt.json").exists()
+            resumed = run_cli(
+                "restore-legacy-archive", "--repo", str(receipt_repo),
+                "--recovery-id", receipt_id,
+            )
+            assert resumed["state"] == "archived", resumed
+            assert not (authority / ".receipt.json.tmp").exists()
+            assert not target.exists()
+            assert target_before
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+
+            for generation, setup_hook, fault_hook in (
+                ("g1", "recovery-after-receipt", "recovery-progress-g1-temp-only"),
+                ("g2", "recovery-after-g1", "recovery-progress-g2-temp-only"),
+                ("g3", "recovery-after-g2", "recovery-progress-g3-temp-only"),
+            ):
+                candidate = new_repo(tmp, f"resume-{generation}-temp")
+                recovery_id = f"resume-{generation}-temp"
+                destination, authority, backup = prepare_recovery_for_restore(candidate, recovery_id)
+                archive_root = candidate / destination
+                archive_before = filesystem_manifest(archive_root)
+                backup_before = filesystem_manifest(backup)
+                assert_blocked_preserves(
+                    lambda candidate=candidate, recovery_id=recovery_id, setup_hook=setup_hook: run_cli(
+                        "restore-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                        failure=setup_hook,
+                    ),
+                    sent,
+                    before,
+                    "injected recovery interruption",
+                )
+                target = candidate / ".release-loop/runs/alpha"
+                progress_before = (target / "progress.md").read_bytes()
+                result_before = (authority / "executor-result.json").read_bytes()
+                receipt_before = (authority / "receipt.json").read_bytes()
+                assert_blocked_preserves(
+                    lambda candidate=candidate, recovery_id=recovery_id, fault_hook=fault_hook: run_cli(
+                        "restore-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                        failure=fault_hook,
+                    ),
+                    sent,
+                    before,
+                    "injected recovery interruption",
+                )
+                temporary = target / ".progress.md.recovery.tmp"
+                assert temporary.is_file(), temporary
+                assert (target / "progress.md").read_bytes() == progress_before
+                assert temporary.read_bytes() != progress_before
+                resumed = run_cli(
+                    "restore-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                )
+                assert resumed["state"] == "archived", resumed
+                assert not target.exists(), target
+                assert (authority / "executor-result.json").read_bytes() == result_before
+                assert (authority / "receipt.json").read_bytes() == receipt_before
+                assert filesystem_manifest(archive_root) == archive_before
+                assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_parser_provenance_matrix":
+            spec = importlib.util.spec_from_file_location("recovery_parser_matrix", CLI)
+            assert spec is not None and spec.loader is not None
+            integrity = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(integrity)
+            exact_heading = (
+                "## Release-loop pre-archive verification V2: Verify the archived generation\n\n"
+            )
+            exact = exact_heading + integrity.CONTRACT_V2_BODY
+            large_version = "9" * 512
+            parser_matrix = (
+                ("exact-v2", exact, "supported", "2"),
+                ("v2-title", exact.replace("Verify the archived generation", "Verify an archive"), "unverifiable", "2"),
+                ("v2-body", exact + " changed", "unverifiable", "2"),
+                ("v3", "## Release-loop pre-archive verification V3: Future\n", "unsupported-version", "3"),
+                ("large", f"## Release-loop pre-archive verification V{large_version}: Future\n", "unsupported-version", large_version),
+                ("v0", "## Release-loop pre-archive verification V0: Invalid\n", "malformed", None),
+                ("v00", "## Release-loop pre-archive verification V00: Invalid\n", "malformed", None),
+                ("v02", "## Release-loop pre-archive verification V02: Invalid\n", "malformed", None),
+                ("missing-colon", "## Release-loop pre-archive verification V2 Verify\n", "malformed", None),
+                ("extra-colon", "## Release-loop pre-archive verification V2:: Verify\n", "malformed", None),
+                ("missing-title", "## Release-loop pre-archive verification V2:\n", "malformed", None),
+                ("case-near", "## RELEASE LOOP PRE ARCHIVE VERIFICATION V2: Verify\n", "malformed", None),
+                ("separator-near", "## Release_loop-pre.archive verification V2: Verify\n", "malformed", None),
+                ("one-edit", "## Release-loop pre-archive verificatio V2: Verify\n", "malformed", None),
+                ("two-edit", "## Release-loop pre-archive verificati V2: Verify\n", "malformed", None),
+                ("body-only", "The release-loop pre-archive verification V2 contract is discussed here.\n", "absent-legacy-shape", None),
+                ("duplicate-mixed", exact + "\n## Release-loop pre-archive verification V3: Future\n", "duplicate", None),
+                ("duplicate-malformed", "## Release-loop pre-archive verification V0 Invalid\n\n## Release-loop pre-archive verification V02 Invalid\n", "duplicate", None),
+            )
+            for label, text, classification, parsed_version in parser_matrix:
+                observed = integrity.classify_pre_archive_contract(text)
+                assert isinstance(observed, dict), (label, observed)
+                assert observed["classification"] == classification, (label, observed)
+                assert observed["parsed_version"] == parsed_version, (label, observed)
+                assert (classification == "absent-legacy-shape") == (label == "body-only")
+
+            for variant in (
+                "approval-equals-introduction",
+                "nonancestor-approval",
+                "approval-blob-mismatch",
+                "post-introduction-absence",
+            ):
+                candidate = new_repo(tmp, f"provenance-matrix-{variant}")
+                recovery_id = f"provenance-{variant}"
+                destination, gate = recovery_archive(candidate, plan_variant=variant)
+                archive_root = candidate / destination
+                archive_before = filesystem_manifest(archive_root)
+                requested = run_cli(
+                    "request-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                    "--progress-path", f"{destination}/progress.md",
+                    "--gate-progress-path", str(gate.relative_to(candidate)),
+                    "--session", "fixture-session",
+                )
+                assert requested["state"] == "requested", requested
+                authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                approve_recovery_fixture(candidate, recovery_id, authority, gate)
+                run_cli(
+                    "backup-legacy-archive", "--repo", str(candidate), "--recovery-id", recovery_id,
+                )
+                audited = run_cli(
+                    "audit-legacy-archive", "--repo", str(candidate), "--recovery-id", recovery_id,
+                )
+                assert audited["verdict"] == "rejected", (variant, audited)
+                audit = json.loads((authority / "audit.json").read_bytes())
+                assert audit["verdict"] == "rejected", (variant, audit)
+                if variant == "post-introduction-absence":
+                    request = json.loads((authority / "request.json").read_bytes())
+                    plan_text = subprocess.run(
+                        ("git", "show", f"HEAD:{request['plan_path']}"),
+                        cwd=ROOT,
+                        stdout=subprocess.PIPE,
+                        check=True,
+                    ).stdout.decode("utf-8")
+                    classified = integrity.classify_pre_archive_contract(plan_text)
+                    assert classified["classification"] == "absent-legacy-shape", classified
+                assert filesystem_manifest(archive_root) == archive_before
+                assert not (candidate / ".release-loop/runs/alpha").exists()
+        elif name == "legacy_archive_recovery_resumes_after_gate_receipt":
+            recovery_id = "resume-after-gate-receipt"
+            destination, gate = recovery_archive(repo)
+            run_cli(
+                "request-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                "--progress-path", f"{destination}/progress.md",
+                "--gate-progress-path", str(gate.relative_to(repo)), "--session", "fixture-session",
+            )
+            authority = repo / f".release-loop/recovery-authority/{recovery_id}"
+            backup = repo / f".release-loop/recovery-backups/{recovery_id}"
+            write_recovery_gate_approval_fixture(authority, gate)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "request-legacy-archive", "--repo", str(repo),
+                    "--recovery-id", recovery_id, "--publish-approval",
+                    failure="recovery-after-gate-receipt",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            gate_receipt = authority / "gate-receipt.json"
+            gate_receipt_before = gate_receipt.read_bytes()
+            assert not (authority / "approval.json").exists()
+            assert filesystem_manifest(backup) == {}
+            approved = run_cli(
+                "request-legacy-archive", "--repo", str(repo),
+                "--recovery-id", recovery_id, "--publish-approval",
+            )
+            assert approved == {"recovery_id": recovery_id, "state": "approved"}, approved
+            assert gate_receipt.read_bytes() == gate_receipt_before
+            approval = json.loads((authority / "approval.json").read_bytes())
+            assert approval["gate_receipt_sha256"] == hashlib.sha256(gate_receipt_before).hexdigest()
+            run_cli("backup-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id)
+            audited = run_cli(
+                "audit-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+            )
+            assert audited["verdict"] == "accepted", audited
+        elif name == "legacy_archive_recovery_resumes_after_destination_mkdir":
+            recovery_id = "resume-after-destination-mkdir"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            archive_root = repo / destination
+            archive_before = filesystem_manifest(archive_root)
+            backup_before = filesystem_manifest(backup)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-after-receipt",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            target = repo / ".release-loop/runs/alpha"
+            target_before = filesystem_manifest(target)
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-after-destination-mkdir",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            destination_identity = (recovered.stat().st_dev, recovered.stat().st_ino)
+            assert filesystem_manifest(recovered) == {}
+            assert filesystem_manifest(target) == target_before
+            resumed = run_cli(
+                "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+            )
+            assert resumed["state"] == "archived", resumed
+            assert (recovered.stat().st_dev, recovered.stat().st_ino) == destination_identity
+            assert not target.exists(), target
+            assert filesystem_manifest(archive_root) == archive_before
+            assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_completed_archive_is_idempotent":
+            recovery_id = "completed-archive-idempotent"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            source_archive = repo / destination
+            source_before = filesystem_manifest(source_archive)
+            backup_before = filesystem_manifest(backup)
+            restored = run_cli(
+                "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+            )
+            assert restored["state"] == "archived", restored
+            completed_progress = repo / str(restored["progress_path"])
+            completed_root = completed_progress.parent
+            completed_identity = (completed_root.stat().st_dev, completed_root.stat().st_ino)
+            completed_before = filesystem_manifest(completed_root)
+            authority_before = filesystem_manifest(authority)
+            moved = archive_scope(
+                repo,
+                completed_progress.relative_to(repo).as_posix(),
+                completed_root.relative_to(repo).as_posix(),
+                persist_authority=False,
+            )
+            assert moved == [], moved
+            assert (completed_root.stat().st_dev, completed_root.stat().st_ino) == completed_identity
+            assert filesystem_manifest(completed_root) == completed_before
+            assert filesystem_manifest(authority) == authority_before
+            assert filesystem_manifest(source_archive) == source_before
+            assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_rejects_foreign_publication_temporaries":
+            for shape in ("exact", "prefix"):
+                candidate = new_repo(tmp, f"foreign-publication-{shape}")
+                recovery_id = f"foreign-publication-{shape}"
+                destination, authority, backup = prepare_recovery_for_restore(candidate, recovery_id)
+                source_archive = candidate / destination
+                source_before = filesystem_manifest(source_archive)
+                backup_before = filesystem_manifest(backup)
+                assert_blocked_preserves(
+                    lambda candidate=candidate, recovery_id=recovery_id: run_cli(
+                        "restore-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id, failure="recovery-after-g3",
+                    ),
+                    sent,
+                    before,
+                    "injected recovery interruption",
+                )
+                target = candidate / ".release-loop/runs/alpha"
+                progress_bytes = (target / "progress.md").read_bytes()
+                request = json.loads((authority / "request.json").read_bytes())
+                recovered = candidate / (
+                    f".release-loop/archive/{request['issued_at'][:10]}-"
+                    f"{request['feature']}-recovered"
+                )
+                temporary = recovered / (
+                    ".legacy-archive-recovery-pending-"
+                    + hashlib.sha256(b"progress.md").hexdigest()
+                    + ".tmp"
+                )
+                temporary.write_bytes(
+                    progress_bytes if shape == "exact" else progress_bytes[: len(progress_bytes) // 2]
+                )
+                destination_before = filesystem_manifest(recovered)
+                target_before = filesystem_manifest(target)
+                authority_before = filesystem_manifest(authority)
+                assert_blocked_preserves(
+                    lambda candidate=candidate, recovery_id=recovery_id: run_cli(
+                        "restore-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                    ),
+                    sent,
+                    before,
+                    "foreign publication temporary",
+                )
+                assert filesystem_manifest(recovered) == destination_before
+                assert filesystem_manifest(target) == target_before
+                assert filesystem_manifest(authority) == authority_before
+                assert filesystem_manifest(source_archive) == source_before
+                assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_resumes_owned_prefix_temporary":
+            recovery_id = "owned-prefix-temporary"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            source_archive = repo / destination
+            source_before = filesystem_manifest(source_archive)
+            backup_before = filesystem_manifest(backup)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-after-g3",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            target = repo / ".release-loop/runs/alpha"
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-archive-payload-prefix-temp-only",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            temporaries = list(recovered.rglob(".legacy-archive-recovery-pending-*.tmp"))
+            assert len(temporaries) == 1, temporaries
+            temporary_before = temporaries[0].read_bytes()
+            assert temporary_before
+            assert temporary_before != (target / "progress.md").read_bytes()
+            destination_identity = (recovered.stat().st_dev, recovered.stat().st_ino)
+            resumed = run_cli(
+                "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+            )
+            assert resumed["state"] == "archived", resumed
+            assert (recovered.stat().st_dev, recovered.stat().st_ino) == destination_identity
+            assert not list(recovered.rglob(".legacy-archive-recovery-pending-*.tmp"))
+            assert not target.exists(), target
+            assert filesystem_manifest(source_archive) == source_before
+            assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_blocks_generation_change_before_progress_replace":
+            recovery_id = "progress-precommit-generation-change"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            source_archive = repo / destination
+            source_before = filesystem_manifest(source_archive)
+            backup_before = filesystem_manifest(backup)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-progress-before-replace-generation-change",
+                ),
+                sent,
+                before,
+                "recovery generation",
+            )
+            target = repo / ".release-loop/runs/alpha"
+            progress_text = (target / "progress.md").read_text(encoding="utf-8")
+            assert "legacy_archive_recovery: staged:" not in progress_text
+            assert "retro: archive-destination:" not in progress_text
+            assert (target / ".injected-generation-change").read_bytes() == b"GENERATION CHANGE\n"
+            assert filesystem_manifest(source_archive) == source_before
+            assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_blocks_foreign_partial_destination_before_mutation":
+            recovery_id = "foreign-partial-destination"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            source_archive = repo / destination
+            source_before = filesystem_manifest(source_archive)
+            backup_before = filesystem_manifest(backup)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-after-g3",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            target = repo / ".release-loop/runs/alpha"
+            target_before = filesystem_manifest(target)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                    failure="recovery-archive-payload-mid-file",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            request = json.loads((authority / "request.json").read_bytes())
+            recovered = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered"
+            )
+            (recovered / "foreign-entry").write_bytes(b"FOREIGN\n")
+            destination_before = filesystem_manifest(recovered)
+            authority_before = filesystem_manifest(authority)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                ),
+                sent,
+                before,
+                "foreign",
+            )
+            assert filesystem_manifest(recovered) == destination_before
+            assert filesystem_manifest(target) == target_before
+            assert filesystem_manifest(authority) == authority_before
+            assert filesystem_manifest(source_archive) == source_before
+            assert filesystem_manifest(backup) == backup_before
+        elif name == "legacy_archive_recovery_preserves_nonmanifest_owned_journal_row":
+            recovery_id = "preserve-existing-owned-row"
+            destination, gate = recovery_archive(repo, extra_payload=True)
+            source_archive = repo / destination
+            source_journal = json.loads(
+                (source_archive / ".phase-artifact-ownership.json").read_bytes()
+            )
+            owned_path = "reports/evidence.md"
+            owned_digest = hashlib.sha256(
+                (source_archive / owned_path).read_bytes()
+            ).hexdigest()
+            source_journal["owned"][owned_path] = owned_digest
+            (source_archive / ".phase-artifact-ownership.json").write_text(
+                json.dumps(source_journal, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            assert source_journal["owned"][owned_path] == owned_digest
+            run_cli(
+                "request-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                "--progress-path", f"{destination}/progress.md", "--gate-progress-path",
+                str(gate.relative_to(repo)), "--session", "fixture-session",
+            )
+            authority = repo / f".release-loop/recovery-authority/{recovery_id}"
+            approve_recovery_fixture(repo, recovery_id, authority, gate)
+            run_cli("backup-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id)
+            run_cli("audit-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id)
+            restored = run_cli(
+                "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+            )
+            assert restored["state"] == "archived", restored
+            recovered = repo / str(restored["progress_path"]).rsplit("/", 1)[0]
+            final_journal = json.loads(
+                (recovered / ".phase-artifact-ownership.json").read_bytes()
+            )
+            assert final_journal["owned"][owned_path] == owned_digest
+            assert (recovered / owned_path).read_bytes() == b"RECOVERY PAYLOAD\n"
+        elif name == "legacy_archive_recovery_rejects_reserved_payload_collisions":
+            collision_paths = (
+                ".legacy-archive-recovery-reservation.json",
+                ".legacy-archive-recovery-reservation.json.tmp",
+                ".progress.md.recovery.tmp",
+                ".archive-source-manifest.json.recovery.tmp",
+                ".phase-artifact-ownership.json.recovery.tmp",
+                ".legacy-archive-recovery-owner-foreign.json",
+                ".legacy-archive-recovery-pending-" + "0" * 64 + ".tmp",
+                "reports/.legacy-archive-recovery-owner-nested.json",
+                "reports/.legacy-archive-recovery-pending-" + "1" * 64 + ".tmp",
+            )
+            for index, collision in enumerate(collision_paths):
+                candidate = new_repo(tmp, f"reserved-payload-{index}")
+                recovery_id = f"reserved-payload-{index}"
+                destination, gate = recovery_archive(candidate, extra_payload=True)
+                archive_root = candidate / destination
+                collision_path = archive_root / collision
+                collision_path.parent.mkdir(parents=True, exist_ok=True)
+                collision_path.write_bytes(b"COLLISION\n")
+                manifest_path = archive_root / ".archive-source-manifest.json"
+                manifest = json.loads(manifest_path.read_bytes())
+                existing = {str(row["path"]) for row in manifest["entries"]}
+                for parent in collision_path.relative_to(archive_root).parents:
+                    parent_text = parent.as_posix()
+                    if parent_text not in {".", ""} and parent_text not in existing:
+                        manifest["entries"].append({"kind": "directory", "path": parent_text})
+                        existing.add(parent_text)
+                manifest["entries"] = [row for row in manifest["entries"] if row["path"] != collision]
+                manifest["entries"].append({
+                    "kind": "file",
+                    "path": collision,
+                    "sha256": hashlib.sha256(b"COLLISION\n").hexdigest(),
+                })
+                manifest["entries"].sort(key=lambda row: str(row["path"]))
+                manifest_path.write_text(
+                    json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                journal_path = archive_root / ".phase-artifact-ownership.json"
+                journal = json.loads(journal_path.read_bytes())
+                journal["owned"][".archive-source-manifest.json"] = hashlib.sha256(
+                    manifest_path.read_bytes()
+                ).hexdigest()
+                journal_path.write_text(
+                    json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                archive_before = filesystem_manifest(archive_root)
+                authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                backup = candidate / f".release-loop/recovery-backups/{recovery_id}"
+                assert_blocked_preserves(
+                    lambda candidate=candidate, recovery_id=recovery_id, destination=destination, gate=gate: run_cli(
+                        "request-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                        "--progress-path", f"{destination}/progress.md",
+                        "--gate-progress-path", str(gate.relative_to(candidate)),
+                        "--session", "fixture-session",
+                    ),
+                    sent,
+                    before,
+                    "reserved",
+                )
+                assert not authority.exists(), (collision, authority)
+                assert not backup.exists(), (collision, backup)
+                assert filesystem_manifest(archive_root) == archive_before
+        elif name == "legacy_archive_recovery_rejects_frontmatter_shadowing":
+            for field in ("phase_status", "merged", "branch", "base_branch", "ship_approved"):
+                for shape in ("nested", "duplicate"):
+                    candidate = new_repo(tmp, f"frontmatter-terminal-{field}-{shape}")
+                    recovery_id = f"frontmatter-{field.replace('_', '-')}-{shape}"
+                    destination, gate = recovery_archive(candidate)
+                    archive_root = candidate / destination
+                    progress_path = archive_root / "progress.md"
+                    progress_text = progress_path.read_text(encoding="utf-8")
+                    original = {
+                        "phase_status": "phase_status: in-progress",
+                        "merged": "merged: true",
+                        "branch": "branch: main",
+                        "base_branch": "base_branch: main",
+                        "ship_approved": 'ship_approved: {by: user, at: 2026-08-30T04:56:00Z, conditions: "CI green, no open P0"}',
+                    }[field]
+                    invalid = {
+                        "phase_status": "complete",
+                        "merged": "false",
+                        "branch": "wrong-branch",
+                        "base_branch": "wrong-base",
+                        "ship_approved": "approved",
+                    }[field]
+                    if shape == "nested":
+                        progress_text = progress_text.replace(
+                            original + "\n", f"shadow_{field}:\n  {field}: {invalid}\n", 1,
+                        )
+                    else:
+                        progress_text = progress_text.replace(
+                            original + "\n", original + f"\n{field}: {invalid}\n", 1,
+                        )
+                    progress_path.write_text(progress_text, encoding="utf-8")
+                    manifest_path = archive_root / ".archive-source-manifest.json"
+                    manifest = json.loads(manifest_path.read_bytes())
+                    progress_row = next(row for row in manifest["entries"] if row["path"] == "progress.md")
+                    progress_row["sha256"] = hashlib.sha256(progress_path.read_bytes()).hexdigest()
+                    manifest_path.write_text(
+                        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+                        encoding="utf-8",
+                    )
+                    journal_path = archive_root / ".phase-artifact-ownership.json"
+                    journal = json.loads(journal_path.read_bytes())
+                    journal["owned"][".archive-source-manifest.json"] = hashlib.sha256(
+                        manifest_path.read_bytes()
+                    ).hexdigest()
+                    journal_path.write_text(
+                        json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+                        encoding="utf-8",
+                    )
+                    authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                    backup = candidate / f".release-loop/recovery-backups/{recovery_id}"
+                    if field == "phase_status" or shape == "duplicate":
+                        assert_blocked_preserves(
+                            lambda candidate=candidate, recovery_id=recovery_id, destination=destination, gate=gate: run_cli(
+                                "request-legacy-archive", "--repo", str(candidate),
+                                "--recovery-id", recovery_id,
+                                "--progress-path", f"{destination}/progress.md",
+                                "--gate-progress-path", str(gate.relative_to(candidate)),
+                                "--session", "fixture-session",
+                            ),
+                            sent,
+                            before,
+                            "invalid recovery packet",
+                        )
+                        assert not authority.exists(), (field, shape, authority)
+                        assert not backup.exists(), (field, shape, backup)
+                    else:
+                        requested = run_cli(
+                            "request-legacy-archive", "--repo", str(candidate),
+                            "--recovery-id", recovery_id,
+                            "--progress-path", f"{destination}/progress.md",
+                            "--gate-progress-path", str(gate.relative_to(candidate)),
+                            "--session", "fixture-session",
+                        )
+                        assert requested["state"] == "requested", (field, shape, requested)
+                        approve_recovery_fixture(candidate, recovery_id, authority, gate)
+                        run_cli(
+                            "backup-legacy-archive", "--repo", str(candidate),
+                            "--recovery-id", recovery_id,
+                        )
+                        audited = run_cli(
+                            "audit-legacy-archive", "--repo", str(candidate),
+                            "--recovery-id", recovery_id,
+                        )
+                        assert audited["verdict"] == "rejected", (field, shape, audited)
+            candidate = new_repo(tmp, "frontmatter-terminal-delimiter")
+            recovery_id = "frontmatter-terminal-delimiter"
+            destination, gate = recovery_archive(candidate)
+            archive_root = candidate / destination
+            progress_path = archive_root / "progress.md"
+            progress_text = progress_path.read_text(encoding="utf-8").replace(
+                "\n---\n",
+                "\nnote: ---\nphase_status: complete\n---\n",
+                1,
+            )
+            progress_path.write_text(progress_text, encoding="utf-8")
+            manifest_path = archive_root / ".archive-source-manifest.json"
+            manifest = json.loads(manifest_path.read_bytes())
+            progress_row = next(row for row in manifest["entries"] if row["path"] == "progress.md")
+            progress_row["sha256"] = hashlib.sha256(progress_path.read_bytes()).hexdigest()
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            journal_path = archive_root / ".phase-artifact-ownership.json"
+            journal = json.loads(journal_path.read_bytes())
+            journal["owned"][".archive-source-manifest.json"] = hashlib.sha256(
+                manifest_path.read_bytes()
+            ).hexdigest()
+            journal_path.write_text(
+                json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+            backup = candidate / f".release-loop/recovery-backups/{recovery_id}"
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "request-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                    "--progress-path", f"{destination}/progress.md",
+                    "--gate-progress-path", str(gate.relative_to(candidate)),
+                    "--session", "fixture-session",
+                ),
+                sent,
+                before,
+                "invalid recovery packet",
+            )
+            assert not authority.exists(), authority
+            assert not backup.exists(), backup
+            for shape in ("nested", "duplicate", "delimiter"):
+                candidate = new_repo(tmp, f"frontmatter-gate-{shape}")
+                recovery_id = f"frontmatter-gate-{shape}"
+                destination, gate = recovery_archive(candidate)
+                gate_text = gate.read_text(encoding="utf-8")
+                if shape == "nested":
+                    gate_text = gate_text.replace(
+                        "phase_status: waiting-user\n",
+                        "shadow_phase_status:\n  phase_status: waiting-user\n",
+                        1,
+                    )
+                else:
+                    if shape == "duplicate":
+                        gate_text = gate_text.replace(
+                            "phase_status: waiting-user\n",
+                            "phase_status: waiting-user\nphase_status: complete\n",
+                            1,
+                        )
+                    else:
+                        gate_text = gate_text.replace(
+                            "\n---\n",
+                            "\nnote: ---\n"
+                            "recovery_gate:\n"
+                            "  id: legacy-archive-recovery-approval\n"
+                            "  issued_at: 2026-08-30T05:00:00Z\n"
+                            "  expected_answer_class: approve-exact-recovery-or-cancel\n"
+                            "---\n",
+                            1,
+                        )
+                gate.write_text(gate_text, encoding="utf-8")
+                authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                backup = candidate / f".release-loop/recovery-backups/{recovery_id}"
+                assert_blocked_preserves(
+                    lambda candidate=candidate, recovery_id=recovery_id, destination=destination, gate=gate: run_cli(
+                        "request-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                        "--progress-path", f"{destination}/progress.md",
+                        "--gate-progress-path", str(gate.relative_to(candidate)),
+                        "--session", "fixture-session",
+                    ),
+                    sent,
+                    before,
+                    "recovery gate",
+                )
+                assert not authority.exists(), authority
+                assert not backup.exists(), backup
+        elif name == "legacy_archive_recovery_revalidates_completed_owned_rows":
+            recovery_id = "revalidate-completed-owned-row"
+            destination, gate = recovery_archive(repo, extra_payload=True)
+            source_archive = repo / destination
+            source_journal_path = source_archive / ".phase-artifact-ownership.json"
+            source_journal = json.loads(source_journal_path.read_bytes())
+            source_journal["owned"]["reports/evidence.md"] = hashlib.sha256(
+                (source_archive / "reports/evidence.md").read_bytes()
+            ).hexdigest()
+            source_journal_path.write_text(
+                json.dumps(source_journal, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            run_cli(
+                "request-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+                "--progress-path", f"{destination}/progress.md", "--gate-progress-path",
+                str(gate.relative_to(repo)), "--session", "fixture-session",
+            )
+            authority = repo / f".release-loop/recovery-authority/{recovery_id}"
+            approve_recovery_fixture(repo, recovery_id, authority, gate)
+            run_cli("backup-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id)
+            run_cli("audit-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id)
+            restored = run_cli("restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id)
+            completed = repo / str(restored["progress_path"]).rsplit("/", 1)[0]
+            journal_path = completed / ".phase-artifact-ownership.json"
+            journal = json.loads(journal_path.read_bytes())
+            assert journal["owned"].pop("reports/evidence.md")
+            journal_path.write_text(
+                json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            completed_before = filesystem_manifest(completed)
+            authority_before = filesystem_manifest(authority)
+            assert_blocked_preserves(
+                lambda: run_cli("restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id),
+                sent,
+                before,
+                "archive",
+            )
+            assert filesystem_manifest(completed) == completed_before
+            assert filesystem_manifest(authority) == authority_before
+        elif name == "legacy_archive_recovery_markdown_heading_boundaries":
+            spec = importlib.util.spec_from_file_location("recovery_heading_boundaries", CLI)
+            assert spec is not None and spec.loader is not None
+            integrity = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(integrity)
+            exact_title = "Release-loop pre-archive verification V2: Verify the archived generation"
+            malformed_title = "Release-loop pre-archive verification V02 Invalid"
+            cases = (
+                ("fenced", f"```markdown\n## {malformed_title}\n```\n", "absent-legacy-shape"),
+                ("atx-1", f" # {malformed_title}\n", "malformed"),
+                ("atx-2", f"  ## {malformed_title}\n", "malformed"),
+                ("atx-3", f"   ## {malformed_title}\n", "malformed"),
+                ("setext-equals", f"{malformed_title}\n===\n", "malformed"),
+                ("setext-dashes", f"{malformed_title}\n---\n", "malformed"),
+                ("supported-atx-3", f"   ## {exact_title}\n\n{integrity.CONTRACT_V2_BODY}", "supported"),
+            )
+            for label, text, expected in cases:
+                observed = integrity.classify_pre_archive_contract(text)
+                assert observed["classification"] == expected, (label, observed)
+        elif name == "legacy_archive_recovery_rejects_plan_frontmatter_attacks":
+            for variant in (
+                "missing-body-seal",
+                "duplicate-body-seal",
+                "mismatch-body-seal",
+                "duplicate-status",
+                "delimiter-body-seal-shadow",
+                "delimiter-status-shadow",
+            ):
+                candidate = new_repo(tmp, f"plan-frontmatter-{variant}")
+                recovery_id = f"plan-frontmatter-{variant}"
+                destination, gate = recovery_archive(candidate, plan_variant=variant)
+                archive_root = candidate / destination
+                archive_before = filesystem_manifest(archive_root)
+                requested = run_cli(
+                    "request-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                    "--progress-path", f"{destination}/progress.md",
+                    "--gate-progress-path", str(gate.relative_to(candidate)),
+                    "--session", "fixture-session",
+                )
+                assert requested["state"] == "requested", (variant, requested)
+                authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                backup = candidate / f".release-loop/recovery-backups/{recovery_id}"
+                approve_recovery_fixture(candidate, recovery_id, authority, gate)
+                run_cli("backup-legacy-archive", "--repo", str(candidate), "--recovery-id", recovery_id)
+                request = json.loads((authority / "request.json").read_bytes())
+                git(
+                    candidate,
+                    "merge-base",
+                    "--is-ancestor",
+                    str(request["plan_approval_commit"]),
+                    str(request["contract_introduction_commit"]),
+                )
+                audited = run_cli(
+                    "audit-legacy-archive", "--repo", str(candidate), "--recovery-id", recovery_id,
+                )
+                assert audited["verdict"] == "rejected", (variant, audited)
+                audit = json.loads((authority / "audit.json").read_bytes())
+                assert audit["failure"]["class"] == "recovery provenance", (variant, audit)
+                expected_detail = {
+                    "missing-body-seal": "body_seal",
+                    "duplicate-body-seal": "body_seal",
+                    "mismatch-body-seal": "sealed plan bytes mismatch",
+                    "duplicate-status": "status",
+                    "delimiter-body-seal-shadow": "body_seal",
+                    "delimiter-status-shadow": "status",
+                }[variant]
+                assert expected_detail in audit["failure"]["detail"].lower(), (variant, audit)
+                audit_before = (authority / "audit.json").read_bytes()
+                assert_blocked_preserves(
+                    lambda candidate=candidate, recovery_id=recovery_id: run_cli(
+                        "restore-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                    ),
+                    sent,
+                    before,
+                    "recovery restore",
+                )
+                assert (authority / "audit.json").read_bytes() == audit_before
+                assert filesystem_manifest(archive_root) == archive_before
+                assert not (candidate / ".release-loop/runs/alpha").exists()
+                assert filesystem_manifest(backup)
+        elif name == "legacy_archive_recovery_rejects_body_structural_authority":
+            def body_block(text: str, block_name: str, duplicate: bool) -> str:
+                lines = text.splitlines(keepends=True)
+                start = next(index for index, line in enumerate(lines) if line == f"{block_name}:\n")
+                end = start + 1
+                while end < len(lines) and lines[end].startswith("  "):
+                    end += 1
+                block = "".join(lines[start:end])
+                if not duplicate:
+                    del lines[start:end]
+                return "".join(lines).rstrip("\n") + "\n\n" + block
+
+            def reseal_archive_progress(archive_root: Path) -> None:
+                progress_path = archive_root / "progress.md"
+                manifest_path = archive_root / ".archive-source-manifest.json"
+                manifest = json.loads(manifest_path.read_bytes())
+                progress_row = next(row for row in manifest["entries"] if row["path"] == "progress.md")
+                progress_row["sha256"] = hashlib.sha256(progress_path.read_bytes()).hexdigest()
+                manifest_path.write_text(
+                    json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                journal_path = archive_root / ".phase-artifact-ownership.json"
+                journal = json.loads(journal_path.read_bytes())
+                journal["owned"][".archive-source-manifest.json"] = hashlib.sha256(
+                    manifest_path.read_bytes()
+                ).hexdigest()
+                journal_path.write_text(
+                    json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+
+            for block_name in ("recovery_gate", "final_action"):
+                for duplicate in (False, True):
+                    label = "duplicate" if duplicate else "body-only"
+                    candidate = new_repo(tmp, f"body-structure-{block_name}-{label}")
+                    recovery_id = f"body-{block_name.replace('_', '-')}-{label}"
+                    destination, gate = recovery_archive(candidate)
+                    if block_name == "recovery_gate":
+                        gate.write_text(
+                            body_block(gate.read_text(encoding="utf-8"), block_name, duplicate),
+                            encoding="utf-8",
+                        )
+                    else:
+                        archive_root = candidate / destination
+                        progress_path = archive_root / "progress.md"
+                        progress_path.write_text(
+                            body_block(progress_path.read_text(encoding="utf-8"), block_name, duplicate),
+                            encoding="utf-8",
+                        )
+                        reseal_archive_progress(archive_root)
+                    authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                    backup = candidate / f".release-loop/recovery-backups/{recovery_id}"
+                    if block_name == "recovery_gate":
+                        if duplicate:
+                            requested = run_cli(
+                                "request-legacy-archive", "--repo", str(candidate),
+                                "--recovery-id", recovery_id,
+                                "--progress-path", f"{destination}/progress.md",
+                                "--gate-progress-path", str(gate.relative_to(candidate)),
+                                "--session", "fixture-session",
+                            )
+                            assert requested["state"] == "requested", (label, requested)
+                        else:
+                            assert_blocked_preserves(
+                                lambda candidate=candidate, recovery_id=recovery_id, destination=destination, gate=gate: run_cli(
+                                    "request-legacy-archive", "--repo", str(candidate),
+                                    "--recovery-id", recovery_id,
+                                    "--progress-path", f"{destination}/progress.md",
+                                    "--gate-progress-path", str(gate.relative_to(candidate)),
+                                    "--session", "fixture-session",
+                                ),
+                                sent,
+                                before,
+                                "recovery gate",
+                            )
+                            assert not authority.exists(), (block_name, label, authority)
+                            assert not backup.exists(), (block_name, label, backup)
+                    else:
+                        requested = run_cli(
+                            "request-legacy-archive", "--repo", str(candidate),
+                            "--recovery-id", recovery_id,
+                            "--progress-path", f"{destination}/progress.md",
+                            "--gate-progress-path", str(gate.relative_to(candidate)),
+                            "--session", "fixture-session",
+                        )
+                        assert requested["state"] == "requested", (label, requested)
+                        approve_recovery_fixture(candidate, recovery_id, authority, gate)
+                        run_cli(
+                            "backup-legacy-archive", "--repo", str(candidate),
+                            "--recovery-id", recovery_id,
+                        )
+                        audited = run_cli(
+                            "audit-legacy-archive", "--repo", str(candidate),
+                            "--recovery-id", recovery_id,
+                        )
+                        if duplicate:
+                            assert audited["verdict"] == "accepted", (label, audited)
+                        else:
+                            assert audited["verdict"] == "rejected", (label, audited)
+                            audit_before = (authority / "audit.json").read_bytes()
+                            assert_blocked_preserves(
+                                lambda candidate=candidate, recovery_id=recovery_id: run_cli(
+                                    "restore-legacy-archive", "--repo", str(candidate),
+                                    "--recovery-id", recovery_id,
+                                ),
+                                sent,
+                                before,
+                                "recovery restore",
+                            )
+                            assert (authority / "audit.json").read_bytes() == audit_before
+
+            for duplicate in (False, True):
+                label = "duplicate" if duplicate else "body-only"
+                candidate = new_repo(tmp, f"body-structure-receipt-{label}")
+                recovery_id = f"body-receipt-{label}"
+                destination, gate = recovery_archive(candidate)
+                run_cli(
+                    "request-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                    "--progress-path", f"{destination}/progress.md",
+                    "--gate-progress-path", str(gate.relative_to(candidate)),
+                    "--session", "fixture-session",
+                )
+                authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                write_recovery_gate_approval_fixture(authority, gate)
+                gate.write_text(
+                    body_block(gate.read_text(encoding="utf-8"), "recovery_gate_receipt", duplicate),
+                    encoding="utf-8",
+                )
+                if duplicate:
+                    approved = run_cli(
+                        "request-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id, "--publish-approval",
+                    )
+                    assert approved["state"] == "approved", approved
+                else:
+                    authority_before = filesystem_manifest(authority)
+                    assert_blocked_preserves(
+                        lambda candidate=candidate, recovery_id=recovery_id: run_cli(
+                            "request-legacy-archive", "--repo", str(candidate),
+                            "--recovery-id", recovery_id, "--publish-approval",
+                        ),
+                        sent,
+                        before,
+                        "recovery gate",
+                    )
+                    assert filesystem_manifest(authority) == authority_before
+                    assert not (authority / "approval.json").exists()
+        elif name == "legacy_archive_recovery_timestamps_each_generation":
+            spec = importlib.util.spec_from_file_location("recovery_timestamp_fixture", CLI)
+            assert spec is not None and spec.loader is not None
+            integrity = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(integrity)
+            recovery_id = "generation-timestamps"
+            destination, authority, backup = prepare_recovery_for_restore(repo, recovery_id)
+            source_archive = repo / destination
+            source_before = filesystem_manifest(source_archive)
+            backup_before = filesystem_manifest(backup)
+            request = json.loads((authority / "request.json").read_bytes())
+            issued = datetime.fromisoformat(str(request["issued_at"]).replace("Z", "+00:00"))
+            target = repo / ".release-loop/runs/alpha"
+            temporary = target / ".progress.md.recovery.tmp"
+
+            def evidence_timestamp(text: str, token: str) -> datetime:
+                matches = re.findall(rf"^- ([^ ]+) {re.escape(token)}", text, re.MULTILINE)
+                assert len(matches) == 1, (token, matches)
+                return datetime.fromisoformat(matches[0].replace("Z", "+00:00"))
+
+            def top_updated(text: str) -> datetime:
+                frontmatter = text.split("---", 2)[1]
+                matches = [
+                    line.split(":", 1)[1].strip()
+                    for line in frontmatter.splitlines()
+                    if line.startswith("updated:")
+                ]
+                assert len(matches) == 1, matches
+                return datetime.fromisoformat(matches[0].replace("Z", "+00:00"))
+
+            generations: list[tuple[str, bytes, datetime]] = []
+            for stage, hook, token in (
+                ("g1", "recovery-progress-g1-temp-only", "legacy_archive_recovery: staged:"),
+                ("g2", "recovery-progress-g2-temp-only", "legacy-pre-archive-verification: accepted:"),
+                ("g3", "recovery-progress-g3-temp-only", "legacy_archive_recovery: completed:"),
+            ):
+                assert_blocked_preserves(
+                    lambda hook=hook: run_cli(
+                        "restore-legacy-archive", "--repo", str(repo),
+                        "--recovery-id", recovery_id, failure=hook,
+                    ),
+                    sent,
+                    before,
+                    "injected recovery interruption",
+                )
+                assert temporary.is_file(), (stage, temporary)
+                temporary_bytes = temporary.read_bytes()
+                temporary_text = temporary_bytes.decode("utf-8")
+                timestamp = evidence_timestamp(temporary_text, token)
+                assert top_updated(temporary_text) == timestamp, (stage, temporary_text)
+                assert timestamp >= issued, (stage, issued, timestamp)
+                if generations:
+                    prior_stage, prior_bytes, prior_timestamp = generations[-1]
+                    assert timestamp >= prior_timestamp, (prior_stage, stage, prior_timestamp, timestamp)
+                    assert (target / "progress.md").read_bytes() == prior_bytes
+                    assert temporary_text.count(token) == 1, (stage, temporary_text)
+                    target_fd = os.open(target, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                    try:
+                        predecessor = integrity.recovery_generation_at(
+                            target_fd,
+                            exclude=integrity.RECOVERY_TRANSIENT_NAMES,
+                        )
+                    finally:
+                        os.close(target_fd)
+                    assert f"{prior_stage}-sha256={predecessor}" in temporary_text, (
+                        stage,
+                        predecessor,
+                        temporary_text,
+                    )
+                generations.append((stage, temporary_bytes, timestamp))
+
+            resumed = run_cli(
+                "restore-legacy-archive", "--repo", str(repo), "--recovery-id", recovery_id,
+            )
+            assert resumed["state"] == "archived", resumed
+            completed = repo / str(resumed["progress_path"])
+            completed_text = completed.read_text(encoding="utf-8")
+            assert completed.read_bytes() == generations[-1][1]
+            for _stage, _bytes, timestamp in generations:
+                assert completed_text.count(timestamp.isoformat().replace("+00:00", "Z")) >= 1
+            assert not target.exists(), target
+            assert filesystem_manifest(source_archive) == source_before
+            assert filesystem_manifest(backup) == backup_before
+
+            rollback_repo = new_repo(tmp, "generation-timestamp-rollback")
+            rollback_id = "generation-timestamp-rollback"
+            rollback_destination, rollback_authority, rollback_backup = prepare_recovery_for_restore(
+                rollback_repo,
+                rollback_id,
+            )
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(rollback_repo),
+                    "--recovery-id", rollback_id,
+                    failure="recovery-progress-g1-temp-only",
+                ),
+                sent,
+                before,
+                "injected recovery interruption",
+            )
+            rollback_target = rollback_repo / ".release-loop/runs/alpha"
+            rollback_temporary = rollback_target / ".progress.md.recovery.tmp"
+            rollback_progress = (rollback_target / "progress.md").read_text(encoding="utf-8")
+            prior_updated_match = re.search(r"^updated: (\S+)$", rollback_progress, re.MULTILINE)
+            assert prior_updated_match is not None
+            prior_updated = prior_updated_match.group(1)
+            temporary_text = rollback_temporary.read_text(encoding="utf-8")
+            generated = evidence_timestamp(temporary_text, "legacy_archive_recovery: staged:")
+            generated_text = generated.isoformat().replace("+00:00", "Z")
+            issued_text = str(json.loads((rollback_authority / "request.json").read_bytes())["issued_at"])
+            assert datetime.fromisoformat(prior_updated.replace("Z", "+00:00")) < datetime.fromisoformat(
+                issued_text.replace("Z", "+00:00")
+            )
+            rollback_temporary.write_text(
+                temporary_text.replace(generated_text, prior_updated),
+                encoding="utf-8",
+            )
+            target_before = filesystem_manifest(rollback_target)
+            authority_before = filesystem_manifest(rollback_authority)
+            backup_before = filesystem_manifest(rollback_backup)
+            archive_before = filesystem_manifest(rollback_repo / rollback_destination)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "restore-legacy-archive", "--repo", str(rollback_repo),
+                    "--recovery-id", rollback_id,
+                ),
+                sent,
+                before,
+                "transition timestamp precedes prior write",
+            )
+            assert filesystem_manifest(rollback_target) == target_before
+            assert filesystem_manifest(rollback_authority) == authority_before
+            assert filesystem_manifest(rollback_backup) == backup_before
+            assert filesystem_manifest(rollback_repo / rollback_destination) == archive_before
+        elif name == "legacy_archive_recovery_rejects_invalid_terminal_updated":
+            for variant in (
+                "missing",
+                "malformed",
+                "future",
+                "approval-after-final-action",
+                "final-action-before-ship",
+                "final-action-after-ship",
+                "ship-after-retro",
+                "updated-before-retro",
+                "updated-after-retro",
+            ):
+                candidate = new_repo(tmp, f"terminal-updated-{variant}")
+                recovery_id = f"terminal-updated-{variant}"
+                destination, gate = recovery_archive(candidate)
+                archive_root = candidate / destination
+                progress_path = archive_root / "progress.md"
+                progress_text = progress_path.read_text(encoding="utf-8")
+                if variant == "missing":
+                    progress_text = progress_text.replace("updated: 2026-08-30T04:59:00Z\n", "", 1)
+                elif variant == "malformed":
+                    progress_text = progress_text.replace(
+                        "updated: 2026-08-30T04:59:00Z\n",
+                        "updated: not-a-timestamp\n",
+                        1,
+                    )
+                elif variant == "future":
+                    progress_text = progress_text.replace(
+                        "updated: 2026-08-30T04:59:00Z\n",
+                        "updated: 9999-12-31T23:59:59Z\n",
+                        1,
+                    )
+                elif variant == "approval-after-final-action":
+                    progress_text = progress_text.replace(
+                        "ship_approved: {by: user, at: 2026-08-30T04:56:00Z,",
+                        "ship_approved: {by: user, at: 2026-08-30T04:58:00Z,",
+                        1,
+                    )
+                elif variant == "final-action-before-ship":
+                    progress_text = progress_text.replace(
+                        "  updated: 2026-08-30T04:57:00Z\n",
+                        "  updated: 2026-08-30T04:56:30Z\n",
+                        1,
+                    )
+                elif variant == "final-action-after-ship":
+                    progress_text = progress_text.replace(
+                        "  updated: 2026-08-30T04:57:00Z\n",
+                        "  updated: 2026-08-30T04:58:00Z\n",
+                        1,
+                    )
+                elif variant == "ship-after-retro":
+                    progress_text = progress_text.replace(
+                        "- 2026-08-30T04:57:00Z ship: merged (",
+                        "- 2026-08-30T05:00:00Z ship: merged (",
+                        1,
+                    )
+                elif variant == "updated-before-retro":
+                    progress_text = progress_text.replace(
+                        "updated: 2026-08-30T04:59:00Z\n",
+                        "updated: 2026-08-30T04:58:00Z\n",
+                        1,
+                    )
+                elif variant == "updated-after-retro":
+                    progress_text = progress_text.replace(
+                        "updated: 2026-08-30T04:59:00Z\n",
+                        "updated: 2026-08-30T05:00:00Z\n",
+                        1,
+                    )
+                progress_path.write_text(progress_text, encoding="utf-8")
+                manifest_path = archive_root / ".archive-source-manifest.json"
+                manifest = json.loads(manifest_path.read_bytes())
+                progress_row = next(row for row in manifest["entries"] if row["path"] == "progress.md")
+                progress_row["sha256"] = hashlib.sha256(progress_path.read_bytes()).hexdigest()
+                manifest_path.write_text(
+                    json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                journal_path = archive_root / ".phase-artifact-ownership.json"
+                journal = json.loads(journal_path.read_bytes())
+                journal["owned"][".archive-source-manifest.json"] = hashlib.sha256(
+                    manifest_path.read_bytes()
+                ).hexdigest()
+                journal_path.write_text(
+                    json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                archive_before = filesystem_manifest(archive_root)
+                requested = run_cli(
+                    "request-legacy-archive", "--repo", str(candidate),
+                    "--recovery-id", recovery_id,
+                    "--progress-path", f"{destination}/progress.md",
+                    "--gate-progress-path", str(gate.relative_to(candidate)),
+                    "--session", "fixture-session",
+                )
+                assert requested["state"] == "requested", (variant, requested)
+                authority = candidate / f".release-loop/recovery-authority/{recovery_id}"
+                backup = candidate / f".release-loop/recovery-backups/{recovery_id}"
+                approve_recovery_fixture(candidate, recovery_id, authority, gate)
+                run_cli("backup-legacy-archive", "--repo", str(candidate), "--recovery-id", recovery_id)
+                audited = run_cli(
+                    "audit-legacy-archive", "--repo", str(candidate), "--recovery-id", recovery_id,
+                )
+                assert audited["verdict"] == "rejected", (variant, audited)
+                audit_before = (authority / "audit.json").read_bytes()
+                authority_before = filesystem_manifest(authority)
+                backup_before = filesystem_manifest(backup)
+                assert not (authority / "executor-result.json").exists()
+                assert not (authority / "receipt.json").exists()
+                assert not (candidate / ".release-loop/runs/alpha").exists()
+                assert_blocked_preserves(
+                    lambda candidate=candidate, recovery_id=recovery_id: run_cli(
+                        "restore-legacy-archive", "--repo", str(candidate),
+                        "--recovery-id", recovery_id,
+                    ),
+                    sent,
+                    before,
+                    "recovery restore",
+                )
+                assert (authority / "audit.json").read_bytes() == audit_before
+                assert filesystem_manifest(authority) == authority_before
+                assert filesystem_manifest(backup) == backup_before
+                assert filesystem_manifest(archive_root) == archive_before
+                assert not (authority / "executor-result.json").exists()
+                assert not (authority / "receipt.json").exists()
+                assert not (candidate / ".release-loop/runs/alpha").exists()
         elif name in {
             "archive_incomplete_missing_phase",
             "archive_incomplete_missing_phase_status",
@@ -3586,7 +6756,14 @@ def run_case(name: str) -> None:
             assert payload["status"] == "incomplete", payload
             assert not (base / ".release-loop/progress.md").exists()
         elif name == "legacy_handoff_source_persistent_children":
-            for label in ("archive", ".handoff", "runs", "unexpected"):
+            for label in (
+                "archive",
+                ".handoff",
+                "runs",
+                "recovery-authority",
+                "recovery-backups",
+                "unexpected",
+            ):
                 slug = label.lstrip(".")
                 fresh_source = new_repo(tmp, f"persistent-source-{slug}")
                 fresh_base = new_repo(tmp, f"persistent-base-{slug}")
@@ -3594,7 +6771,8 @@ def run_case(name: str) -> None:
                 child_dir = legacy_path.parent / label
                 child_dir.mkdir(parents=True)
                 (child_dir / "file.txt").write_text("persistent\n", encoding="utf-8")
-                source_before = legacy_path.read_bytes()
+                source_before = filesystem_manifest(legacy_path.parent)
+                base_before = filesystem_manifest(fresh_base / ".release-loop")
                 try:
                     handoff_scope(fresh_source, fresh_base, str(legacy_path.relative_to(fresh_source)), legacy_destination=".release-loop")
                 except Blocked as exc:
@@ -3602,7 +6780,8 @@ def run_case(name: str) -> None:
                     assert f".release-loop/{label}" in str(exc), str(exc)
                 else:
                     raise AssertionError(f"persistent child {label} did not block")
-                assert legacy_path.read_bytes() == source_before
+                assert filesystem_manifest(legacy_path.parent) == source_before
+                assert filesystem_manifest(fresh_base / ".release-loop") == base_before
         elif name == "legacy_handoff_symlinks":
             outside = tmp / "outside-legacy-symlink"
             outside.mkdir()
@@ -3722,6 +6901,50 @@ def run_case(name: str) -> None:
                 else:
                     raise AssertionError(f"destination {mutation} mutation did not block")
                 assert mutation_marker.read_bytes() == marker_before
+        elif name == "legacy_handoff_preserves_recovery_roots":
+            source = repo
+            base = new_repo(tmp, "base-recovery-roots")
+            legacy_path = write_legacy(source, "legacy")
+            (legacy_path.parent / "reports").mkdir()
+            (legacy_path.parent / "reports/U1.md").write_text("done\n", encoding="utf-8")
+            for family in ("recovery-authority", "recovery-backups"):
+                root = base / ".release-loop" / family / "existing"
+                root.mkdir(parents=True)
+                (root / "record.json").write_text(f"{family}\n", encoding="utf-8")
+            before = {
+                family: filesystem_manifest(base / ".release-loop" / family)
+                for family in ("recovery-authority", "recovery-backups")
+            }
+            for family, expected in before.items():
+                control = tmp / f"{family}-manifest-control"
+                shutil.copytree(base / ".release-loop" / family, control)
+                record = control / "existing/record.json"
+                changed = bytearray(record.read_bytes())
+                changed[0] ^= 1
+                record.write_bytes(changed)
+                observed = filesystem_manifest(control)
+                assert set(observed) == set(expected)
+                assert expected["existing/record.json"][0] == "file"
+                assert observed["existing/record.json"][0] == "file"
+                expected_payload = expected["existing/record.json"][1]
+                observed_payload = observed["existing/record.json"][1]
+                assert isinstance(expected_payload, bytes)
+                assert isinstance(observed_payload, bytes)
+                assert len(observed_payload) == len(expected_payload)
+                assert sum(
+                    left != right
+                    for left, right in zip(
+                        expected_payload,
+                        observed_payload,
+                    )
+                ) == 1
+                assert observed != expected
+            handoff_scope(source, base, str(legacy_path.relative_to(source)), legacy_destination=".release-loop")
+            after = {
+                family: filesystem_manifest(base / ".release-loop" / family)
+                for family in ("recovery-authority", "recovery-backups")
+            }
+            assert after == before, (before, after)
         elif name == "legacy_handoff_partial_directory_rerun":
             source = repo
             base = new_repo(tmp, "base")
@@ -3801,6 +7024,38 @@ def run_case(name: str) -> None:
                         assert name_label in str(exc), str(exc)
                     else:
                         raise AssertionError(f"structural invocation mutation escaped: {name_label}")
+            for label, fragment in (
+                (
+                    "ordinary-lifecycle-root-families",
+                    "The four ordinary lifecycle artifact-root families are",
+                ),
+                (
+                    "internal-recovery-root-families",
+                    "`recovery-authority/` and `recovery-backups/` are fixed internal persistent recovery families",
+                ),
+                (
+                    "internal-recovery-nontransfer",
+                    "They are never active transfer roots.",
+                ),
+                (
+                    "recovery-persistent-families",
+                    "`recovery-authority/` and `recovery-backups/` are persistent siblings",
+                ),
+                (
+                    "recovery-source-rejection",
+                    "At the source, legacy handoff rejects every persistent sibling",
+                ),
+            ):
+                texts = dict(baseline)
+                key = "SCHEMA" if fragment in baseline["SCHEMA"] else "HOOKS"
+                texts[key] = texts[key].replace(fragment, "", 1)
+                assert texts[key] != baseline[key], f"structural mutation target absent: {label}"
+                try:
+                    require_contract(texts)
+                except AssertionError as exc:
+                    assert fragment in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"structural prose mutation escaped: {label}")
         elif name == "shipping_cleanup_contract_mutation":
             require_phase_consumer_contract()
             baseline = dict(PHASE_CONSUMERS)
