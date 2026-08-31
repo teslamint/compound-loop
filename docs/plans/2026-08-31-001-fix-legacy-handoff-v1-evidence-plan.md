@@ -2,7 +2,8 @@
 schema: plan/v1
 title: Legacy Handoff V1 Evidence
 type: fix
-status: draft
+status: approved
+body_seal: 5ac590d6c382d74e6559ac4a5dd5b6d089911815b6fa2acc78c6b7853239d051
 date: 2026-08-31
 execution: code
 origin: docs/specs/2026-08-31-legacy-handoff-v1-evidence-design.md
