@@ -569,9 +569,10 @@ def structured_progress_blocks(text: str) -> dict[str, dict[str, str] | None]:
     selected = {"pre_merge_verification": None, "v1": None}
     active = None
     for line in frontmatter_text.splitlines():
-        selected_variant = re.fullmatch(r"(pre_merge_verification|v1)[ \t]+:.*", line)
-        if selected_variant:
-            reject("legacy V1 ownership", f"malformed block {selected_variant.group(1)}")
+        raw_key, separator, _ = line.partition(":")
+        normalized_key = raw_key.strip()
+        if separator and not line[:1].isspace() and normalized_key in selected and raw_key != normalized_key:
+            reject("legacy V1 ownership", f"malformed block {normalized_key}")
         top = re.fullmatch(r"([A-Za-z0-9_]+):(.*)", line)
         if top:
             active = None

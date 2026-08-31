@@ -6717,6 +6717,13 @@ def run_case(name: str) -> None:
             def edit_progress(path, old, new):
                 path.write_text(path.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
 
+            def replace_digest(path, prefix):
+                lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+                matches = [index for index, line in enumerate(lines) if line.startswith(prefix)]
+                assert len(matches) == 1, (path, prefix, matches)
+                lines[matches[0]] = prefix + "1" * 64 + "\n"
+                path.write_text("".join(lines), encoding="utf-8")
+
             def remove_progress_block(path, name):
                 lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
                 start = lines.index(f"{name}:\n")
@@ -6739,6 +6746,8 @@ def run_case(name: str) -> None:
                 ("duplicate-top", lambda source, path: edit_progress(path, "final_action:\n", "v1:\n  status: accepted\nfinal_action:\n")),
                 ("duplicate-top-v1-whitespace", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\nv1 :\n  status: started\nfinal_action:\n")),
                 ("duplicate-top-pre-merge-whitespace", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\npre_merge_verification :\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-nbsp", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\nv1\N{NO-BREAK SPACE}:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-pre-merge-nbsp", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\npre_merge_verification\N{NO-BREAK SPACE}:\n  status: started\nfinal_action:\n")),
                 ("duplicate-nested", lambda source, path: edit_progress(path, "  accepted_at:", "  status: accepted\n  accepted_at:")),
                 ("malformed-indent", lambda source, path: edit_progress(path, "  pilot_approval_path:", " pilot_approval_path:")),
                 ("missing-key", lambda source, path: edit_progress(path, "  accepted_at: 2026-08-23T00:00:00Z\n", "")),
@@ -6751,8 +6760,8 @@ def run_case(name: str) -> None:
                 ("unexpected-child", lambda source, path: (source / ".release-loop/v1/foreign.md").write_text("foreign\n", encoding="utf-8")),
                 ("missing-file", lambda source, path: (source / ".release-loop/v1/full-approval.md").unlink()),
                 ("invalid-digest", lambda source, path: edit_progress(path, "  pilot_receipt_sha256: ", "  pilot_receipt_sha256: xyz # ")),
-                ("ledger-receipt-mismatch", lambda source, path: edit_progress(path, "  pilot_receipt_sha256: ", "  pilot_receipt_sha256: " + "0" * 64 + " # ")),
-                ("embedded-receipt-mismatch", lambda source, path: edit_progress(source / ".release-loop/v1/full-receipt.md", "- receipt_sha256: ", "- receipt_sha256: " + "0" * 64 + " # ")),
+                ("ledger-receipt-mismatch", lambda source, path: replace_digest(path, "  pilot_receipt_sha256: ")),
+                ("embedded-receipt-mismatch", lambda source, path: replace_digest(source / ".release-loop/v1/full-receipt.md", "- receipt_sha256: ")),
                 ("computed-receipt-mismatch", lambda source, path: edit_progress(source / ".release-loop/v1/pilot-receipt.md", "- verdict: pass\n", "- verdict: changed\n")),
                 ("generation-ledger-mismatch", lambda source, path: edit_progress(path, "  generation_sha256: ", "  generation_sha256: " + "0" * 64 + " # ")),
                 ("generation-file-mismatch", lambda source, path: (source / ".release-loop/v1/generation-manifest.sha256").write_text("changed\n", encoding="utf-8")),
