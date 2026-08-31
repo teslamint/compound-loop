@@ -3688,7 +3688,13 @@ def run_case(name: str) -> None:
             assert restore_result["state"] == "archived", restore_result
             assert filesystem_manifest(source_archive) == source_archive_before
             assert not (repo / ".release-loop/runs/alpha").exists()
-            completed = repo / ".release-loop/archive/2026-08-30-alpha-recovered/progress.md"
+            request = json.loads(
+                (repo / ".release-loop/recovery-authority/recovery-alpha/request.json").read_bytes()
+            )
+            completed = repo / (
+                f".release-loop/archive/{request['issued_at'][:10]}-"
+                f"{request['feature']}-recovered/progress.md"
+            )
             assert completed.is_file()
             assert (repo / destination / "progress.md").is_file()
             completed_text = completed.read_text(encoding="utf-8")
