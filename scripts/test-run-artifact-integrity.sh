@@ -368,6 +368,9 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["SCHEMA"], "Reject every symlink in each existing source or destination component"),
         (selected["ARCHIVE"], "Move scoped `progress.md` last as the archive commit point."),
         (selected["ARCHIVE"], "reuse the exact recorded archive destination"),
+        (selected["ARCHIVE"], "It accepts V1 in either source or destination, but never both."),
+        (selected["ARCHIVE"], "Never move `archive`, `.handoff`, or `runs` as active state."),
+        (selected["ARCHIVE"], "Verify the terminal record and V1 tree against the exact returned `archive_path`."),
         (selected["ARCHIVE"], "Mid-move cancellation leaves the selected progress record in the source scope."),
         (selected["HOOKS"], "`.release-loop/.handoff` is the fixed handoff root"),
         (selected["HOOKS"], "Make the base owner discover and resume that exact progress path."),
@@ -375,10 +378,15 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["HOOKS"], "are never active transfer bytes"),
         (selected["HOOKS"], "`recovery-authority/` and `recovery-backups/` are persistent siblings"),
         (selected["HOOKS"], "At the source, legacy handoff rejects every persistent sibling"),
+        (selected["HOOKS"], "Accepted legacy V1 state is active state."),
+        (selected["HOOKS"], "Handoff and archive preserve the exact V1 bytes."),
         (selected["SKILL"], "adds `--legacy-destination .release-loop`"),
         (selected["SKILL"], "directory containing the loaded `SKILL.md`"),
         (selected["SKILL"], "temporary regular file under `<artifact_root>/.tmp/`"),
         (selected["SCHEMA"], "temporary path under `<artifact_root>/.tmp/`"),
+        (selected["SCHEMA"], "`pre_merge_verification` is the sole acceptance authority."),
+        (selected["SCHEMA"], "The `v1` block binds the six canonical files and their required digests."),
+        (selected["SCHEMA"], "A legacy archive includes accepted V1 evidence but excludes persistent `archive`, `.handoff`, and `runs` siblings."),
     )
     missing = [fragment for text, fragment in required if fragment not in text]
     if check_invocations:
@@ -6581,6 +6589,56 @@ def run_case(name: str) -> None:
             assert resumed_order[-1] == "progress.md"
             assert (interrupted / interrupted_destination / "v1").is_dir()
 
+            destination_side = new_repo(tmp, "legacy-v1-archive-destination-side")
+            destination_side_progress = write_legacy_v1(destination_side)
+            destination_side_path = ".release-loop/archive/2026-08-23-legacy-v1-destination-side"
+            persist_archive_evidence(destination_side_progress, destination_side_path, "completed")
+            try:
+                run_cli(
+                    "archive",
+                    "--repo", str(destination_side),
+                    "--progress-path", str(destination_side_progress.relative_to(destination_side)),
+                    "--destination", destination_side_path,
+                    failure="archive-after-journal",
+                )
+            except Blocked as exc:
+                assert "injected archive interruption" in str(exc)
+            else:
+                raise AssertionError("destination-side V1 interruption did not fire")
+            assert destination_side_progress.is_file()
+            assert not (destination_side / ".release-loop/v1").exists()
+            assert (destination_side / destination_side_path / "v1").is_dir()
+            resumed_payload = run_cli(
+                "archive",
+                "--repo", str(destination_side),
+                "--progress-path", str(destination_side_progress.relative_to(destination_side)),
+            )
+            assert resumed_payload["archive_path"] == destination_side_path, resumed_payload
+            assert resumed_payload["moved"][-1] == "progress.md", resumed_payload
+            terminal_payload = run_cli(
+                "archive",
+                "--repo", str(destination_side),
+                "--progress-path", str(destination_side_progress.relative_to(destination_side)),
+                "--destination", destination_side_path,
+            )
+            assert terminal_payload["archive_path"] == destination_side_path, terminal_payload
+            assert terminal_payload["moved"] == [], terminal_payload
+            archived_manifest = destination_side / destination_side_path / "v1/generation-manifest.sha256"
+            archived_manifest.write_text("changed\n", encoding="utf-8")
+            terminal_before = matrix_fixture_snapshot(destination_side)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "archive",
+                    "--repo", str(destination_side),
+                    "--progress-path", str(destination_side_progress.relative_to(destination_side)),
+                    "--destination", destination_side_path,
+                ),
+                sent,
+                before,
+                "legacy V1 ownership",
+            )
+            assert matrix_fixture_snapshot(destination_side) == terminal_before
+
             def rejected_archive(slug, mutate, diagnostic):
                 candidate = new_repo(tmp, f"legacy-v1-archive-reject-{slug}")
                 candidate_progress = write_legacy_v1(candidate)
@@ -6588,6 +6646,9 @@ def run_case(name: str) -> None:
                 mutate(candidate, candidate_progress, candidate_destination)
                 persist_archive_evidence(candidate_progress, candidate_destination, "completed")
                 progress_before = candidate_progress.read_bytes()
+                candidate_before = matrix_fixture_snapshot(candidate)
+                destination_root = candidate / candidate_destination
+                destination_before = filesystem_manifest(destination_root)
                 assert_blocked_preserves(
                     lambda: archive_scope(
                         candidate,
@@ -6600,6 +6661,8 @@ def run_case(name: str) -> None:
                     diagnostic,
                 )
                 assert candidate_progress.read_bytes() == progress_before
+                assert matrix_fixture_snapshot(candidate) == candidate_before
+                assert filesystem_manifest(destination_root) == destination_before
 
             rejected_archive(
                 "symlink",
@@ -6670,6 +6733,28 @@ def run_case(name: str) -> None:
             assert (handoff_base / handoff_destination / "v1").is_dir()
             assert (handoff_base / ".release-loop/.handoff").is_dir()
             assert (handoff_base / ".release-loop/runs").is_dir()
+
+            lifecycle_contract = {"SKILL": SKILL, "SCHEMA": SCHEMA, "ARCHIVE": ARCHIVE, "HOOKS": HOOKS}
+            lifecycle_mutations = (
+                ("ARCHIVE", "It accepts V1 in either source or destination, but never both.", "It accepts V1 only in the source."),
+                ("ARCHIVE", "Never move `archive`, `.handoff`, or `runs` as active state.", "Move `archive`, `.handoff`, and `runs` as active state."),
+                ("ARCHIVE", "Verify the terminal record and V1 tree against the exact returned `archive_path`.", "Recalculate the terminal archive path."),
+                ("HOOKS", "Accepted legacy V1 state is active state.", "Accepted legacy V1 state is persistent state."),
+                ("HOOKS", "Handoff and archive preserve the exact V1 bytes.", "Handoff and archive may rewrite V1 bytes."),
+                ("SCHEMA", "`pre_merge_verification` is the sole acceptance authority.", "The `v1` block is an acceptance authority."),
+                ("SCHEMA", "The `v1` block binds the six canonical files and their required digests.", "The `v1` block permits arbitrary files."),
+                ("SCHEMA", "A legacy archive includes accepted V1 evidence but excludes persistent `archive`, `.handoff`, and `runs` siblings.", "A legacy archive includes persistent siblings."),
+            )
+            for key, original, mutation in lifecycle_mutations:
+                texts = dict(lifecycle_contract)
+                texts[key] = texts[key].replace(original, mutation, 1)
+                assert texts[key] != lifecycle_contract[key], original
+                try:
+                    require_contract(texts, check_invocations=False)
+                except AssertionError as exc:
+                    assert original in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"legacy V1 lifecycle mutation escaped: {original}")
         elif name in {"ignored_orphan", "occupied_scope_blocked"}:
             orphan = repo / ".release-loop/runs/alpha/orphan.txt"
             orphan.parent.mkdir(parents=True)
