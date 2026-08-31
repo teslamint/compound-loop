@@ -571,7 +571,7 @@ def structured_progress_blocks(text: str) -> dict[str, dict[str, str] | None]:
     for line in frontmatter_text.splitlines():
         raw_key, separator, _ = line.partition(":")
         normalized_key = raw_key.strip()
-        if separator and not line[:1].isspace() and normalized_key in selected and raw_key != normalized_key:
+        if separator and normalized_key in selected and raw_key != normalized_key:
             reject("legacy V1 ownership", f"malformed block {normalized_key}")
         top = re.fullmatch(r"([A-Za-z0-9_]+):(.*)", line)
         if top:
