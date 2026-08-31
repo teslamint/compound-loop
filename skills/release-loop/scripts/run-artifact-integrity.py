@@ -84,7 +84,7 @@ RECOVERY_GATE_ID = "legacy-archive-recovery-approval"
 RECOVERY_GATE_ANSWER_CLASS = "approve-exact-recovery-or-cancel"
 LEGACY_DESTINATION = ".release-loop"
 LEGACY_MARKER_SCHEMA = "release-loop-handoff/v2"
-LEGACY_ACTIVE_ALL = frozenset(("progress.md", ".tmp", JOURNAL_NAME, "briefs", "reports", "reviews", "evidence"))
+LEGACY_ACTIVE_ALL = frozenset(("progress.md", ".tmp", JOURNAL_NAME, "briefs", "reports", "reviews", "evidence", "v1"))
 LEGACY_PERSISTENT_NAMES = frozenset((
     "archive", ".handoff", "runs", "recovery-authority", "recovery-backups",
 ))
@@ -129,6 +129,19 @@ CONTRACT_V2_BODY = (
     "loop live and resumable."
 )
 CONTRACT_INTRODUCTION_COMMIT = "08e12a82752847b3bead5a96fd251b4ad58eae1b"
+V1_PRE_MERGE_KEYS = frozenset(("id", "status", "generation_sha256", "updated"))
+V1_OWNERSHIP_PATHS = {
+    "pilot_approval_path": ".release-loop/v1/pilot-approval.md",
+    "pilot_receipt_path": ".release-loop/v1/pilot-receipt.md",
+    "full_approval_path": ".release-loop/v1/full-approval.md",
+    "full_receipt_path": ".release-loop/v1/full-receipt.md",
+    "generation_receipt_path": ".release-loop/v1/generation-receipt.md",
+    "generation_manifest_path": ".release-loop/v1/generation-manifest.sha256",
+}
+V1_OWNERSHIP_KEYS = frozenset((
+    "status", *V1_OWNERSHIP_PATHS, "pilot_receipt_sha256", "full_receipt_sha256",
+    "generation_manifest_sha256", "accepted_at",
+))
 
 
 class Blocked(RuntimeError):
@@ -551,6 +564,110 @@ def legacy_manifest_digest(entries: list[dict[str, object]]) -> str:
     return hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def structured_progress_blocks(text: str) -> dict[str, dict[str, str] | None]:
+    frontmatter_text = text.split("---", 2)[1]
+    selected = {"pre_merge_verification": None, "v1": None}
+    active = None
+    for line in frontmatter_text.splitlines():
+        top = re.fullmatch(r"([A-Za-z0-9_]+):(.*)", line)
+        if top:
+            active = None
+            name, suffix = top.groups()
+            if name in selected:
+                if selected[name] is not None:
+                    reject("legacy V1 ownership", f"duplicate block {name}")
+                if suffix.strip():
+                    reject("legacy V1 ownership", f"malformed block {name}")
+                selected[name] = {}
+                active = name
+            continue
+        if active is None:
+            continue
+        nested = re.fullmatch(r"  ([A-Za-z0-9_]+):(?: (.*))?", line)
+        if nested is None:
+            reject("legacy V1 ownership", f"malformed indentation in {active}")
+        key, value = nested.groups()
+        mapping = selected[active]
+        assert mapping is not None
+        if key in mapping:
+            reject("legacy V1 ownership", f"duplicate key {active}.{key}")
+        mapping[key] = value or ""
+    return selected
+
+
+def validate_v1_receipt(path: Path, expected_digest: str, label: str) -> None:
+    try:
+        payload = path.read_bytes()
+        text = payload.decode("utf-8")
+    except (OSError, UnicodeError):
+        reject("legacy V1 ownership", f"unreadable {label} receipt")
+    scope_lines = re.findall(r"^- receipt_sha256_scope: (.*)$", text, re.MULTILINE)
+    digest_lines = re.findall(r"^- receipt_sha256: (.*)$", text, re.MULTILINE)
+    marker = b"- receipt_sha256:"
+    if scope_lines != ["canonical bytes before this field"] or len(digest_lines) != 1 or payload.count(marker) != 1:
+        reject("legacy V1 ownership", f"malformed {label} receipt")
+    embedded = digest_lines[0]
+    computed = hashlib.sha256(payload.split(marker, 1)[0]).hexdigest()
+    if not SHA_PATTERN.fullmatch(embedded) or len({expected_digest, embedded, computed}) != 1:
+        reject("legacy V1 ownership", f"{label} receipt digest mismatch")
+
+
+def validate_legacy_v1_ownership(repo: Path, text: str) -> None:
+    blocks = structured_progress_blocks(text)
+    pre_merge = blocks["pre_merge_verification"]
+    ownership = blocks["v1"]
+    root = repo / ".release-loop/v1"
+    root_present = root.exists() or root.is_symlink()
+    if pre_merge is None and ownership is None and not root_present:
+        return
+    if pre_merge is None or ownership is None:
+        reject("legacy V1 ownership", "official acceptance, ownership, and V1 tree must agree")
+    if set(pre_merge) != V1_PRE_MERGE_KEYS or any(not value for value in pre_merge.values()):
+        reject("legacy V1 ownership", "invalid pre_merge_verification keys")
+    if set(ownership) != V1_OWNERSHIP_KEYS or any(not value for value in ownership.values()):
+        reject("legacy V1 ownership", "invalid v1 keys")
+    if pre_merge["id"] != "V1" or pre_merge["status"] != "accepted":
+        reject("legacy V1 ownership", "pre_merge_verification is not accepted V1")
+    if ownership["status"] != "accepted":
+        reject("legacy V1 ownership", "v1 ownership is not accepted")
+    digests = (
+        pre_merge["generation_sha256"], ownership["generation_manifest_sha256"],
+        ownership["pilot_receipt_sha256"], ownership["full_receipt_sha256"],
+    )
+    if any(not SHA_PATTERN.fullmatch(digest) for digest in digests):
+        reject("legacy V1 ownership", "invalid digest")
+    if pre_merge["generation_sha256"] != ownership["generation_manifest_sha256"]:
+        reject("legacy V1 ownership", "generation digest mismatch")
+    if any(ownership[key] != expected for key, expected in V1_OWNERSHIP_PATHS.items()):
+        reject("legacy V1 ownership", "non-canonical ownership path")
+    if len({ownership[key] for key in V1_OWNERSHIP_PATHS}) != len(V1_OWNERSHIP_PATHS):
+        reject("legacy V1 ownership", "duplicate ownership path")
+    if root.is_symlink() or not root.is_dir():
+        reject("legacy V1 ownership", "missing or invalid V1 root")
+    expected_children = {PurePosixPath(path).name for path in V1_OWNERSHIP_PATHS.values()}
+    observed_children = {child.name for child in root.iterdir()}
+    extras = observed_children - expected_children - {"history"}
+    missing = expected_children - observed_children
+    if extras or missing:
+        reject("legacy V1 ownership", "unexpected or missing V1 child")
+    history = root / "history"
+    if history.exists() or history.is_symlink():
+        if history.is_symlink() or not history.is_dir():
+            reject("legacy V1 ownership", "invalid V1 history")
+        tree_manifest(history)
+    paths = {}
+    for key, relative in V1_OWNERSHIP_PATHS.items():
+        candidate = repo / relative
+        if candidate.is_symlink() or not candidate.is_file():
+            reject("legacy V1 ownership", f"missing regular file {relative}")
+        candidate = guard(repo, relative, ".release-loop/v1")
+        paths[key] = candidate
+    validate_v1_receipt(paths["pilot_receipt_path"], ownership["pilot_receipt_sha256"], "pilot")
+    validate_v1_receipt(paths["full_receipt_path"], ownership["full_receipt_sha256"], "full")
+    if phase_artifact_sha256(paths["generation_manifest_path"]) != ownership["generation_manifest_sha256"]:
+        reject("legacy V1 ownership", "generation manifest digest mismatch")
+
+
 def legacy_is_subset(observed: list[dict[str, object]], full: list[dict[str, object]]) -> bool:
     return all(entry in full for entry in observed)
 
@@ -623,6 +740,7 @@ def legacy_handoff(
     marker_relative: str,
 ) -> tuple[Path, Path]:
     run_id = values["feature"]
+    validate_legacy_v1_ownership(repo, progress_file.read_text(encoding="utf-8"))
     marker = guard(base_repo, marker_relative, ".release-loop/.handoff")
     source = repo / ".release-loop"
     source_children = legacy_scan_children(repo, source, allow_persistent=False)

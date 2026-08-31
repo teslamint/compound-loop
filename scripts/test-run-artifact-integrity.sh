@@ -165,6 +165,7 @@ CASES = (
     "handoff_mismatch_preserves_both",
     "handoff_same_checkout",
     "legacy_handoff_success",
+    "legacy_handoff_v1_ownership",
     "legacy_handoff_cli_contract",
     "legacy_handoff_incomplete_rerun",
     "legacy_handoff_collision",
@@ -678,6 +679,46 @@ def write_legacy(repo: Path, feature: str = "legacy") -> Path:
     legacy = repo / ".release-loop/progress.md"
     legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.write_text(progress(feature, ".release-loop"), encoding="utf-8")
+    return legacy
+
+
+def write_legacy_v1(repo: Path, feature: str = "legacy") -> Path:
+    legacy = write_legacy(repo, feature)
+    root = legacy.parent / "v1"
+    root.mkdir()
+    for name in ("pilot-approval.md", "full-approval.md", "generation-receipt.md"):
+        (root / name).write_text(f"# {name}\n", encoding="utf-8")
+    receipt_digests = {}
+    for name in ("pilot", "full"):
+        prefix = f"# {name} receipt\n\n- verdict: pass\n- receipt_sha256_scope: canonical bytes before this field\n"
+        digest = hashlib.sha256(prefix.encode()).hexdigest()
+        (root / f"{name}-receipt.md").write_text(
+            prefix + f"- receipt_sha256: {digest}\n", encoding="utf-8"
+        )
+        receipt_digests[name] = digest
+    manifest = root / "generation-manifest.sha256"
+    manifest.write_text("0" * 64 + "  generated.txt\n", encoding="utf-8")
+    generation_digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    blocks = (
+        "v1:\n"
+        "  status: accepted\n"
+        "  pilot_approval_path: .release-loop/v1/pilot-approval.md\n"
+        "  pilot_receipt_path: .release-loop/v1/pilot-receipt.md\n"
+        f"  pilot_receipt_sha256: {receipt_digests['pilot']}\n"
+        "  full_approval_path: .release-loop/v1/full-approval.md\n"
+        "  full_receipt_path: .release-loop/v1/full-receipt.md\n"
+        f"  full_receipt_sha256: {receipt_digests['full']}\n"
+        "  generation_receipt_path: .release-loop/v1/generation-receipt.md\n"
+        "  generation_manifest_path: .release-loop/v1/generation-manifest.sha256\n"
+        f"  generation_manifest_sha256: {generation_digest}\n"
+        "  accepted_at: 2026-08-23T00:00:00Z\n"
+        "pre_merge_verification:\n"
+        "  id: V1\n"
+        "  status: accepted\n"
+        f"  generation_sha256: {generation_digest}\n"
+        "  updated: 2026-08-23T00:00:00Z\n"
+    )
+    legacy.write_text(legacy.read_text(encoding="utf-8").replace("final_action:\n", blocks + "final_action:\n"), encoding="utf-8")
     return legacy
 
 
@@ -6629,6 +6670,95 @@ def run_case(name: str) -> None:
                 "schema", "feature", "progress_path", "artifact_root",
                 "source_worktree", "base_owner", "destination", "manifest_sha256", "status",
             }, payload
+        elif name == "legacy_handoff_v1_ownership":
+            valid_source = repo
+            valid_base = new_repo(tmp, "v1-valid-base")
+            valid_progress = write_legacy_v1(valid_source)
+            (valid_progress.parent / "v1/history").mkdir()
+            (valid_progress.parent / "v1/history/prior.md").write_text("prior\n", encoding="utf-8")
+            result = handoff_scope(
+                valid_source, valid_base, str(valid_progress.relative_to(valid_source)),
+                legacy_destination=".release-loop",
+            )
+            assert result["cleanup_permitted"] is True
+            assert filesystem_manifest(valid_source / ".release-loop/v1") == filesystem_manifest(
+                valid_base / ".release-loop/v1"
+            )
+
+            pre_v1_source = new_repo(tmp, "v1-pre-v1-source")
+            pre_v1_base = new_repo(tmp, "v1-pre-v1-base")
+            pre_v1_progress = write_legacy(pre_v1_source)
+            assert handoff_scope(
+                pre_v1_source, pre_v1_base, str(pre_v1_progress.relative_to(pre_v1_source)),
+                legacy_destination=".release-loop",
+            )["cleanup_permitted"] is True
+
+            def rejected_v1(slug, mutate, diagnostic="legacy V1 ownership"):
+                source = new_repo(tmp, f"v1-reject-source-{slug}")
+                base = new_repo(tmp, f"v1-reject-base-{slug}")
+                progress_path = write_legacy_v1(source)
+                mutate(source, progress_path)
+                source_before = filesystem_manifest(source)
+                base_before = filesystem_manifest(base)
+                marker = base / ".release-loop/.handoff/legacy.json"
+                try:
+                    handoff_scope(
+                        source, base, str(progress_path.relative_to(source)),
+                        legacy_destination=".release-loop",
+                    )
+                except Blocked as exc:
+                    assert diagnostic in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"V1 ownership case {slug} did not block")
+                assert not marker.exists(), slug
+                assert filesystem_manifest(source) == source_before, slug
+                assert filesystem_manifest(base) == base_before, slug
+
+            def edit_progress(path, old, new):
+                path.write_text(path.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+
+            def remove_progress_block(path, name):
+                lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+                start = lines.index(f"{name}:\n")
+                end = start + 1
+                while end < len(lines) and lines[end].startswith("  "):
+                    end += 1
+                path.write_text("".join(lines[:start] + lines[end:]), encoding="utf-8")
+
+            def remove_all_ownership(source, path):
+                remove_progress_block(path, "v1")
+                remove_progress_block(path, "pre_merge_verification")
+
+            mutations = (
+                ("unowned-tree", remove_all_ownership),
+                ("ownership-without-official", lambda source, path: edit_progress(path, "pre_merge_verification:\n", "pre_merge_verification_missing:\n")),
+                ("accepted-without-ownership", lambda source, path: edit_progress(path, "v1:\n", "v1_missing:\n")),
+                ("accepted-without-tree", lambda source, path: shutil.rmtree(source / ".release-loop/v1")),
+                ("started", lambda source, path: edit_progress(path, "  status: accepted\n", "  status: started\n")),
+                ("official-started", lambda source, path: edit_progress(path, "pre_merge_verification:\n  id: V1\n  status: accepted\n", "pre_merge_verification:\n  id: V1\n  status: started\n")),
+                ("duplicate-top", lambda source, path: edit_progress(path, "final_action:\n", "v1:\n  status: accepted\nfinal_action:\n")),
+                ("duplicate-nested", lambda source, path: edit_progress(path, "  accepted_at:", "  status: accepted\n  accepted_at:")),
+                ("malformed-indent", lambda source, path: edit_progress(path, "  pilot_approval_path:", " pilot_approval_path:")),
+                ("missing-key", lambda source, path: edit_progress(path, "  accepted_at: 2026-08-23T00:00:00Z\n", "")),
+                ("empty-key", lambda source, path: edit_progress(path, "  accepted_at: 2026-08-23T00:00:00Z", "  accepted_at:")),
+                ("unknown-key", lambda source, path: edit_progress(path, "  accepted_at:", "  unknown: value\n  accepted_at:")),
+                ("alias-path", lambda source, path: edit_progress(path, "pilot-approval.md", "v1/pilot-approval.md")),
+                ("renamed-path", lambda source, path: edit_progress(path, "pilot-approval.md", "pilot-approval-renamed.md")),
+                ("outside-path", lambda source, path: edit_progress(path, ".release-loop/v1/pilot-approval.md", "../pilot-approval.md")),
+                ("duplicate-path", lambda source, path: edit_progress(path, ".release-loop/v1/full-approval.md", ".release-loop/v1/pilot-approval.md")),
+                ("unexpected-child", lambda source, path: (source / ".release-loop/v1/foreign.md").write_text("foreign\n", encoding="utf-8")),
+                ("missing-file", lambda source, path: (source / ".release-loop/v1/full-approval.md").unlink()),
+                ("invalid-digest", lambda source, path: edit_progress(path, "  pilot_receipt_sha256: ", "  pilot_receipt_sha256: xyz # ")),
+                ("ledger-receipt-mismatch", lambda source, path: edit_progress(path, "  pilot_receipt_sha256: ", "  pilot_receipt_sha256: " + "0" * 64 + " # ")),
+                ("embedded-receipt-mismatch", lambda source, path: edit_progress(path, "  full_receipt_sha256: ", "  full_receipt_sha256: " + "0" * 64 + " # ")),
+                ("computed-receipt-mismatch", lambda source, path: (source / ".release-loop/v1/pilot-receipt.md").write_text("changed\n- receipt_sha256: " + "0" * 64 + "\n", encoding="utf-8")),
+                ("generation-ledger-mismatch", lambda source, path: edit_progress(path, "  generation_sha256: ", "  generation_sha256: " + "0" * 64 + " # ")),
+                ("generation-file-mismatch", lambda source, path: (source / ".release-loop/v1/generation-manifest.sha256").write_text("changed\n", encoding="utf-8")),
+                ("root-symlink", lambda source, path: ((source / ".release-loop/v1").rename(source / ".release-loop/v1-real"), (source / ".release-loop/v1").symlink_to(source / ".release-loop/v1-real", target_is_directory=True))),
+                ("file-symlink", lambda source, path: ((source / ".release-loop/v1/pilot-approval.md").unlink(), (source / ".release-loop/v1/pilot-approval.md").symlink_to(source / "README.md"))),
+            )
+            for slug, mutate in mutations:
+                rejected_v1(slug, mutate)
         elif name == "legacy_handoff_cli_contract":
             missing_source = new_repo(tmp, "cli-missing-source")
             missing_base = new_repo(tmp, "cli-missing-base")
