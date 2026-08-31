@@ -565,32 +565,27 @@ def legacy_manifest_digest(entries: list[dict[str, object]]) -> str:
     return hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def yaml_scalar_key(raw: str) -> str | None:
-    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
-        return raw[1:-1].replace("''", "'")
-    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
-        try:
-            value = json.loads(raw)
-        except json.JSONDecodeError:
-            return None
-        return value if isinstance(value, str) else None
-    return raw
+def validate_v1_top_level_syntax(frontmatter_text: str) -> None:
+    protected = r"(?:pre_merge_verification|v1)"
+    if re.search(rf"^{protected}:\s*$", frontmatter_text, re.MULTILINE) is None:
+        return
+    for line in frontmatter_text.splitlines():
+        if not line or line[0].isspace() or line.startswith("#"):
+            continue
+        if re.fullmatch(r"[A-Za-z0-9_]+:.*", line) is None:
+            reject("legacy V1 ownership", "noncanonical top-level key")
 
 
 def structured_progress_blocks(text: str) -> dict[str, dict[str, str] | None]:
     frontmatter_text = text.split("---", 2)[1]
+    validate_v1_top_level_syntax(frontmatter_text)
     selected = {"pre_merge_verification": None, "v1": None}
     active = None
     for line in frontmatter_text.splitlines():
         raw_key, separator, _ = line.partition(":")
         normalized_key = raw_key.strip()
-        candidate = yaml_scalar_key(normalized_key)
-        if separator and candidate in selected and raw_key != candidate:
-            reject("legacy V1 ownership", f"malformed block {candidate}")
-        if line.startswith("? "):
-            candidate = yaml_scalar_key(line[2:].strip())
-            if candidate in selected:
-                reject("legacy V1 ownership", f"malformed block {candidate}")
+        if separator and normalized_key in selected and raw_key != normalized_key:
+            reject("legacy V1 ownership", f"malformed block {normalized_key}")
         top = re.fullmatch(r"([A-Za-z0-9_]+):(.*)", line)
         if top:
             active = None
