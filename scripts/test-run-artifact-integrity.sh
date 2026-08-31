@@ -150,6 +150,7 @@ CASES = (
     "scoped_feature_mismatch",
     "interrupted_archive",
     "interrupted_legacy_archive",
+    "legacy_archive_v1_evidence",
     "ignored_orphan",
     "occupied_scope_blocked",
     "tracked_scope_target",
@@ -1064,6 +1065,8 @@ def archive_scope(
         failure="archive-after-first" if fail_after_first else None,
     )
     assert set(payload) == {"archive_path", "moved", "progress_path", "state"}, payload
+    if destination is not None:
+        assert payload["archive_path"] == destination, payload
     expected_state = "archived" if mode == "completed" else "archived-incomplete"
     assert payload["state"] == expected_state, payload
     return list(payload["moved"])
@@ -6538,6 +6541,135 @@ def run_case(name: str) -> None:
             assert f"archive-destination: {destination}" in legacy.read_text(encoding="utf-8")
             assert archive_scope(repo, str(legacy.relative_to(repo)), None)[-1] == "progress.md"
             assert (repo / destination / "progress.md").is_file()
+        elif name == "legacy_archive_v1_evidence":
+            source = new_repo(tmp, "legacy-v1-archive-source")
+            legacy = write_legacy_v1(source)
+            populate_legacy_active_state(legacy.parent)
+            (legacy.parent / "v1/history").mkdir()
+            (legacy.parent / "v1/history/prior.md").write_text("prior\n", encoding="utf-8")
+            expected_v1 = filesystem_manifest(legacy.parent / "v1")
+            destination = ".release-loop/archive/2026-08-23-legacy-v1"
+            order = archive_scope(source, str(legacy.relative_to(source)), destination)
+            assert order[-1] == "progress.md"
+            assert order.index("v1") < order.index("progress.md")
+            assert filesystem_manifest(source / destination / "v1") == expected_v1
+            assert not (source / ".release-loop/v1").exists()
+
+            interrupted = new_repo(tmp, "legacy-v1-archive-interrupted")
+            interrupted_progress = write_legacy_v1(interrupted)
+            populate_legacy_active_state(interrupted_progress.parent)
+            interrupted_destination = ".release-loop/archive/2026-08-23-legacy-v1-interrupted"
+            try:
+                archive_scope(
+                    interrupted,
+                    str(interrupted_progress.relative_to(interrupted)),
+                    interrupted_destination,
+                    fail_after_first=True,
+                )
+            except Blocked as exc:
+                assert "injected archive interruption" in str(exc)
+            else:
+                raise AssertionError("legacy V1 archive interruption did not fire")
+            assert interrupted_progress.is_file()
+            assert (interrupted / interrupted_destination / ".tmp").is_dir()
+            assert (interrupted / ".release-loop/v1").is_dir()
+            resumed_order = archive_scope(
+                interrupted,
+                str(interrupted_progress.relative_to(interrupted)),
+                None,
+            )
+            assert resumed_order[-1] == "progress.md"
+            assert (interrupted / interrupted_destination / "v1").is_dir()
+
+            def rejected_archive(slug, mutate, diagnostic):
+                candidate = new_repo(tmp, f"legacy-v1-archive-reject-{slug}")
+                candidate_progress = write_legacy_v1(candidate)
+                candidate_destination = f".release-loop/archive/2026-08-23-reject-{slug}"
+                mutate(candidate, candidate_progress, candidate_destination)
+                persist_archive_evidence(candidate_progress, candidate_destination, "completed")
+                progress_before = candidate_progress.read_bytes()
+                assert_blocked_preserves(
+                    lambda: archive_scope(
+                        candidate,
+                        str(candidate_progress.relative_to(candidate)),
+                        candidate_destination,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    diagnostic,
+                )
+                assert candidate_progress.read_bytes() == progress_before
+
+            rejected_archive(
+                "symlink",
+                lambda candidate, progress_path, destination_path: (
+                    (candidate / ".release-loop/v1").rename(candidate / ".release-loop/v1-real"),
+                    (candidate / ".release-loop/v1").symlink_to(
+                        candidate / ".release-loop/v1-real", target_is_directory=True
+                    ),
+                ),
+                "legacy V1 ownership",
+            )
+            rejected_archive(
+                "changed-source",
+                lambda candidate, progress_path, destination_path: (
+                    candidate / ".release-loop/v1/generation-manifest.sha256"
+                ).write_text("changed\n", encoding="utf-8"),
+                "legacy V1 ownership",
+            )
+            rejected_archive(
+                "foreign-destination",
+                lambda candidate, progress_path, destination_path: (
+                    (candidate / destination_path / "v1").mkdir(parents=True),
+                    (candidate / destination_path / "v1/foreign.md").write_text(
+                        "foreign\n", encoding="utf-8"
+                    ),
+                ),
+                "archive destination conflict",
+            )
+            rejected_archive(
+                "journal-mismatch",
+                lambda candidate, progress_path, destination_path: (
+                    candidate / ".release-loop/.phase-artifact-ownership.json"
+                ).write_text(
+                    json.dumps(
+                        {
+                            "schema": "phase-artifact-ownership/v1",
+                            "owned": {"missing.md": hashlib.sha256(b"missing\n").hexdigest()},
+                            "pending": None,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                ),
+                "artifact ownership",
+            )
+
+            handoff_source = new_repo(tmp, "legacy-v1-archive-handoff-source")
+            handoff_base = new_repo(tmp, "legacy-v1-archive-handoff-base")
+            (handoff_base / ".release-loop/runs").mkdir(parents=True)
+            handoff_progress = write_legacy_v1(handoff_source)
+            populate_legacy_active_state(handoff_progress.parent)
+            handoff_scope(
+                handoff_source,
+                handoff_base,
+                str(handoff_progress.relative_to(handoff_source)),
+                legacy_destination=".release-loop",
+            )
+            base_progress = handoff_base / ".release-loop/progress.md"
+            handoff_destination = ".release-loop/archive/2026-08-23-handoff-v1"
+            archive_scope(
+                handoff_base,
+                str(base_progress.relative_to(handoff_base)),
+                handoff_destination,
+            )
+            assert not (handoff_base / ".release-loop/v1").exists()
+            assert (handoff_base / handoff_destination / "v1").is_dir()
+            assert (handoff_base / ".release-loop/.handoff").is_dir()
+            assert (handoff_base / ".release-loop/runs").is_dir()
         elif name in {"ignored_orphan", "occupied_scope_blocked"}:
             orphan = repo / ".release-loop/runs/alpha/orphan.txt"
             orphan.parent.mkdir(parents=True)

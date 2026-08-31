@@ -77,7 +77,7 @@
       "path": "skills/release-loop/references/transition-hooks.md",
       "heading": "## Release-loop pre-merge verification V1: Produce the approved generation",
       "text": "After Review returns `clean`, the first-hand release-loop orchestrator runs the approved plan's V1 section before invoking `shipping`.",
-      "sha256": "d01a1b431783c0d996701d1e5ad9cfccdcb518c2160dcf13fadab70766964131"
+      "sha256": "edff2a9eaeccbc104a0303c2ea818e6c976b142a55a40ef333bd450d7438a195"
     },
     {
       "id": "pre-archive-verification-v2",

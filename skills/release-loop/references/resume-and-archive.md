@@ -22,8 +22,9 @@ A **Loop archive** moves a loop's local working state to its terminal home. Run 
 5. Run `python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" archive --repo . --progress-path <repo-relative-progress-path> --destination <repo-relative-archive-path>` only after step 4 persists the canonical evidence. The CLI validates one exact marker and its matching phase state before a move. It never writes ledger evidence or changes phase. It returns `state: archived` for completed evidence and `state: archived-incomplete` for incomplete evidence. On a pre-commit rerun, omit `--destination`; the command reads the persisted path. If the progress commit point already moved, repeat the exact canonical `--destination` so the CLI can validate the terminal archive and finish scoped cleanup.
 6. A valid done record with one completed destination marks an interrupted completed archive. A nonterminal record with one incomplete destination marks an interrupted user-directed incomplete archive. For either mode, reuse the exact recorded archive destination. Do not calculate another suffix. Duplicate, mixed-mode, phase-mismatched, or argument-mismatched evidence blocks before movement.
 7. For a scoped run, move only the remaining children of its exact `artifact_root`. Move scoped `progress.md` last as the archive commit point.
-8. For a legacy run, move only `briefs`, `reports`, `reviews`, `evidence`, and its corrupt backups. Move the selected root `progress.md` last.
-9. Verify the terminal record against the retained destination. A rerun reads the destination from the source ledger. It moves only remaining children. It never reverses a terminal archive.
+8. For a legacy run, validate the accepted V1 ownership block and its exact `.release-loop/v1` tree. Move V1 with `briefs`, `reports`, `reviews`, `evidence`, publisher state, and corrupt backups. Never move `archive`, `.handoff`, or `runs` as active state.
+9. Move the selected root `progress.md` last. This move is the archive commit point.
+10. Verify the terminal record and V1 tree against the exact returned `archive_path`. A rerun uses the persisted destination. It accepts V1 in either source or destination, but never both. It moves only remaining children.
 
 ### Recovering an archived-incomplete scoped run
 
@@ -79,4 +80,4 @@ blocks the resume.
 
 The archive transition is local-only and can run headlessly after it proves that no outward target exists. Pre-move cancellation preserves the source and recorded destination. Mid-move cancellation leaves the selected progress record in the source scope. This rule applies to scoped and legacy archives. The next invocation reads that record and finishes the same destination. Ambiguous bytes require manual recovery without source deletion.
 
-After Retro's exit condition holds, run the Archive procedure before reporting done. Retain the exact returned `archive_path`. Verify that the selected live progress path is absent. Verify the terminal record, Retro evidence, and destination marker. The completion report names that path.
+After Retro's exit condition holds, run the Archive procedure before reporting done. Retain the exact returned `archive_path`. Verify that the selected live progress path and live V1 tree are absent. Verify the terminal record, V1 tree, Retro evidence, and destination marker. The completion report names that path.

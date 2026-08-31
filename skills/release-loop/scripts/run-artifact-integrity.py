@@ -617,11 +617,11 @@ def validate_v1_receipt(path: Path, expected_digest: str, label: str) -> None:
         reject("legacy V1 ownership", f"{label} receipt digest mismatch")
 
 
-def validate_legacy_v1_ownership(repo: Path, text: str) -> None:
+def validate_legacy_v1_ownership(repo: Path, text: str, root: Path | None = None) -> None:
     blocks = structured_progress_blocks(text)
     pre_merge = blocks["pre_merge_verification"]
     ownership = blocks["v1"]
-    root = repo / ".release-loop/v1"
+    root = root or repo / ".release-loop/v1"
     root_present = root.exists() or root.is_symlink()
     if pre_merge is None and ownership is None and not root_present:
         return
@@ -662,10 +662,9 @@ def validate_legacy_v1_ownership(repo: Path, text: str) -> None:
         tree_manifest(history)
     paths = {}
     for key, relative in V1_OWNERSHIP_PATHS.items():
-        candidate = repo / relative
+        candidate = root / PurePosixPath(relative).name
         if candidate.is_symlink() or not candidate.is_file():
             reject("legacy V1 ownership", f"missing regular file {relative}")
-        candidate = guard(repo, relative, ".release-loop/v1")
         paths[key] = candidate
     validate_v1_receipt(paths["pilot_receipt_path"], ownership["pilot_receipt_sha256"], "pilot")
     validate_v1_receipt(paths["full_receipt_path"], ownership["full_receipt_sha256"], "full")
@@ -4661,6 +4660,8 @@ def recover_terminal_archive(
         destination,
         allow_recovery_terminal=True,
     )
+    if source_rel == ".release-loop":
+        validate_legacy_v1_ownership(repo, text, destination_path / "v1")
     _, _, publication = validate_archive_publication(repo, source_rel, selected)
     if publication["pending"] is not None:
         reject("archive destination conflict", "terminal archive has pending publication")
@@ -4705,6 +4706,16 @@ def archive(
     if source_rel == ".release-loop":
         guard(repo, progress_path, ".release-loop")
         source = repo / ".release-loop"
+        source_v1 = source / "v1"
+        destination_v1 = destination_path / "v1"
+        present_v1 = [
+            root
+            for root in (source_v1, destination_v1)
+            if root.exists() or root.is_symlink()
+        ]
+        if len(present_v1) > 1:
+            reject("archive destination conflict", "V1 exists in source and destination")
+        validate_legacy_v1_ownership(repo, text, present_v1[0] if present_v1 else source_v1)
         children = []
         controls = (source / ".tmp", journal) if journal.parent == source else (source / ".tmp",)
         for child in controls:
@@ -4716,6 +4727,10 @@ def archive(
             if child.exists() or child.is_symlink():
                 guard(repo, child.relative_to(repo).as_posix(), ".release-loop")
                 children.append(child)
+        v1 = source / "v1"
+        if v1.exists() or v1.is_symlink():
+            guard(repo, v1.relative_to(repo).as_posix(), ".release-loop")
+            children.append(v1)
         for child in sorted(source.glob("progress.md.corrupt-*")):
             guard(repo, child.relative_to(repo).as_posix(), ".release-loop")
             children.append(child)
