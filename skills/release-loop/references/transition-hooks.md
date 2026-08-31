@@ -13,7 +13,7 @@ A post-approval deviation never overrides a transition by discovery alone. When 
 
 On every Ship entry or resume, inspect the base checkout's handoff state before trusting a progress record. Run `python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" handoff --repo <source-worktree> --base-repo <base-checkout> --progress-path <repo-relative-progress-path>`. Resolve both checkout paths physically. If they are identical, block before marker creation. `.release-loop/.handoff` is the fixed handoff root. Never derive the allowed root from the marker or destination. Reject absolute paths, parent escapes, symlinks, and physical parents outside each fixed root family.
 
-A legacy record (`artifact_root: .release-loop`) adds `--legacy-destination .release-loop` to that same invocation: `python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" handoff --repo <source-worktree> --base-repo <base-checkout> --progress-path <repo-relative-progress-path> --legacy-destination .release-loop`. A scoped record never passes `--legacy-destination`; the CLI rejects either flag on the wrong record shape. Under `.release-loop`, `archive/`, `.handoff/`, and `runs/` are persistent siblings; they are never active transfer bytes. At the base destination, legacy handoff skips them during the collision scan. At the source, legacy handoff rejects them -- a source worktree must contain only active state under `.release-loop`.
+A legacy record (`artifact_root: .release-loop`) adds `--legacy-destination .release-loop` to that same invocation: `python3 "$release_loop_skill_root/scripts/run-artifact-integrity.py" handoff --repo <source-worktree> --base-repo <base-checkout> --progress-path <repo-relative-progress-path> --legacy-destination .release-loop`. A scoped record never passes `--legacy-destination`; the CLI rejects either flag on the wrong record shape. Under `.release-loop`, `archive/`, `.handoff/`, and `runs/` are persistent siblings. The `recovery-authority/` and `recovery-backups/` are persistent siblings too. They are never active transfer bytes. At the base destination, legacy handoff skips every persistent sibling during the collision scan. At the source, legacy handoff rejects every persistent sibling; a source worktree must contain only active state under `.release-loop`.
 
 Each handoff operation records the exact repo-relative source progress path, `artifact_root`, feature, source worktree, base owner, and destination. Create the marker before transfer. Copy the exact active scope to that base destination. A matching incomplete marker resumes the same transfer. A missing or mismatched marker blocks Ship and preserves both scopes.
 
@@ -30,3 +30,41 @@ After Review returns `clean`, the first-hand release-loop orchestrator runs the 
 ## Release-loop pre-archive verification V2: Verify the archived generation
 
 After Retro commits and archive evidence is staged, keep the live progress record nonterminal. Run the approved plan's V2 section against the exact persisted archive destination, tracked baseline, and matching handoff. Persist V2 acceptance and mark only that handoff consumed before setting `phase: done`. Move `progress.md` last. A missing marker, digest mismatch, incomplete generation, failed validation, or foreign destination leaves the loop live and resumable.
+
+## Pre-archive contract registry
+
+Parse declarations only from Markdown headings with this exact shape:
+
+```text
+## Release-loop pre-archive verification V<N>: <version-specific title>
+```
+
+`N` is a positive canonical decimal string without leading zeroes. Do not
+convert it to a machine integer. The registry maps each supported version to one exact heading title and one body validator.
+The initial registry contains only version `2`. Its title is
+`Verify the archived generation`. Its validator is the existing V2 validator.
+A later version requires an approved registry entry, validator, and fixtures.
+
+Treat a close heading match as a declaration candidate. Body text is never a
+candidate. Classify duplicate or malformed candidates before version dispatch.
+Apply this closed order: `duplicate`, `absent-legacy-shape`, `malformed`,
+`unsupported-version`, `unverifiable`, then `supported`. Only an eligible `absent-legacy-shape` packet may enter recovery.
+The provenance audit must also prove that the sealed plan predates the V2
+contract. A lexical absence result alone grants no authority.
+
+## Legacy archived-incomplete recovery transition
+
+Recovery consumes one exact scoped terminal archive only after the release-loop
+orchestrator receives first-hand current-session USER approval. The orchestrator
+writes the answer receipt to the pinned gate ledger, then invokes
+`request-legacy-archive --publish-approval` without answer or replacement-path
+arguments. The immutable gate snapshot pins the request digest, session, gate
+ID, timestamps, nonce, source ledger path, and pre-clear ledger digest.
+`approval.json` pins the snapshot path and SHA-256. Only an accepted audit may
+start restore.
+
+Ordinary V2, V3, malformed, duplicate, stale, missing, or override evidence never activates recovery.
+G1 and G2 remain nonterminal and cannot enter the archive move. Only G3 may use
+the recovery terminal exception. Every other run follows its registered
+ordinary pre-archive contract. A missing, changed, ambiguous, or occupied root
+blocks and preserves the archive and recovery roots.

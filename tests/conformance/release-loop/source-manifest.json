@@ -7,7 +7,7 @@
       "path": "skills/release-loop/SKILL.md",
       "heading": "# Release Loop",
       "text": "| 1 | Design | `designing` | **USER** — always human, never auto-skip |",
-      "sha256": "f11ce26aacf8dcb2ce56d5d22306c548a6d027fcc3d32838a519e79e0b27b5ca"
+      "sha256": "6f638235acd2dd113c1ba7d7b48527ca0c974f0750efefa28196318aadcb89df"
     },
     {
       "id": "resume-after-merge",
@@ -35,14 +35,21 @@
       "path": "skills/release-loop/SKILL.md",
       "heading": "## Gate handling",
       "text": "- Before answering a pending USER gate, require exactly one valid `pending_gate` from `references/progress-schema.md`.",
-      "sha256": "4de3c742a1c350e8d1ccd1caa656d4e18cb6ddbd94e6e659bac71d1cf097c048"
+      "sha256": "5f7ef50ec759e06e081f7cd2986475bbaf6b9ca2a0daee492874017ea7d25442"
     },
     {
       "id": "pending-gate-schema",
       "path": "skills/release-loop/references/progress-schema.md",
       "heading": "## Rules",
       "text": "- Resume sends one answer only when the gate ID, phase, answer class, issue timestamp, absent approval, and absent receipt match.",
-      "sha256": "7a62f713554f3d11bff9ade85b1649ac161a3dceab7c964a2395f67dd05830eb"
+      "sha256": "e7b6dfa323361d2e39db3593e302236e4ce373a342937e347db2774eb416fdb4"
+    },
+    {
+      "id": "recovery-root-family-distinction",
+      "path": "skills/release-loop/references/progress-schema.md",
+      "heading": "## Rules",
+      "text": "`recovery-authority/` and `recovery-backups/` are fixed internal persistent recovery families",
+      "sha256": "e7b6dfa323361d2e39db3593e302236e4ce373a342937e347db2774eb416fdb4"
     },
     {
       "id": "design-pending-gate",
@@ -59,6 +66,13 @@
       "sha256": "189186385075041cb9c38d76922867ea2443fc7f43f412ff4c6bce326df07405"
     },
     {
+      "id": "legacy-handoff-persistent-siblings",
+      "path": "skills/release-loop/references/transition-hooks.md",
+      "heading": "## Approved-plan transition hooks",
+      "text": "The `recovery-authority/` and `recovery-backups/` are persistent siblings too.",
+      "sha256": "9e1e43127adf5d71735e96d612b37cce98734605d3a7be55fd2849b89293f2e2"
+    },
+    {
       "id": "pre-merge-verification-v1",
       "path": "skills/release-loop/references/transition-hooks.md",
       "heading": "## Release-loop pre-merge verification V1: Produce the approved generation",
@@ -70,14 +84,14 @@
       "path": "skills/release-loop/references/transition-hooks.md",
       "heading": "## Release-loop pre-archive verification V2: Verify the archived generation",
       "text": "After Retro commits and archive evidence is staged, keep the live progress record nonterminal.",
-      "sha256": "4023aeb3167240b02b09836e2ae212cf7f209845420c44aa5d43b9ba921bf36b"
+      "sha256": "3d1dcc78cc4bea11299e1b299c1ac649ec603e4c3858e7a2265b249abb52e702"
     },
     {
       "id": "archive-v2-ordering",
       "path": "skills/release-loop/references/resume-and-archive.md",
       "heading": "### Archive procedure",
       "text": "7. For a scoped run, move only the remaining children of its exact `artifact_root`. Move scoped `progress.md` last as the archive commit point.",
-      "sha256": "5b10c4045b988ba7b77ab2123f19be3d5dbb58e5b74c214c15a73772e1550d4f"
+      "sha256": "d16fa80f540ccb1e75c06662e3657d1a1a39302fc05bfa06627d499d3989e77b"
     }
   ]
 }

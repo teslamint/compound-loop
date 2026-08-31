@@ -94,6 +94,47 @@ When the resume argument is given or the Retro exit condition holds, read refere
 - Workers/phase skills never ask the user directly in `--auto` mode; they return structured results and this orchestrator decides (see `references/dispatch-degradation.md`, worker protocol).
 - On any gate failure or cap exhaustion escalated by a phase skill: pause the loop, record the blocked state + reason in progress.md, and surface it to the user. Never loop past an escalation.
 
+### Legacy archived-incomplete recovery
+
+Recovery is a local exception for one exact scoped terminal archive. The
+orchestrator owns the first-hand current-session USER answer and writes it to
+the request-pinned gate ledger. Invoke the CLI in this order:
+
+```text
+request-legacy-archive --repo . --recovery-id <id> --progress-path <archive-progress> --gate-progress-path <gate-progress> --session <session>
+request-legacy-archive --repo . --recovery-id <id> --publish-approval
+backup-legacy-archive --repo . --recovery-id <id>
+audit-legacy-archive --repo . --recovery-id <id>
+restore-legacy-archive --repo . --recovery-id <id>
+```
+
+The CLI derives the restore target from the archived packet and rejects caller
+supplied approval data or replacement paths. Python validates custody and
+integrity; it does not authenticate the human. Keep every recovery root after
+success or interruption.
+
+Read recovery scalar authority and structured blocks only from frontmatter.
+Ignore body examples. Audit requires one approved status and one stored
+`body_seal` in the historical plan. The stored seal must match the plan body
+and request pin.
+Only an exact delimiter line closes frontmatter. A scalar containing `---`
+cannot hide later authority or alter the sealed body boundary.
+Audit also pins one audit timestamp. It rejects a future, nonmonotonic, or
+atomically inconsistent Ship and Retro timeline before restore authority.
+
+Issue `recovery_gate` in the request-pinned ledger. Reserve one
+`recovery_gate_receipt` only after a first-hand current-session USER answer.
+The receipt binds the request digest, session, gate ID, issue timestamp, answer
+timestamp, and nonce. Invoke `--publish-approval` without receipt fields.
+Clear the recovery gate only after `gate-receipt.json` and `approval.json` exist.
+A cancelled answer records cancellation and invokes no backup or audit command.
+
+Resume a started recovery with the same recovery ID. The CLI reuses the stored
+destination through G0, R, G1, G2, G3, and the final move. Only G3 enters the
+recovery archive exception. An ordinary lifecycle still requires its declared supported pre-archive contract.
+Ordinary V2, V3, malformed, duplicate, stale, missing, or caller-overridden
+evidence cannot enter recovery.
+
 ## State updates
 
 Update the selected exact progress path after every phase transition, unit completion, CI attempt, and review round. Write at the moment of the event. Schema: `references/progress-schema.md`.

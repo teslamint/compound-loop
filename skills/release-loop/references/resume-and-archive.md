@@ -25,6 +25,58 @@ A **Loop archive** moves a loop's local working state to its terminal home. Run 
 8. For a legacy run, move only `briefs`, `reports`, `reviews`, `evidence`, and its corrupt backups. Move the selected root `progress.md` last.
 9. Verify the terminal record against the retained destination. A rerun reads the destination from the source ledger. It moves only remaining children. It never reverses a terminal archive.
 
+### Recovering an archived-incomplete scoped run
+
+Use recovery only for one exact scoped `archived-incomplete` packet. The
+orchestrator supplies the current-session USER gate answer; the CLI never
+accepts an answer, receipt, digest, or replacement target from its caller.
+
+1. Request the packet and pin the live gate ledger:
+   `request-legacy-archive --repo . --recovery-id <id> --progress-path <archive-progress> --gate-progress-path <gate-progress> --session <session>`.
+2. Publish the gate-owned approval with only `--repo` and `--recovery-id`.
+3. Copy the terminal archive to the reserved backup root, then run the audit.
+4. Restore only the derived scoped target. Never restore a legacy root or
+   reverse a completed archive. An interrupted copy, executor claim, or
+   occupied target is ambiguous and requires operator resolution before a new
+   recovery ID.
+
+Resume the same recovery ID and the same reserved destination. Never allocate
+a new identity or collision suffix for a started attempt. Resume in this order: G0 result, receipt R, G1, G2, G3, then the completed archive move.
+
+- A G0 result without R republishes only R after it validates G0.
+- R without G1 reuses R and reserves the recorded destination.
+- G1 without G2 reruns only legacy-equivalent pre-archive validation.
+- G2 without G3 reruns only the atomic done transition.
+- G3 before or during movement resumes the same completed archive operation.
+
+Each G1, G2, and G3 write fetches a fresh UTC timestamp. It updates the
+top-level `updated` field in the same replacement. The generation evidence
+records the predecessor's `updated` value. A retry adopts an exact durable
+progress temporary and its timestamp only when G1 does not precede G0 or the
+request.
+
+Only G3 may enter the recovery archive move. G1 and G2 remain nonterminal.
+Any changed digest, duplicate record, stale receipt, or changed destination
+blocks. Keep the source archive, backup, and authority roots for inspection.
+
+Read recovery gates, receipts, final-action evidence, and scalar authority only
+from frontmatter. Body examples never supply authority. The audit also requires
+one top-level approved plan status and one top-level stored body seal at the
+approval commit. That seal must match both the plan body and the request pin.
+Only an exact delimiter line closes frontmatter. A scalar containing `---`
+cannot hide later authority or change the sealed plan body boundary.
+Before acceptance, audit pins one audit timestamp. It validates the atomic Ship
+and Retro timestamps, their nondecreasing order, and the request-time upper
+bound. A future or inconsistent terminal timestamp blocks before restore.
+
+Recovery payloads reserve all transaction basenames. This includes the
+reservation files, progress temporary, and archive-control temporaries. It also
+includes `.legacy-archive-recovery-owner-*.json` and
+`.legacy-archive-recovery-pending-*.tmp` at any depth. A collision blocks the
+request before authority creation. A completed-archive resume also requires
+the exact journal derived from the pinned source. Deleting a valid owned row
+blocks the resume.
+
 The archive transition is local-only and can run headlessly after it proves that no outward target exists. Pre-move cancellation preserves the source and recorded destination. Mid-move cancellation leaves the selected progress record in the source scope. This rule applies to scoped and legacy archives. The next invocation reads that record and finishes the same destination. Ambiguous bytes require manual recovery without source deletion.
 
 After Retro's exit condition holds, run the Archive procedure before reporting done. Retain the exact returned `archive_path`. Verify that the selected live progress path is absent. Verify the terminal record, Retro evidence, and destination marker. The completion report names that path.
