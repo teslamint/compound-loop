@@ -565,6 +565,18 @@ def legacy_manifest_digest(entries: list[dict[str, object]]) -> str:
     return hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def yaml_scalar_key(raw: str) -> str | None:
+    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
+        return raw[1:-1].replace("''", "'")
+    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return value if isinstance(value, str) else None
+    return raw
+
+
 def structured_progress_blocks(text: str) -> dict[str, dict[str, str] | None]:
     frontmatter_text = text.split("---", 2)[1]
     selected = {"pre_merge_verification": None, "v1": None}
@@ -572,8 +584,13 @@ def structured_progress_blocks(text: str) -> dict[str, dict[str, str] | None]:
     for line in frontmatter_text.splitlines():
         raw_key, separator, _ = line.partition(":")
         normalized_key = raw_key.strip()
-        if separator and normalized_key in selected and raw_key != normalized_key:
-            reject("legacy V1 ownership", f"malformed block {normalized_key}")
+        candidate = yaml_scalar_key(normalized_key)
+        if separator and candidate in selected and raw_key != candidate:
+            reject("legacy V1 ownership", f"malformed block {candidate}")
+        if line.startswith("? "):
+            candidate = yaml_scalar_key(line[2:].strip())
+            if candidate in selected:
+                reject("legacy V1 ownership", f"malformed block {candidate}")
         top = re.fullmatch(r"([A-Za-z0-9_]+):(.*)", line)
         if top:
             active = None
