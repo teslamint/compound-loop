@@ -4,6 +4,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/git-identity-invariant.sh"
+IDENTITY_BEFORE="$(git_identity_baseline "$ROOT")"
 FAIL=0
 
 fail() { echo "FAIL: $1"; FAIL=1; }
@@ -1265,6 +1267,15 @@ fi
 # 16. Release-loop conformance corpus and semantic mutations (no model calls)
 if ! bash "$ROOT/scripts/test-release-loop-conformance.sh" static; then
   fail "release-loop static conformance failed"
+fi
+if ! bash "$ROOT/scripts/test-git-identity-isolation.sh"; then
+  FAIL=1
+fi
+if ! bash "$ROOT/scripts/test-commit-identity-policy.sh"; then
+  FAIL=1
+fi
+if ! git_identity_unchanged "$ROOT" "$IDENTITY_BEFORE"; then
+  FAIL=1
 fi
 
 echo
