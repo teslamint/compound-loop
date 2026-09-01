@@ -370,7 +370,8 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["ARCHIVE"], "reuse the exact recorded archive destination"),
         (selected["ARCHIVE"], "It accepts V1 in either source or destination, but never both."),
         (selected["ARCHIVE"], "Never move `archive`, `.handoff`, or `runs` as active state."),
-        (selected["ARCHIVE"], "Verify the terminal record and V1 tree against the exact returned `archive_path`."),
+        (selected["ARCHIVE"], "For a scoped record (`artifact_root: .release-loop/runs/<feature_slug>`), verify the terminal record, Retro evidence, destination marker, and exact `archive_path`; do not apply V1 tree checks."),
+        (selected["ARCHIVE"], "For a legacy record (`artifact_root: .release-loop`), also verify the live V1 tree is absent and the archived V1 tree is present at the exact returned path."),
         (selected["ARCHIVE"], "Move the selected root `progress.md` last. This move is the archive commit point."),
         (selected["ARCHIVE"], "Mid-move cancellation leaves the selected progress record in the source scope."),
         (selected["HOOKS"], "`.release-loop/.handoff` is the fixed handoff root"),
@@ -6739,7 +6740,8 @@ def run_case(name: str) -> None:
             lifecycle_mutations = (
                 ("ARCHIVE", "It accepts V1 in either source or destination, but never both.", "It accepts V1 only in the source."),
                 ("ARCHIVE", "Never move `archive`, `.handoff`, or `runs` as active state.", "Move `archive`, `.handoff`, and `runs` as active state."),
-                ("ARCHIVE", "Verify the terminal record and V1 tree against the exact returned `archive_path`.", "Recalculate the terminal archive path."),
+                ("ARCHIVE", "For a scoped record (`artifact_root: .release-loop/runs/<feature_slug>`), verify the terminal record, Retro evidence, destination marker, and exact `archive_path`; do not apply V1 tree checks.", "For a scoped record (`artifact_root: .release-loop/runs/<feature_slug>`), apply V1 tree checks."),
+                ("ARCHIVE", "For a legacy record (`artifact_root: .release-loop`), also verify the live V1 tree is absent and the archived V1 tree is present at the exact returned path.", "For a legacy record (`artifact_root: .release-loop`), skip V1 tree checks."),
                 ("ARCHIVE", "Move the selected root `progress.md` last. This move is the archive commit point.", "Move the selected root `progress.md` first. This move is the archive start point."),
                 ("HOOKS", "Accepted legacy V1 state is active state.", "Accepted legacy V1 state is persistent state."),
                 ("HOOKS", "Handoff and archive preserve the exact V1 bytes.", "Handoff and archive may rewrite V1 bytes."),
@@ -6909,6 +6911,17 @@ def run_case(name: str) -> None:
                 "source_worktree", "base_owner", "destination", "manifest_sha256", "status",
             }, payload
         elif name == "legacy_handoff_v1_ownership":
+            spec = importlib.util.spec_from_file_location("legacy_v1_frontmatter_guard", CLI)
+            assert spec is not None and spec.loader is not None
+            integrity = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(integrity)
+            try:
+                integrity.structured_progress_blocks("feature: legacy\n")
+            except integrity.Blocked as exc:
+                assert "progress frontmatter is missing" in str(exc), str(exc)
+            else:
+                raise AssertionError("missing frontmatter did not block safely")
+
             valid_source = repo
             valid_base = new_repo(tmp, "v1-valid-base")
             valid_progress = write_legacy_v1(valid_source)

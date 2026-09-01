@@ -795,7 +795,11 @@ def validate_v1_top_level_syntax(frontmatter_text: str) -> None:
 
 
 def structured_progress_blocks(text: str) -> dict[str, dict[str, str] | None]:
-    frontmatter_text = text.split("---", 2)[1]
+    frontmatter_text, _body = split_frontmatter(
+        text,
+        failure_kind="legacy V1 ownership",
+        detail="progress frontmatter is missing",
+    )
     validate_v1_top_level_syntax(frontmatter_text)
     selected = {"pre_merge_verification": None, "v1": None}
     active = None
