@@ -6,6 +6,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/git-identity-invariant.sh"
+IDENTITY_BEFORE="$(git_identity_baseline "$ROOT")"
 PASS_COUNT=0
 FAIL_COUNT=0
 
@@ -2764,6 +2766,9 @@ else
   fail "phase consumers derive one portable artifact root from the exact progress path"
 fi
 rm -rf "$fixture" "$consumer_repo"
+if ! git_identity_unchanged "$ROOT" "$IDENTITY_BEFORE"; then
+  fail "local user.name/user.email unchanged"
+fi
 
 echo "Summary: $PASS_COUNT passed, $FAIL_COUNT failed"
 if [ "$FAIL_COUNT" -ne 0 ]; then
