@@ -1,6 +1,6 @@
 {
   "name": "compound-loop",
-  "version": "0.11.0-dev.2",
+  "version": "0.11.0-dev.3",
   "description": "Cross-harness engineering lifecycle skills: design, plan, implement, review, ship, retrospect, and compound knowledge. Distilled from superpowers, compound-engineering, and release-loop.",
   "author": {
     "name": "Jaehoon You"
