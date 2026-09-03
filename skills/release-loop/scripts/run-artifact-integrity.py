@@ -708,7 +708,7 @@ def _yaml_key(value: str, anchors: dict[str, str]) -> tuple[str, bool, str | Non
     scalar = _yaml_scalar(value, start, anchors)
     if scalar is None:
         return None
-    resolved, end = scalar
+    resolved, _end = scalar
     anchor = next((token[1][1:] for token in prefixes if token[0] == "&"), None)
     if not resolved:
         return None
@@ -822,6 +822,8 @@ def structured_progress_blocks(text: str) -> dict[str, dict[str, str] | None]:
             continue
         if active is not None and line and not line[0].isspace() and ":" in line:
             active = None
+            continue
+        if not line.strip():
             continue
         if active is None:
             continue
@@ -1003,14 +1005,14 @@ def legacy_handoff(
         payload = legacy_read_marker(marker, expected_fields)
         if payload["manifest_sha256"] != digest:
             reject("legacy handoff source", "active manifest changed since marker creation")
-        if legacy_git_active_paths(base_repo):
-            reject("legacy handoff collision", "base active legacy state is present in the index")
         destination_children = legacy_scan_children(base_repo, destination, allow_persistent=True)
         observed_entries = archive_manifest_entries(destination, destination_children)
         if payload["status"] == "complete":
             if observed_entries != manifest_entries:
                 reject("legacy handoff collision", "destination active state no longer matches complete marker")
             return legacy_confirm(base_repo, destination, marker)
+        if legacy_git_active_paths(base_repo):
+            reject("legacy handoff collision", "base active legacy state is present in the index")
         if not legacy_is_subset(observed_entries, manifest_entries):
             reject("handoff target mismatch", ".release-loop")
     else:

@@ -6929,6 +6929,18 @@ def run_case(name: str) -> None:
             def edit_progress(path, old, new):
                 path.write_text(path.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
 
+            edit_progress(valid_progress, "v1:\n", "v1:\n\n")
+            assert handoff_scope(
+                valid_source,
+                valid_base,
+                str(valid_progress.relative_to(valid_source)),
+                legacy_destination=".release-loop",
+            )["cleanup_permitted"] is True
+
+            valid_source = new_repo(tmp, "v1-valid-source")
+            valid_base = new_repo(tmp, "v1-valid-base-without-blank-line")
+            valid_progress = write_legacy_v1(valid_source)
+
             edit_progress(
                 valid_progress,
                 "final_action:\n",
@@ -7271,6 +7283,8 @@ def run_case(name: str) -> None:
                 legacy_destination=".release-loop",
             )
             before = filesystem_manifest(base / ".release-loop")
+            git(base, "add", "-f", ".release-loop/progress.md", ".release-loop/v1")
+            git(base, "commit", "-qm", "fixture committed legacy handoff")
             second = handoff_scope(
                 source, base, str(legacy_path.relative_to(source)),
                 legacy_destination=".release-loop",
