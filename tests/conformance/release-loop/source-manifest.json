@@ -42,14 +42,14 @@
       "path": "skills/release-loop/references/progress-schema.md",
       "heading": "## Rules",
       "text": "- Resume sends one answer only when the gate ID, phase, answer class, issue timestamp, absent approval, and absent receipt match.",
-      "sha256": "e7b6dfa323361d2e39db3593e302236e4ce373a342937e347db2774eb416fdb4"
+      "sha256": "c21a6c64f1b07f32a9f5212446db2d55897701df2a41c4e47311a534bde5b6ef"
     },
     {
       "id": "recovery-root-family-distinction",
       "path": "skills/release-loop/references/progress-schema.md",
       "heading": "## Rules",
       "text": "`recovery-authority/` and `recovery-backups/` are fixed internal persistent recovery families",
-      "sha256": "e7b6dfa323361d2e39db3593e302236e4ce373a342937e347db2774eb416fdb4"
+      "sha256": "c21a6c64f1b07f32a9f5212446db2d55897701df2a41c4e47311a534bde5b6ef"
     },
     {
       "id": "design-pending-gate",
@@ -70,14 +70,14 @@
       "path": "skills/release-loop/references/transition-hooks.md",
       "heading": "## Approved-plan transition hooks",
       "text": "The `recovery-authority/` and `recovery-backups/` are persistent siblings too.",
-      "sha256": "9e1e43127adf5d71735e96d612b37cce98734605d3a7be55fd2849b89293f2e2"
+      "sha256": "1cc4539f3d5580aa14fee102d43c922fcb498af55f9ff8fdec951bc2442b1704"
     },
     {
       "id": "pre-merge-verification-v1",
       "path": "skills/release-loop/references/transition-hooks.md",
       "heading": "## Release-loop pre-merge verification V1: Produce the approved generation",
       "text": "After Review returns `clean`, the first-hand release-loop orchestrator runs the approved plan's V1 section before invoking `shipping`.",
-      "sha256": "d01a1b431783c0d996701d1e5ad9cfccdcb518c2160dcf13fadab70766964131"
+      "sha256": "edff2a9eaeccbc104a0303c2ea818e6c976b142a55a40ef333bd450d7438a195"
     },
     {
       "id": "pre-archive-verification-v2",
@@ -91,7 +91,7 @@
       "path": "skills/release-loop/references/resume-and-archive.md",
       "heading": "### Archive procedure",
       "text": "7. For a scoped run, move only the remaining children of its exact `artifact_root`. Move scoped `progress.md` last as the archive commit point.",
-      "sha256": "d16fa80f540ccb1e75c06662e3657d1a1a39302fc05bfa06627d499d3989e77b"
+      "sha256": "d777c357f70ff775d389e4b0c6bf58a1675b7d8c133265c144c53ee7ec029937"
     }
   ]
 }

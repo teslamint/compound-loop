@@ -33,6 +33,19 @@ pre_merge_verification:
   status: started | accepted
   generation_sha256: <sha256>
   updated: <timestamp>
+# Required ownership metadata when accepted legacy V1 files exist.
+v1:
+  status: accepted
+  pilot_approval_path: .release-loop/v1/pilot-approval.md
+  pilot_receipt_path: .release-loop/v1/pilot-receipt.md
+  pilot_receipt_sha256: <sha256>
+  full_approval_path: .release-loop/v1/full-approval.md
+  full_receipt_path: .release-loop/v1/full-receipt.md
+  full_receipt_sha256: <sha256>
+  generation_receipt_path: .release-loop/v1/generation-receipt.md
+  generation_manifest_path: .release-loop/v1/generation-manifest.sha256
+  generation_manifest_sha256: <same sha256 as pre_merge_verification>
+  accepted_at: <timestamp>
 archive_verification:
   id: V2
   status: started | accepted
@@ -168,9 +181,9 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 ## Rules
 
 - `artifact_root` equals the exact repo-relative directory that contains the selected progress record. New scoped records require this field. Legacy records require `artifact_root: .release-loop`. A legacy record without that field cannot resume.
-- The four ordinary lifecycle artifact-root families are scoped active state, legacy active state, terminal archives, and transition handoff.
+- The four ordinary lifecycle artifact-root families are the four closed physical-root families: scoped active state, legacy active state, terminal archives, and transition handoff.
 - `recovery-authority/` and `recovery-backups/` are fixed internal persistent recovery families under `.release-loop/`. Legacy handoff preserves them at the base and rejects them at the source. They are never active transfer roots.
-- Scoped active state permits only the selected `.release-loop/runs/<run_id>` root. Legacy active state permits the root progress file and its four known sibling directories.
+- Scoped active state permits only the selected `.release-loop/runs/<run_id>` root. Legacy active state includes the root progress file, known working directories, publisher state, corrupt backups, and accepted V1 evidence.
 - Terminal archive state permits only the collision-resolved `.release-loop/archive/<destination>` root. Handoff state permits only `.release-loop/.handoff`.
 - Reject every symlink in each existing source or destination component. Also reject absolute paths, parent escapes, and physical parents outside the applicable closed root.
 - Before the first scope write, inspect filesystem entries and `git ls-files -- <artifact_root>`. A nonempty scope requires one matching valid progress record. Any other ignored or tracked entry is an artifact-scope collision.
@@ -184,13 +197,13 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - Resume sends one answer only when the gate ID, phase, answer class, issue timestamp, absent approval, and absent receipt match. Missing, duplicate, stale, mismatched, unknown, already-approved, or previously reserved state blocks without sending an answer.
 - Legacy archive recovery is a separate local gate. The orchestrator records the first-hand current-session answer in its pinned gate ledger, and the artifact CLI snapshots that receipt before publishing approval. Python validates custody and digests; it does not authenticate a human.
 - The recovery gate stays pending until both `gate-receipt.json` and `approval.json` exist. Clear the gate and its live receipt atomically after both create-once records validate. A cancelled answer records cancellation and starts no backup.
-- V1 acceptance is required before `shipping` starts. V2 acceptance is required before `phase: done`. Each record uses the exact generation digest and transitions only from `started` to `accepted` with Log evidence.
 - An ordinary lifecycle still requires its declared supported pre-archive contract. Recovery cannot replace V2 or a later registered contract.
 - Recovery uses the fixed sequence G0, receipt R, G1, G2, and G3. G1 and G2 keep the phase nonterminal. Only recovery generation G3 may use the terminal archive exception.
 - A recovery receipt pins the request, approval snapshot, accepted audit, backup record, source archive, restored G0 digest, and pre-receipt generation. Each later generation pins its predecessor and the same recovery ID.
 - Each G1, G2, and G3 write fetches a fresh timestamp and atomically updates `updated`. Its evidence records `prior-updated` for predecessor reconstruction. G1 cannot precede G0 `updated` or `request.issued_at`. A retry reuses an exact durable progress temporary only when its timestamp satisfies that bound.
 - Legacy archive recovery audit requires `ship_approved.at <= final_action.updated == ship: merged <= retro: committed == updated <= request.issued_at <= audit.timestamp`. It rejects every missing, malformed, future, nonmonotonic, or unequal atomic-write timestamp before restore.
 - Missing, stale, malformed, duplicate, replayed, swapped, or caller-overridden recovery evidence blocks before the terminal exception.
+- V1 acceptance is required before `shipping` starts. `pre_merge_verification` is the sole acceptance authority. The `v1` block binds the six canonical files and their required digests. Its optional `history/` tree is also owned. Handoff and archive preserve these bytes. V2 acceptance is required before `phase: done`. Each verification record uses the exact generation digest and transitions only from `started` to `accepted` with Log evidence.
 - Timestamps are ISO-8601 with timezone, **fetched fresh via command (`date -u +%Y-%m-%dT%H:%M:%SZ`) at each write — never estimated or interpolated** (pilot-proven: estimated timestamps produced a non-monotonic log).
 - **Status flips are atomic with their evidence**: changing `phase`/`phase_status` and writing the explaining Log line (plus `blocked_reason` when the status is blocked) happen in the same edit — a bare `blocked` with `blocked_reason: null` is a schema violation, not a placeholder.
 - Corrupt/unparsable file on resume → rebuild frontmatter from git evidence (branch, committed artifacts, PR state via `gh pr view`), keep the old file as `progress.md.corrupt-<timestamp>`, and note the rebuild in the Log. A stored `feature:` that fails the `feature_slug` invariant is the same class of corruption.
@@ -237,7 +250,7 @@ The CLI path is `skills/release-loop/scripts/run-artifact-integrity.py`.
 - Incomplete archive evidence is `<timestamp> archived-incomplete: archive-destination: <path>`. Both phase fields are mandatory and must use the schema's closed vocabularies. Require `phase != done` and `phase_status != complete`. The transition never flips either field.
 - Exactly one archive-evidence mode may exist. Duplicate, mixed-mode, phase-mismatched, or destination-mismatched evidence blocks.
 - A completed record's terminal home is `.release-loop/archive/<YYYY-MM-DD>-<feature_slug>/`. The canonical archive Log line must name that containing directory. One qualifying record reports completion. Zero records trigger reconstruction. Multiple records block as ambiguous.
-- Move all remaining children from the selected artifact root before the selected progress record. Move `progress.md` last as the commit point. An interrupted archive reuses its logged destination and moves only remaining children.
+- Move all remaining children from the selected artifact root before the selected progress record. A legacy archive includes accepted V1 evidence but excludes persistent `archive`, `.handoff`, and `runs` siblings. Move `progress.md` last as the commit point. An interrupted archive reuses its logged destination and moves only remaining children.
 - Before an archive move, validate the phase-artifact journal and every owned final. A pending publication blocks until recovery or compensation.
 - Archive the ownership journal and applicable `.tmp` state with the selected run. Leave no live publisher authority outside the terminal archive.
 - **The `final_action` record is preparation evidence, never approval**: possession of the command is not authorization to run it. Approval evidence lives only in `ship_approved`. `enforces: P7`

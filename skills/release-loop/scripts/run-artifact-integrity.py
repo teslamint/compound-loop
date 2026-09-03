@@ -45,6 +45,7 @@ TEST_FAILURES = frozenset((
     "archive-after-manifest-final",
     "handoff-after-marker",
     "handoff-after-copy-one",
+    "handoff-after-copy-one-file",
     "publish-before-final",
     "recovery-backup-create",
     "recovery-before-copy-ancestor",
@@ -84,7 +85,7 @@ RECOVERY_GATE_ID = "legacy-archive-recovery-approval"
 RECOVERY_GATE_ANSWER_CLASS = "approve-exact-recovery-or-cancel"
 LEGACY_DESTINATION = ".release-loop"
 LEGACY_MARKER_SCHEMA = "release-loop-handoff/v2"
-LEGACY_ACTIVE_ALL = frozenset(("progress.md", ".tmp", JOURNAL_NAME, "briefs", "reports", "reviews", "evidence"))
+LEGACY_ACTIVE_ALL = frozenset(("progress.md", ".tmp", JOURNAL_NAME, "briefs", "reports", "reviews", "evidence", "v1"))
 LEGACY_PERSISTENT_NAMES = frozenset((
     "archive", ".handoff", "runs", "recovery-authority", "recovery-backups",
 ))
@@ -129,6 +130,19 @@ CONTRACT_V2_BODY = (
     "loop live and resumable."
 )
 CONTRACT_INTRODUCTION_COMMIT = "08e12a82752847b3bead5a96fd251b4ad58eae1b"
+V1_PRE_MERGE_KEYS = frozenset(("id", "status", "generation_sha256", "updated"))
+V1_OWNERSHIP_PATHS = {
+    "pilot_approval_path": ".release-loop/v1/pilot-approval.md",
+    "pilot_receipt_path": ".release-loop/v1/pilot-receipt.md",
+    "full_approval_path": ".release-loop/v1/full-approval.md",
+    "full_receipt_path": ".release-loop/v1/full-receipt.md",
+    "generation_receipt_path": ".release-loop/v1/generation-receipt.md",
+    "generation_manifest_path": ".release-loop/v1/generation-manifest.sha256",
+}
+V1_OWNERSHIP_KEYS = frozenset((
+    "status", *V1_OWNERSHIP_PATHS, "pilot_receipt_sha256", "full_receipt_sha256",
+    "generation_manifest_sha256", "accepted_at",
+))
 
 
 class Blocked(RuntimeError):
@@ -346,6 +360,8 @@ def parse_frontmatter(
         key, value = line.split(":", 1)
         key = key.strip()
         if key in values:
+            if key in PROTECTED_V1_KEYS:
+                reject("legacy V1 ownership", f"duplicate top-level field {key}")
             reject(duplicate_kind, f"duplicate top-level field {key}")
         values[key] = value.strip()
     schema = values.get("schema", "")
@@ -551,6 +567,350 @@ def legacy_manifest_digest(entries: list[dict[str, object]]) -> str:
     return hashlib.sha256(json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+PROTECTED_V1_KEYS = frozenset(("pre_merge_verification", "v1"))
+YAML_DOUBLE_QUOTED_ESCAPES = {
+    "0": "\0",
+    "a": "\a",
+    "b": "\b",
+    "t": "\t",
+    "n": "\n",
+    "v": "\v",
+    "f": "\f",
+    "r": "\r",
+    "e": "\x1b",
+    " ": " ",
+    '"': '"',
+    "/": "/",
+    "\\": "\\",
+    "N": "\u0085",
+    "_": "\u00a0",
+    "L": "\u2028",
+    "P": "\u2029",
+}
+
+
+def _yaml_double_quoted_value(value: str, start: int = 0) -> tuple[str, int] | None:
+    if start >= len(value) or value[start] != '"':
+        return None
+    result: list[str] = []
+    index = start + 1
+    while index < len(value):
+        character = value[index]
+        if character == '"':
+            return "".join(result), index + 1
+        if character != "\\":
+            result.append(character)
+            index += 1
+            continue
+        index += 1
+        if index >= len(value):
+            return None
+        escape = value[index]
+        if escape in YAML_DOUBLE_QUOTED_ESCAPES:
+            result.append(YAML_DOUBLE_QUOTED_ESCAPES[escape])
+            index += 1
+            continue
+        width = {"x": 2, "u": 4, "U": 8}.get(escape)
+        if width is None or index + width >= len(value):
+            return None
+        digits = value[index + 1:index + width + 1]
+        if not re.fullmatch(rf"[0-9A-Fa-f]{{{width}}}", digits):
+            return None
+        result.append(chr(int(digits, 16)))
+        index += width + 1
+    return None
+
+
+def _yaml_single_quoted_value(value: str, start: int = 0) -> tuple[str, int] | None:
+    if start >= len(value) or value[start] != "'":
+        return None
+    result: list[str] = []
+    index = start + 1
+    while index < len(value):
+        character = value[index]
+        if character != "'":
+            result.append(character)
+            index += 1
+            continue
+        if index + 1 < len(value) and value[index + 1] == "'":
+            result.append("'")
+            index += 2
+            continue
+        return "".join(result), index + 1
+    return None
+
+
+def _yaml_prefix(value: str, start: int) -> tuple[str, str, int] | None:
+    if start >= len(value) or value[start] not in "!&*":
+        return None
+    prefix = value[start]
+    index = start + 1
+    if prefix == "!" and index < len(value) and value[index] == "<":
+        end = value.find(">", index + 1)
+        if end < 0:
+            return None
+        return prefix, value[start:end + 1], end + 1
+    while index < len(value) and not value[index].isspace():
+        index += 1
+    return prefix, value[start:index], index
+
+
+def _yaml_plain_token(value: str, start: int) -> tuple[str, int] | None:
+    index = start
+    while index < len(value) and not value[index].isspace():
+        index += 1
+    token = value[start:index]
+    return (token, index) if token else None
+
+
+def _yaml_scalar(value: str, start: int, anchors: dict[str, str]) -> tuple[str, int] | None:
+    while start < len(value) and value[start].isspace():
+        start += 1
+    if start >= len(value):
+        return None
+    if value[start] == '"':
+        return _yaml_double_quoted_value(value, start)
+    if value[start] == "'":
+        return _yaml_single_quoted_value(value, start)
+    if value[start] == "*":
+        prefix = _yaml_prefix(value, start)
+        if prefix is None:
+            return None
+        alias = prefix[1][1:]
+        resolved = anchors.get(alias)
+        return (resolved, prefix[2]) if resolved is not None else None
+    return _yaml_plain_token(value, start)
+
+
+def _yaml_key(value: str, anchors: dict[str, str]) -> tuple[str, bool, str | None] | None:
+    start = 0
+    prefixes: list[tuple[str, str]] = []
+    while True:
+        while start < len(value) and value[start].isspace():
+            start += 1
+        prefix = _yaml_prefix(value, start)
+        if prefix is None or prefix[0] == "*":
+            break
+        prefixes.append((prefix[0], prefix[1]))
+        start = prefix[2]
+    while start < len(value) and value[start].isspace():
+        start += 1
+    if start < len(value) and value[start] == "*":
+        prefix = _yaml_prefix(value, start)
+        if prefix is None:
+            return None
+        alias = prefix[1][1:]
+        resolved = anchors.get(alias, alias if alias in PROTECTED_V1_KEYS else "")
+        if not resolved:
+            return None
+        anchor = next((token[1][1:] for token in prefixes if token[0] == "&"), None)
+        return resolved, False, anchor
+    scalar = _yaml_scalar(value, start, anchors)
+    if scalar is None:
+        return None
+    resolved, _end = scalar
+    anchor = next((token[1][1:] for token in prefixes if token[0] == "&"), None)
+    if not resolved:
+        return None
+    canonical = not prefixes and value == resolved
+    return resolved, canonical, anchor
+
+
+def _yaml_mapping_colon(line: str) -> int | None:
+    quote: str | None = None
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if quote is not None:
+            if quote == '"' and character == "\\":
+                index += 2
+                continue
+            if character == quote:
+                if quote == "'" and index + 1 < len(line) and line[index + 1] == "'":
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if character in "'\"":
+            quote = character
+        elif character == "#" and (index == 0 or line[index - 1].isspace()):
+            return None
+        elif character == ":" and (index + 1 == len(line) or line[index + 1].isspace() or line[index + 1] in "{}[],"):
+            return index
+        index += 1
+    return None
+
+
+def _yaml_top_level_anchors(line: str, anchors: dict[str, str]) -> None:
+    if line[:1].isspace():
+        return
+    colon = _yaml_mapping_colon(line)
+    if colon is None:
+        return
+    value = line[colon + 1:]
+    start = 0
+    anchor: str | None = None
+    while True:
+        while start < len(value) and value[start].isspace():
+            start += 1
+        prefix = _yaml_prefix(value, start)
+        if prefix is None or prefix[0] == "*":
+            break
+        if prefix[0] == "&":
+            anchor = prefix[1][1:]
+        start = prefix[2]
+    if anchor is None:
+        return
+    scalar = _yaml_scalar(value, start, anchors)
+    if scalar is not None:
+        anchors[anchor] = scalar[0]
+
+
+def validate_v1_top_level_syntax(frontmatter_text: str) -> None:
+    anchors: dict[str, str] = {}
+    for line in frontmatter_text.splitlines():
+        if not line or line.lstrip().startswith("#"):
+            continue
+        _yaml_top_level_anchors(line, anchors)
+        indentation = len(line) - len(line.lstrip(" \t"))
+        if indentation > 0 and indentation != 1 and not line.startswith("\t"):
+            continue
+        candidate = line.lstrip(" \t") if indentation else line
+        explicit = candidate.startswith("?")
+        if explicit:
+            candidate = candidate[1:].lstrip()
+        colon = _yaml_mapping_colon(candidate) if not explicit else None
+        key_text = candidate[:colon] if colon is not None else candidate
+        parsed = _yaml_key(key_text, anchors)
+        if parsed is None:
+            continue
+        resolved, canonical, anchor = parsed
+        if anchor is not None:
+            anchors[anchor] = resolved
+        if resolved not in PROTECTED_V1_KEYS:
+            continue
+        if not canonical or indentation == 1 or line.startswith("\t") or explicit:
+            reject("legacy V1 ownership", "noncanonical top-level key")
+
+
+def structured_progress_blocks(text: str) -> dict[str, dict[str, str] | None]:
+    frontmatter_text, _body = split_frontmatter(
+        text,
+        failure_kind="legacy V1 ownership",
+        detail="progress frontmatter is missing",
+    )
+    validate_v1_top_level_syntax(frontmatter_text)
+    selected = {"pre_merge_verification": None, "v1": None}
+    active = None
+    for line in frontmatter_text.splitlines():
+        raw_key, separator, _ = line.partition(":")
+        normalized_key = raw_key.strip()
+        if separator and normalized_key in selected and raw_key != normalized_key:
+            reject("legacy V1 ownership", f"malformed block {normalized_key}")
+        top = re.fullmatch(r"([A-Za-z0-9_]+):(.*)", line)
+        if top:
+            active = None
+            name, suffix = top.groups()
+            if name in selected:
+                if selected[name] is not None:
+                    reject("legacy V1 ownership", f"duplicate block {name}")
+                if suffix.strip():
+                    reject("legacy V1 ownership", f"malformed block {name}")
+                selected[name] = {}
+                active = name
+            continue
+        if active is not None and line and not line[0].isspace() and ":" in line:
+            active = None
+            continue
+        if not line.strip():
+            continue
+        if active is None:
+            continue
+        nested = re.fullmatch(r"  ([A-Za-z0-9_]+):(?: (.*))?", line)
+        if nested is None:
+            reject("legacy V1 ownership", f"malformed indentation in {active}")
+        key, value = nested.groups()
+        mapping = selected[active]
+        assert mapping is not None
+        if key in mapping:
+            reject("legacy V1 ownership", f"duplicate key {active}.{key}")
+        mapping[key] = value or ""
+    return selected
+
+
+def validate_v1_receipt(path: Path, expected_digest: str, label: str) -> None:
+    try:
+        payload = path.read_bytes()
+        text = payload.decode("utf-8")
+    except (OSError, UnicodeError):
+        reject("legacy V1 ownership", f"unreadable {label} receipt")
+    scope_lines = re.findall(r"^- receipt_sha256_scope: (.*)$", text, re.MULTILINE)
+    digest_lines = re.findall(r"^- receipt_sha256: (.*)$", text, re.MULTILINE)
+    marker = b"- receipt_sha256:"
+    if scope_lines != ["canonical bytes before this field"] or len(digest_lines) != 1 or payload.count(marker) != 1:
+        reject("legacy V1 ownership", f"malformed {label} receipt")
+    embedded = digest_lines[0]
+    computed = hashlib.sha256(payload.split(marker, 1)[0]).hexdigest()
+    if not SHA_PATTERN.fullmatch(embedded) or len({expected_digest, embedded, computed}) != 1:
+        reject("legacy V1 ownership", f"{label} receipt digest mismatch")
+
+
+def validate_legacy_v1_ownership(repo: Path, text: str, root: Path | None = None) -> None:
+    blocks = structured_progress_blocks(text)
+    pre_merge = blocks["pre_merge_verification"]
+    ownership = blocks["v1"]
+    root = root or repo / ".release-loop/v1"
+    root_present = root.exists() or root.is_symlink()
+    if pre_merge is None and ownership is None and not root_present:
+        return
+    if pre_merge is None or ownership is None:
+        reject("legacy V1 ownership", "official acceptance, ownership, and V1 tree must agree")
+    if set(pre_merge) != V1_PRE_MERGE_KEYS or any(not value for value in pre_merge.values()):
+        reject("legacy V1 ownership", "invalid pre_merge_verification keys")
+    if set(ownership) != V1_OWNERSHIP_KEYS or any(not value for value in ownership.values()):
+        reject("legacy V1 ownership", "invalid v1 keys")
+    if pre_merge["id"] != "V1" or pre_merge["status"] != "accepted":
+        reject("legacy V1 ownership", "pre_merge_verification is not accepted V1")
+    if ownership["status"] != "accepted":
+        reject("legacy V1 ownership", "v1 ownership is not accepted")
+    digests = (
+        pre_merge["generation_sha256"], ownership["generation_manifest_sha256"],
+        ownership["pilot_receipt_sha256"], ownership["full_receipt_sha256"],
+    )
+    if any(not SHA_PATTERN.fullmatch(digest) for digest in digests):
+        reject("legacy V1 ownership", "invalid digest")
+    if pre_merge["generation_sha256"] != ownership["generation_manifest_sha256"]:
+        reject("legacy V1 ownership", "generation digest mismatch")
+    if any(ownership[key] != expected for key, expected in V1_OWNERSHIP_PATHS.items()):
+        reject("legacy V1 ownership", "non-canonical ownership path")
+    if len({ownership[key] for key in V1_OWNERSHIP_PATHS}) != len(V1_OWNERSHIP_PATHS):
+        reject("legacy V1 ownership", "duplicate ownership path")
+    if root.is_symlink() or not root.is_dir():
+        reject("legacy V1 ownership", "missing or invalid V1 root")
+    expected_children = {PurePosixPath(path).name for path in V1_OWNERSHIP_PATHS.values()}
+    observed_children = {child.name for child in root.iterdir()}
+    extras = observed_children - expected_children - {"history"}
+    missing = expected_children - observed_children
+    if extras or missing:
+        reject("legacy V1 ownership", "unexpected or missing V1 child")
+    history = root / "history"
+    if history.exists() or history.is_symlink():
+        if history.is_symlink() or not history.is_dir():
+            reject("legacy V1 ownership", "invalid V1 history")
+        tree_manifest(history)
+    paths = {}
+    for key, relative in V1_OWNERSHIP_PATHS.items():
+        candidate = root / PurePosixPath(relative).name
+        if candidate.is_symlink() or not candidate.is_file():
+            reject("legacy V1 ownership", f"missing regular file {relative}")
+        paths[key] = candidate
+    validate_v1_receipt(paths["pilot_receipt_path"], ownership["pilot_receipt_sha256"], "pilot")
+    validate_v1_receipt(paths["full_receipt_path"], ownership["full_receipt_sha256"], "full")
+    if phase_artifact_sha256(paths["generation_manifest_path"]) != ownership["generation_manifest_sha256"]:
+        reject("legacy V1 ownership", "generation manifest digest mismatch")
+
+
 def legacy_is_subset(observed: list[dict[str, object]], full: list[dict[str, object]]) -> bool:
     return all(entry in full for entry in observed)
 
@@ -594,7 +954,7 @@ def legacy_git_active_paths(repo: Path) -> list[str]:
     return active
 
 
-def legacy_copy_child(child: Path, destination_root: Path) -> None:
+def legacy_copy_child(child: Path, destination_root: Path, inject_after_file: bool = False) -> None:
     destination_root.mkdir(parents=True, exist_ok=True)
     target = destination_root / child.name
     if target.exists() or target.is_symlink():
@@ -611,6 +971,8 @@ def legacy_copy_child(child: Path, destination_root: Path) -> None:
             else:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(path.read_bytes())
+                if inject_after_file:
+                    reject("injected handoff interruption", path.relative_to(child).as_posix())
     else:
         target.write_bytes(child.read_bytes())
 
@@ -623,6 +985,7 @@ def legacy_handoff(
     marker_relative: str,
 ) -> tuple[Path, Path]:
     run_id = values["feature"]
+    validate_legacy_v1_ownership(repo, progress_file.read_text(encoding="utf-8"))
     marker = guard(base_repo, marker_relative, ".release-loop/.handoff")
     source = repo / ".release-loop"
     source_children = legacy_scan_children(repo, source, allow_persistent=False)
@@ -648,6 +1011,8 @@ def legacy_handoff(
             if observed_entries != manifest_entries:
                 reject("legacy handoff collision", "destination active state no longer matches complete marker")
             return legacy_confirm(base_repo, destination, marker)
+        if legacy_git_active_paths(base_repo):
+            reject("legacy handoff collision", "base active legacy state is present in the index")
         if not legacy_is_subset(observed_entries, manifest_entries):
             reject("handoff target mismatch", ".release-loop")
     else:
@@ -658,11 +1023,12 @@ def legacy_handoff(
         legacy_write_marker(marker, {**expected_fields, "manifest_sha256": digest, "status": "incomplete"})
     present_names = {child.name for child in destination_children}
     inject_after_copy = test_failure("handoff-after-copy-one")
+    inject_after_file = test_failure("handoff-after-copy-one-file")
     for child in source_children:
         if child.name not in present_names:
-            legacy_copy_child(child, destination)
+            legacy_copy_child(child, destination, inject_after_file)
         elif child.is_dir():
-            copy_missing(child, destination / child.name)
+            copy_missing(child, destination / child.name, inject_after_file)
         else:
             continue
         if inject_after_copy:
@@ -4533,6 +4899,8 @@ def recover_terminal_archive(
         destination,
         allow_recovery_terminal=True,
     )
+    if source_rel == ".release-loop":
+        validate_legacy_v1_ownership(repo, text, destination_path / "v1")
     _, _, publication = validate_archive_publication(repo, source_rel, selected)
     if publication["pending"] is not None:
         reject("archive destination conflict", "terminal archive has pending publication")
@@ -4577,6 +4945,16 @@ def archive(
     if source_rel == ".release-loop":
         guard(repo, progress_path, ".release-loop")
         source = repo / ".release-loop"
+        source_v1 = source / "v1"
+        destination_v1 = destination_path / "v1"
+        present_v1 = [
+            root
+            for root in (source_v1, destination_v1)
+            if root.exists() or root.is_symlink()
+        ]
+        if len(present_v1) > 1:
+            reject("archive destination conflict", "V1 exists in source and destination")
+        validate_legacy_v1_ownership(repo, text, present_v1[0] if present_v1 else source_v1)
         children = []
         controls = (source / ".tmp", journal) if journal.parent == source else (source / ".tmp",)
         for child in controls:
@@ -4588,6 +4966,10 @@ def archive(
             if child.exists() or child.is_symlink():
                 guard(repo, child.relative_to(repo).as_posix(), ".release-loop")
                 children.append(child)
+        v1 = source / "v1"
+        if v1.exists() or v1.is_symlink():
+            guard(repo, v1.relative_to(repo).as_posix(), ".release-loop")
+            children.append(v1)
         for child in sorted(source.glob("progress.md.corrupt-*")):
             guard(repo, child.relative_to(repo).as_posix(), ".release-loop")
             children.append(child)
@@ -4640,7 +5022,7 @@ def tree_manifest(root: Path) -> dict[str, bytes | None]:
     return manifest
 
 
-def copy_missing(source: Path, target: Path) -> None:
+def copy_missing(source: Path, target: Path, inject_after_file: bool = False) -> None:
     source_manifest = tree_manifest(source)
     target_manifest = tree_manifest(target) if target.exists() else {}
     extras = sorted(set(target_manifest) - set(source_manifest))
@@ -4659,6 +5041,8 @@ def copy_missing(source: Path, target: Path) -> None:
         elif relative not in target_manifest:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(data)
+            if inject_after_file:
+                reject("injected handoff interruption", relative)
 
 
 def handoff(

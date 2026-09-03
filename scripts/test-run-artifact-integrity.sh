@@ -150,6 +150,7 @@ CASES = (
     "scoped_feature_mismatch",
     "interrupted_archive",
     "interrupted_legacy_archive",
+    "legacy_archive_v1_evidence",
     "ignored_orphan",
     "occupied_scope_blocked",
     "tracked_scope_target",
@@ -165,6 +166,13 @@ CASES = (
     "handoff_mismatch_preserves_both",
     "handoff_same_checkout",
     "legacy_handoff_success",
+    "legacy_handoff_v1_ownership",
+    "legacy_handoff_v1_success",
+    "legacy_handoff_v1_partial_directory_rerun",
+    "legacy_handoff_v1_destination_mismatch",
+    "legacy_handoff_v1_symlinks",
+    "legacy_handoff_source_changed",
+    "legacy_handoff_complete_rerun",
     "legacy_handoff_cli_contract",
     "legacy_handoff_incomplete_rerun",
     "legacy_handoff_collision",
@@ -360,6 +368,11 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["SCHEMA"], "Reject every symlink in each existing source or destination component"),
         (selected["ARCHIVE"], "Move scoped `progress.md` last as the archive commit point."),
         (selected["ARCHIVE"], "reuse the exact recorded archive destination"),
+        (selected["ARCHIVE"], "It accepts V1 in either source or destination, but never both."),
+        (selected["ARCHIVE"], "Never move `archive`, `.handoff`, or `runs` as active state."),
+        (selected["ARCHIVE"], "For a scoped record (`artifact_root: .release-loop/runs/<feature_slug>`), verify the terminal record, Retro evidence, destination marker, and exact `archive_path`; do not apply V1 tree checks."),
+        (selected["ARCHIVE"], "For a legacy record (`artifact_root: .release-loop`), also verify the live V1 tree is absent and the archived V1 tree is present at the exact returned path."),
+        (selected["ARCHIVE"], "Move the selected root `progress.md` last. This move is the archive commit point."),
         (selected["ARCHIVE"], "Mid-move cancellation leaves the selected progress record in the source scope."),
         (selected["HOOKS"], "`.release-loop/.handoff` is the fixed handoff root"),
         (selected["HOOKS"], "Make the base owner discover and resume that exact progress path."),
@@ -367,10 +380,15 @@ def require_contract(texts: dict[str, str] | None = None, check_invocations: boo
         (selected["HOOKS"], "are never active transfer bytes"),
         (selected["HOOKS"], "`recovery-authority/` and `recovery-backups/` are persistent siblings"),
         (selected["HOOKS"], "At the source, legacy handoff rejects every persistent sibling"),
+        (selected["HOOKS"], "Accepted legacy V1 state is active state."),
+        (selected["HOOKS"], "Handoff and archive preserve the exact V1 bytes."),
         (selected["SKILL"], "adds `--legacy-destination .release-loop`"),
         (selected["SKILL"], "directory containing the loaded `SKILL.md`"),
         (selected["SKILL"], "temporary regular file under `<artifact_root>/.tmp/`"),
         (selected["SCHEMA"], "temporary path under `<artifact_root>/.tmp/`"),
+        (selected["SCHEMA"], "`pre_merge_verification` is the sole acceptance authority."),
+        (selected["SCHEMA"], "The `v1` block binds the six canonical files and their required digests."),
+        (selected["SCHEMA"], "A legacy archive includes accepted V1 evidence but excludes persistent `archive`, `.handoff`, and `runs` siblings."),
     )
     missing = [fragment for text, fragment in required if fragment not in text]
     if check_invocations:
@@ -678,6 +696,46 @@ def write_legacy(repo: Path, feature: str = "legacy") -> Path:
     legacy = repo / ".release-loop/progress.md"
     legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.write_text(progress(feature, ".release-loop"), encoding="utf-8")
+    return legacy
+
+
+def write_legacy_v1(repo: Path, feature: str = "legacy") -> Path:
+    legacy = write_legacy(repo, feature)
+    root = legacy.parent / "v1"
+    root.mkdir()
+    for name in ("pilot-approval.md", "full-approval.md", "generation-receipt.md"):
+        (root / name).write_text(f"# {name}\n", encoding="utf-8")
+    receipt_digests = {}
+    for name in ("pilot", "full"):
+        prefix = f"# {name} receipt\n\n- verdict: pass\n- receipt_sha256_scope: canonical bytes before this field\n"
+        digest = hashlib.sha256(prefix.encode()).hexdigest()
+        (root / f"{name}-receipt.md").write_text(
+            prefix + f"- receipt_sha256: {digest}\n", encoding="utf-8"
+        )
+        receipt_digests[name] = digest
+    manifest = root / "generation-manifest.sha256"
+    manifest.write_text("0" * 64 + "  generated.txt\n", encoding="utf-8")
+    generation_digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    blocks = (
+        "v1:\n"
+        "  status: accepted\n"
+        "  pilot_approval_path: .release-loop/v1/pilot-approval.md\n"
+        "  pilot_receipt_path: .release-loop/v1/pilot-receipt.md\n"
+        f"  pilot_receipt_sha256: {receipt_digests['pilot']}\n"
+        "  full_approval_path: .release-loop/v1/full-approval.md\n"
+        "  full_receipt_path: .release-loop/v1/full-receipt.md\n"
+        f"  full_receipt_sha256: {receipt_digests['full']}\n"
+        "  generation_receipt_path: .release-loop/v1/generation-receipt.md\n"
+        "  generation_manifest_path: .release-loop/v1/generation-manifest.sha256\n"
+        f"  generation_manifest_sha256: {generation_digest}\n"
+        "  accepted_at: 2026-08-23T00:00:00Z\n"
+        "pre_merge_verification:\n"
+        "  id: V1\n"
+        "  status: accepted\n"
+        f"  generation_sha256: {generation_digest}\n"
+        "  updated: 2026-08-23T00:00:00Z\n"
+    )
+    legacy.write_text(legacy.read_text(encoding="utf-8").replace("final_action:\n", blocks + "final_action:\n"), encoding="utf-8")
     return legacy
 
 
@@ -1017,6 +1075,8 @@ def archive_scope(
         failure="archive-after-first" if fail_after_first else None,
     )
     assert set(payload) == {"archive_path", "moved", "progress_path", "state"}, payload
+    if destination is not None:
+        assert payload["archive_path"] == destination, payload
     expected_state = "archived" if mode == "completed" else "archived-incomplete"
     assert payload["state"] == expected_state, payload
     return list(payload["moved"])
@@ -1279,6 +1339,19 @@ def assert_blocked_preserves(action, sentinel_path: Path, before: bytes, diagnos
     else:
         raise AssertionError("attack did not block")
     assert sentinel_path.read_bytes() == before
+
+
+def assert_blocked_snapshots(action, source: Path, base: Path, diagnostic: str) -> None:
+    source_before = matrix_fixture_snapshot(source)
+    base_before = matrix_fixture_snapshot(base)
+    try:
+        action()
+    except Blocked as exc:
+        assert diagnostic in str(exc), str(exc)
+    else:
+        raise AssertionError("attack did not block")
+    assert matrix_fixture_snapshot(source) == source_before
+    assert matrix_fixture_snapshot(base) == base_before
 
 
 def require_phase_consumer_contract(texts: dict[str, str] | None = None) -> None:
@@ -6478,6 +6551,214 @@ def run_case(name: str) -> None:
             assert f"archive-destination: {destination}" in legacy.read_text(encoding="utf-8")
             assert archive_scope(repo, str(legacy.relative_to(repo)), None)[-1] == "progress.md"
             assert (repo / destination / "progress.md").is_file()
+        elif name == "legacy_archive_v1_evidence":
+            source = new_repo(tmp, "legacy-v1-archive-source")
+            legacy = write_legacy_v1(source)
+            populate_legacy_active_state(legacy.parent)
+            (legacy.parent / "v1/history").mkdir()
+            (legacy.parent / "v1/history/prior.md").write_text("prior\n", encoding="utf-8")
+            expected_v1 = filesystem_manifest(legacy.parent / "v1")
+            destination = ".release-loop/archive/2026-08-23-legacy-v1"
+            order = archive_scope(source, str(legacy.relative_to(source)), destination)
+            assert order[-1] == "progress.md"
+            assert order.index("v1") < order.index("progress.md")
+            assert filesystem_manifest(source / destination / "v1") == expected_v1
+            assert not (source / ".release-loop/v1").exists()
+
+            interrupted = new_repo(tmp, "legacy-v1-archive-interrupted")
+            interrupted_progress = write_legacy_v1(interrupted)
+            populate_legacy_active_state(interrupted_progress.parent)
+            interrupted_destination = ".release-loop/archive/2026-08-23-legacy-v1-interrupted"
+            try:
+                archive_scope(
+                    interrupted,
+                    str(interrupted_progress.relative_to(interrupted)),
+                    interrupted_destination,
+                    fail_after_first=True,
+                )
+            except Blocked as exc:
+                assert "injected archive interruption" in str(exc)
+            else:
+                raise AssertionError("legacy V1 archive interruption did not fire")
+            assert interrupted_progress.is_file()
+            assert (interrupted / interrupted_destination / ".tmp").is_dir()
+            assert (interrupted / ".release-loop/v1").is_dir()
+            resumed_order = archive_scope(
+                interrupted,
+                str(interrupted_progress.relative_to(interrupted)),
+                None,
+            )
+            assert resumed_order[-1] == "progress.md"
+            assert (interrupted / interrupted_destination / "v1").is_dir()
+
+            destination_side = new_repo(tmp, "legacy-v1-archive-destination-side")
+            destination_side_progress = write_legacy_v1(destination_side)
+            destination_side_path = ".release-loop/archive/2026-08-23-legacy-v1-destination-side"
+            persist_archive_evidence(destination_side_progress, destination_side_path, "completed")
+            try:
+                run_cli(
+                    "archive",
+                    "--repo", str(destination_side),
+                    "--progress-path", str(destination_side_progress.relative_to(destination_side)),
+                    "--destination", destination_side_path,
+                    failure="archive-after-journal",
+                )
+            except Blocked as exc:
+                assert "injected archive interruption" in str(exc)
+            else:
+                raise AssertionError("destination-side V1 interruption did not fire")
+            assert destination_side_progress.is_file()
+            assert not (destination_side / ".release-loop/v1").exists()
+            assert (destination_side / destination_side_path / "v1").is_dir()
+            resumed_payload = run_cli(
+                "archive",
+                "--repo", str(destination_side),
+                "--progress-path", str(destination_side_progress.relative_to(destination_side)),
+            )
+            assert resumed_payload["archive_path"] == destination_side_path, resumed_payload
+            assert resumed_payload["moved"][-1] == "progress.md", resumed_payload
+            terminal_payload = run_cli(
+                "archive",
+                "--repo", str(destination_side),
+                "--progress-path", str(destination_side_progress.relative_to(destination_side)),
+                "--destination", destination_side_path,
+            )
+            assert terminal_payload["archive_path"] == destination_side_path, terminal_payload
+            assert terminal_payload["moved"] == [], terminal_payload
+            archived_manifest = destination_side / destination_side_path / "v1/generation-manifest.sha256"
+            archived_manifest.write_text("changed\n", encoding="utf-8")
+            terminal_before = matrix_fixture_snapshot(destination_side)
+            assert_blocked_preserves(
+                lambda: run_cli(
+                    "archive",
+                    "--repo", str(destination_side),
+                    "--progress-path", str(destination_side_progress.relative_to(destination_side)),
+                    "--destination", destination_side_path,
+                ),
+                sent,
+                before,
+                "legacy V1 ownership",
+            )
+            assert matrix_fixture_snapshot(destination_side) == terminal_before
+
+            def rejected_archive(slug, mutate, diagnostic):
+                candidate = new_repo(tmp, f"legacy-v1-archive-reject-{slug}")
+                candidate_progress = write_legacy_v1(candidate)
+                candidate_destination = f".release-loop/archive/2026-08-23-reject-{slug}"
+                mutate(candidate, candidate_progress, candidate_destination)
+                persist_archive_evidence(candidate_progress, candidate_destination, "completed")
+                progress_before = candidate_progress.read_bytes()
+                candidate_before = matrix_fixture_snapshot(candidate)
+                destination_root = candidate / candidate_destination
+                destination_before = filesystem_manifest(destination_root)
+                assert_blocked_preserves(
+                    lambda: archive_scope(
+                        candidate,
+                        str(candidate_progress.relative_to(candidate)),
+                        candidate_destination,
+                        persist_authority=False,
+                    ),
+                    sent,
+                    before,
+                    diagnostic,
+                )
+                assert candidate_progress.read_bytes() == progress_before
+                assert matrix_fixture_snapshot(candidate) == candidate_before
+                assert filesystem_manifest(destination_root) == destination_before
+
+            rejected_archive(
+                "symlink",
+                lambda candidate, progress_path, destination_path: (
+                    (candidate / ".release-loop/v1").rename(candidate / ".release-loop/v1-real"),
+                    (candidate / ".release-loop/v1").symlink_to(
+                        candidate / ".release-loop/v1-real", target_is_directory=True
+                    ),
+                ),
+                "legacy V1 ownership",
+            )
+            rejected_archive(
+                "changed-source",
+                lambda candidate, progress_path, destination_path: (
+                    candidate / ".release-loop/v1/generation-manifest.sha256"
+                ).write_text("changed\n", encoding="utf-8"),
+                "legacy V1 ownership",
+            )
+            rejected_archive(
+                "foreign-destination",
+                lambda candidate, progress_path, destination_path: (
+                    (candidate / destination_path / "v1").mkdir(parents=True),
+                    (candidate / destination_path / "v1/foreign.md").write_text(
+                        "foreign\n", encoding="utf-8"
+                    ),
+                ),
+                "archive destination conflict",
+            )
+            rejected_archive(
+                "journal-mismatch",
+                lambda candidate, progress_path, destination_path: (
+                    candidate / ".release-loop/.phase-artifact-ownership.json"
+                ).write_text(
+                    json.dumps(
+                        {
+                            "schema": "phase-artifact-ownership/v1",
+                            "owned": {"missing.md": hashlib.sha256(b"missing\n").hexdigest()},
+                            "pending": None,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                ),
+                "artifact ownership",
+            )
+
+            handoff_source = new_repo(tmp, "legacy-v1-archive-handoff-source")
+            handoff_base = new_repo(tmp, "legacy-v1-archive-handoff-base")
+            (handoff_base / ".release-loop/runs").mkdir(parents=True)
+            handoff_progress = write_legacy_v1(handoff_source)
+            populate_legacy_active_state(handoff_progress.parent)
+            handoff_scope(
+                handoff_source,
+                handoff_base,
+                str(handoff_progress.relative_to(handoff_source)),
+                legacy_destination=".release-loop",
+            )
+            base_progress = handoff_base / ".release-loop/progress.md"
+            handoff_destination = ".release-loop/archive/2026-08-23-handoff-v1"
+            archive_scope(
+                handoff_base,
+                str(base_progress.relative_to(handoff_base)),
+                handoff_destination,
+            )
+            assert not (handoff_base / ".release-loop/v1").exists()
+            assert (handoff_base / handoff_destination / "v1").is_dir()
+            assert (handoff_base / ".release-loop/.handoff").is_dir()
+            assert (handoff_base / ".release-loop/runs").is_dir()
+
+            lifecycle_contract = {"SKILL": SKILL, "SCHEMA": SCHEMA, "ARCHIVE": ARCHIVE, "HOOKS": HOOKS}
+            lifecycle_mutations = (
+                ("ARCHIVE", "It accepts V1 in either source or destination, but never both.", "It accepts V1 only in the source."),
+                ("ARCHIVE", "Never move `archive`, `.handoff`, or `runs` as active state.", "Move `archive`, `.handoff`, and `runs` as active state."),
+                ("ARCHIVE", "For a scoped record (`artifact_root: .release-loop/runs/<feature_slug>`), verify the terminal record, Retro evidence, destination marker, and exact `archive_path`; do not apply V1 tree checks.", "For a scoped record (`artifact_root: .release-loop/runs/<feature_slug>`), apply V1 tree checks."),
+                ("ARCHIVE", "For a legacy record (`artifact_root: .release-loop`), also verify the live V1 tree is absent and the archived V1 tree is present at the exact returned path.", "For a legacy record (`artifact_root: .release-loop`), skip V1 tree checks."),
+                ("ARCHIVE", "Move the selected root `progress.md` last. This move is the archive commit point.", "Move the selected root `progress.md` first. This move is the archive start point."),
+                ("HOOKS", "Accepted legacy V1 state is active state.", "Accepted legacy V1 state is persistent state."),
+                ("HOOKS", "Handoff and archive preserve the exact V1 bytes.", "Handoff and archive may rewrite V1 bytes."),
+                ("SCHEMA", "`pre_merge_verification` is the sole acceptance authority.", "The `v1` block is an acceptance authority."),
+                ("SCHEMA", "The `v1` block binds the six canonical files and their required digests.", "The `v1` block permits arbitrary files."),
+                ("SCHEMA", "A legacy archive includes accepted V1 evidence but excludes persistent `archive`, `.handoff`, and `runs` siblings.", "A legacy archive includes persistent siblings."),
+            )
+            for key, original, mutation in lifecycle_mutations:
+                texts = dict(lifecycle_contract)
+                texts[key] = texts[key].replace(original, mutation, 1)
+                assert texts[key] != lifecycle_contract[key], original
+                try:
+                    require_contract(texts, check_invocations=False)
+                except AssertionError as exc:
+                    assert original in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"legacy V1 lifecycle mutation escaped: {original}")
         elif name in {"ignored_orphan", "occupied_scope_blocked"}:
             orphan = repo / ".release-loop/runs/alpha/orphan.txt"
             orphan.parent.mkdir(parents=True)
@@ -6629,6 +6910,387 @@ def run_case(name: str) -> None:
                 "schema", "feature", "progress_path", "artifact_root",
                 "source_worktree", "base_owner", "destination", "manifest_sha256", "status",
             }, payload
+        elif name == "legacy_handoff_v1_ownership":
+            spec = importlib.util.spec_from_file_location("legacy_v1_frontmatter_guard", CLI)
+            assert spec is not None and spec.loader is not None
+            integrity = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(integrity)
+            try:
+                integrity.structured_progress_blocks("feature: legacy\n")
+            except integrity.Blocked as exc:
+                assert "progress frontmatter is missing" in str(exc), str(exc)
+            else:
+                raise AssertionError("missing frontmatter did not block safely")
+
+            valid_source = repo
+            valid_base = new_repo(tmp, "v1-valid-base")
+            valid_progress = write_legacy_v1(valid_source)
+
+            def edit_progress(path, old, new):
+                path.write_text(path.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+
+            edit_progress(valid_progress, "v1:\n", "v1:\n\n")
+            assert handoff_scope(
+                valid_source,
+                valid_base,
+                str(valid_progress.relative_to(valid_source)),
+                legacy_destination=".release-loop",
+            )["cleanup_permitted"] is True
+
+            valid_source = new_repo(tmp, "v1-valid-source")
+            valid_base = new_repo(tmp, "v1-valid-base-without-blank-line")
+            valid_progress = write_legacy_v1(valid_source)
+
+            edit_progress(
+                valid_progress,
+                "final_action:\n",
+                'future-field: accepted\nfuture.field: accepted\n"future_field": accepted\nfinal_action:\n',
+            )
+            (valid_progress.parent / "v1/history").mkdir()
+            (valid_progress.parent / "v1/history/prior.md").write_text("prior\n", encoding="utf-8")
+            result = handoff_scope(
+                valid_source, valid_base, str(valid_progress.relative_to(valid_source)),
+                legacy_destination=".release-loop",
+            )
+            assert result["cleanup_permitted"] is True
+            assert filesystem_manifest(valid_source / ".release-loop/v1") == filesystem_manifest(
+                valid_base / ".release-loop/v1"
+            )
+
+            nested_unknown_source = new_repo(tmp, "v1-nested-unknown-source")
+            nested_unknown_base = new_repo(tmp, "v1-nested-unknown-base")
+            nested_unknown_progress = write_legacy_v1(nested_unknown_source)
+            edit_progress(
+                nested_unknown_progress,
+                "final_action:\n",
+                'future:\n  "v1": {status: started}\nfinal_action:\n',
+            )
+            assert handoff_scope(
+                nested_unknown_source,
+                nested_unknown_base,
+                str(nested_unknown_progress.relative_to(nested_unknown_source)),
+                legacy_destination=".release-loop",
+            )["cleanup_permitted"] is True
+
+            pre_v1_source = new_repo(tmp, "v1-pre-v1-source")
+            pre_v1_base = new_repo(tmp, "v1-pre-v1-base")
+            pre_v1_progress = write_legacy(pre_v1_source)
+            assert handoff_scope(
+                pre_v1_source, pre_v1_base, str(pre_v1_progress.relative_to(pre_v1_source)),
+                legacy_destination=".release-loop",
+            )["cleanup_permitted"] is True
+
+            def rejected_v1(slug, mutate, diagnostic="legacy V1 ownership"):
+                source = new_repo(tmp, f"v1-reject-source-{slug}")
+                base = new_repo(tmp, f"v1-reject-base-{slug}")
+                progress_path = write_legacy_v1(source)
+                mutate(source, progress_path)
+                source_before = filesystem_manifest(source)
+                base_before = filesystem_manifest(base)
+                marker = base / ".release-loop/.handoff/legacy.json"
+                try:
+                    handoff_scope(
+                        source, base, str(progress_path.relative_to(source)),
+                        legacy_destination=".release-loop",
+                    )
+                except Blocked as exc:
+                    assert diagnostic in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"V1 ownership case {slug} did not block")
+                assert not marker.exists(), slug
+                assert filesystem_manifest(source) == source_before, slug
+                assert filesystem_manifest(base) == base_before, slug
+
+            def replace_digest(path, prefix):
+                lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+                matches = [index for index, line in enumerate(lines) if line.startswith(prefix)]
+                assert len(matches) == 1, (path, prefix, matches)
+                lines[matches[0]] = prefix + "1" * 64 + "\n"
+                path.write_text("".join(lines), encoding="utf-8")
+
+            def remove_progress_block(path, name):
+                lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+                start = lines.index(f"{name}:\n")
+                end = start + 1
+                while end < len(lines) and lines[end].startswith("  "):
+                    end += 1
+                path.write_text("".join(lines[:start] + lines[end:]), encoding="utf-8")
+
+            def remove_all_ownership(source, path):
+                remove_progress_block(path, "v1")
+                remove_progress_block(path, "pre_merge_verification")
+
+            mutations = (
+                ("unowned-tree", remove_all_ownership),
+                ("ownership-without-official", lambda source, path: edit_progress(path, "pre_merge_verification:\n", "pre_merge_verification_missing:\n")),
+                ("accepted-without-ownership", lambda source, path: edit_progress(path, "v1:\n", "v1_missing:\n")),
+                ("accepted-without-tree", lambda source, path: shutil.rmtree(source / ".release-loop/v1")),
+                ("started", lambda source, path: edit_progress(path, "  status: accepted\n", "  status: started\n")),
+                ("official-started", lambda source, path: edit_progress(path, "pre_merge_verification:\n  id: V1\n  status: accepted\n", "pre_merge_verification:\n  id: V1\n  status: started\n")),
+                ("duplicate-top", lambda source, path: edit_progress(path, "final_action:\n", "v1:\n  status: accepted\nfinal_action:\n")),
+                ("duplicate-top-v1-whitespace", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\nv1 :\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-pre-merge-whitespace", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\npre_merge_verification :\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-nbsp", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\nv1\N{NO-BREAK SPACE}:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-pre-merge-nbsp", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\npre_merge_verification\N{NO-BREAK SPACE}:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-leading-space", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n v1:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-pre-merge-leading-space", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n pre_merge_verification:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-leading-tab", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n\tv1:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-pre-merge-leading-tab", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n\tpre_merge_verification:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-single-quoted", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n'v1':\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-pre-merge-double-quoted", lambda source, path: edit_progress(path, "final_action:\n", 'shadow: sentinel\n"pre_merge_verification":\n  status: started\nfinal_action:\n')),
+                ("duplicate-top-v1-explicit", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n? v1\n:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-tagged", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n!!str v1:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-anchored", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n&owned v1:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-alias", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n*v1:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-pre-merge-explicit-tagged", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n? !!str pre_merge_verification\n:\n  status: started\nfinal_action:\n")),
+                ("duplicate-top-v1-inline-double-quoted", lambda source, path: edit_progress(path, "final_action:\n", 'shadow: sentinel\n"v1": {status: started}\nfinal_action:\n')),
+                ("duplicate-top-v1-inline-double-quoted-comment", lambda source, path: edit_progress(path, "final_action:\n", 'shadow: sentinel\n"v1": # duplicate\nfinal_action:\n')),
+                ("duplicate-top-v1-inline-tagged", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n!!str v1: {status: started}\nfinal_action:\n")),
+                ("duplicate-top-v1-inline-anchored", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\n&owned v1: {status: started}\nfinal_action:\n")),
+                ("duplicate-top-v1-escaped-double-quoted", lambda source, path: edit_progress(path, "final_action:\n", 'shadow: sentinel\n"v\\x31": {status: started}\nfinal_action:\n')),
+                ("duplicate-top-v1-anchored-alias", lambda source, path: edit_progress(path, "final_action:\n", "shadow: sentinel\nseed: &owned v1\n*owned: {status: started}\nfinal_action:\n")),
+                ("duplicate-nested", lambda source, path: edit_progress(path, "  accepted_at:", "  status: accepted\n  accepted_at:")),
+                ("malformed-indent", lambda source, path: edit_progress(path, "  pilot_approval_path:", " pilot_approval_path:")),
+                ("missing-key", lambda source, path: edit_progress(path, "  accepted_at: 2026-08-23T00:00:00Z\n", "")),
+                ("empty-key", lambda source, path: edit_progress(path, "  accepted_at: 2026-08-23T00:00:00Z", "  accepted_at:")),
+                ("unknown-key", lambda source, path: edit_progress(path, "  accepted_at:", "  unknown: value\n  accepted_at:")),
+                ("alias-path", lambda source, path: edit_progress(path, "pilot-approval.md", "v1/pilot-approval.md")),
+                ("renamed-path", lambda source, path: edit_progress(path, "pilot-approval.md", "pilot-approval-renamed.md")),
+                ("outside-path", lambda source, path: edit_progress(path, ".release-loop/v1/pilot-approval.md", "../pilot-approval.md")),
+                ("duplicate-path", lambda source, path: edit_progress(path, ".release-loop/v1/full-approval.md", ".release-loop/v1/pilot-approval.md")),
+                ("unexpected-child", lambda source, path: (source / ".release-loop/v1/foreign.md").write_text("foreign\n", encoding="utf-8")),
+                ("missing-file", lambda source, path: (source / ".release-loop/v1/full-approval.md").unlink()),
+                ("invalid-digest", lambda source, path: edit_progress(path, "  pilot_receipt_sha256: ", "  pilot_receipt_sha256: xyz # ")),
+                ("ledger-receipt-mismatch", lambda source, path: replace_digest(path, "  pilot_receipt_sha256: ")),
+                ("embedded-receipt-mismatch", lambda source, path: replace_digest(source / ".release-loop/v1/full-receipt.md", "- receipt_sha256: ")),
+                ("computed-receipt-mismatch", lambda source, path: edit_progress(source / ".release-loop/v1/pilot-receipt.md", "- verdict: pass\n", "- verdict: changed\n")),
+                ("generation-ledger-mismatch", lambda source, path: edit_progress(path, "  generation_sha256: ", "  generation_sha256: " + "0" * 64 + " # ")),
+                ("generation-file-mismatch", lambda source, path: (source / ".release-loop/v1/generation-manifest.sha256").write_text("changed\n", encoding="utf-8")),
+                ("root-symlink", lambda source, path: ((source / ".release-loop/v1").rename(source / ".release-loop/v1-real"), (source / ".release-loop/v1").symlink_to(source / ".release-loop/v1-real", target_is_directory=True))),
+                ("file-symlink", lambda source, path: ((source / ".release-loop/v1/pilot-approval.md").unlink(), (source / ".release-loop/v1/pilot-approval.md").symlink_to(source / "README.md"))),
+            )
+            for slug, mutate in mutations:
+                rejected_v1(slug, mutate)
+        elif name == "legacy_handoff_v1_success":
+            source = repo
+            base = new_repo(tmp, "v1-success-base")
+            legacy_path = write_legacy_v1(source)
+            history = legacy_path.parent / "v1/history/nested"
+            history.mkdir(parents=True)
+            (history / "prior.md").write_bytes(b"prior\x00bytes\n")
+            source_manifest = filesystem_manifest(legacy_path.parent / "v1")
+            result = handoff_scope(
+                source, base, str(legacy_path.relative_to(source)),
+                legacy_destination=".release-loop",
+            )
+            assert result["cleanup_permitted"] is True
+            assert filesystem_manifest(base / ".release-loop/v1") == source_manifest
+            assert (base / ".release-loop/progress.md").read_bytes() == legacy_path.read_bytes()
+            assert discover(base, ".release-loop/progress.md") == (
+                "resume", base / ".release-loop/progress.md",
+            )
+        elif name == "legacy_handoff_v1_partial_directory_rerun":
+            source = repo
+            base = new_repo(tmp, "v1-partial-base")
+            legacy_path = write_legacy_v1(source)
+            history = legacy_path.parent / "v1/history"
+            history.mkdir()
+            (history / "prior.md").write_text("prior\n", encoding="utf-8")
+            source_before = matrix_fixture_snapshot(source)
+            try:
+                handoff_scope(
+                    source, base, str(legacy_path.relative_to(source)),
+                    legacy_destination=".release-loop", failure="handoff-after-copy-one-file",
+                )
+            except Blocked as exc:
+                assert "injected handoff interruption" in str(exc), str(exc)
+            else:
+                raise AssertionError("V1 file-level interruption did not fire")
+            assert matrix_fixture_snapshot(source) == source_before
+            marker = base / ".release-loop/.handoff/legacy.json"
+            marker_before_retry = marker.read_bytes()
+            assert json.loads(marker_before_retry)["status"] == "incomplete"
+            partial = filesystem_manifest(base / ".release-loop/v1")
+            complete = filesystem_manifest(source / ".release-loop/v1")
+            assert partial and partial != complete
+            assert all(complete.get(relative) == value for relative, value in partial.items())
+            result = handoff_scope(
+                source, base, str(legacy_path.relative_to(source)),
+                legacy_destination=".release-loop",
+            )
+            assert result["cleanup_permitted"] is True
+            assert filesystem_manifest(base / ".release-loop/v1") == complete
+        elif name == "legacy_handoff_v1_destination_mismatch":
+            markerless_source = new_repo(tmp, "v1-mismatch-source-markerless")
+            markerless_base = new_repo(tmp, "v1-mismatch-base-markerless")
+            markerless_progress = write_legacy_v1(markerless_source)
+            markerless_target = markerless_base / ".release-loop/v1"
+            markerless_target.mkdir(parents=True)
+            (markerless_target / "pilot-approval.md").write_bytes(
+                (markerless_source / ".release-loop/v1/pilot-approval.md").read_bytes()
+            )
+            assert_blocked_snapshots(
+                lambda: handoff_scope(
+                    markerless_source, markerless_base,
+                    str(markerless_progress.relative_to(markerless_source)),
+                    legacy_destination=".release-loop",
+                ),
+                markerless_source, markerless_base, "collision",
+            )
+            assert not (markerless_base / ".release-loop/.handoff/legacy.json").exists()
+
+            index_source = new_repo(tmp, "v1-mismatch-source-markerless-index")
+            index_base = new_repo(tmp, "v1-mismatch-base-markerless-index")
+            index_progress = write_legacy_v1(index_source)
+            indexed = index_base / ".release-loop/v1/index-only.md"
+            indexed.parent.mkdir(parents=True)
+            indexed.write_text("indexed\n", encoding="utf-8")
+            git(index_base, "add", "-f", str(indexed.relative_to(index_base)))
+            indexed.unlink()
+            indexed.parent.rmdir()
+            assert not (index_base / ".release-loop/v1").exists()
+            assert_blocked_snapshots(
+                lambda: handoff_scope(
+                    index_source, index_base, str(index_progress.relative_to(index_source)),
+                    legacy_destination=".release-loop",
+                ),
+                index_source, index_base, "collision",
+            )
+            assert not (index_base / ".release-loop/.handoff/legacy.json").exists()
+            for mutation in ("changed", "extra", "index-only"):
+                source = new_repo(tmp, f"v1-mismatch-source-{mutation}")
+                base = new_repo(tmp, f"v1-mismatch-base-{mutation}")
+                legacy_path = write_legacy_v1(source)
+                try:
+                    handoff_scope(
+                        source, base, str(legacy_path.relative_to(source)),
+                        legacy_destination=".release-loop", failure="handoff-after-copy-one-file",
+                    )
+                except Blocked:
+                    pass
+                else:
+                    raise AssertionError("V1 file-level interruption did not fire")
+                if mutation == "changed":
+                    partial_file = next(
+                        path for path in (base / ".release-loop/v1").rglob("*")
+                        if path.is_file()
+                    )
+                    partial_file.write_bytes(b"changed\n")
+                elif mutation == "extra":
+                    (base / ".release-loop/v1/extra.md").write_text("extra\n", encoding="utf-8")
+                else:
+                    indexed = base / ".release-loop/v1/index-only.md"
+                    indexed.write_text("indexed\n", encoding="utf-8")
+                    git(base, "add", "-f", str(indexed.relative_to(base)))
+                    indexed.unlink()
+                assert_blocked_snapshots(
+                    lambda: handoff_scope(
+                        source, base, str(legacy_path.relative_to(source)),
+                        legacy_destination=".release-loop",
+                    ),
+                    source, base, "collision" if mutation == "index-only" else "mismatch",
+                )
+        elif name == "legacy_handoff_v1_symlinks":
+            for mutation in ("root", "nested"):
+                source = new_repo(tmp, f"v1-symlink-source-{mutation}")
+                base = new_repo(tmp, f"v1-symlink-base-{mutation}")
+                legacy_path = write_legacy_v1(source)
+                if mutation == "root":
+                    root = source / ".release-loop/v1"
+                    root.rename(source / ".release-loop/v1-real")
+                    root.symlink_to(source / ".release-loop/v1-real", target_is_directory=True)
+                else:
+                    history = source / ".release-loop/v1/history"
+                    history.mkdir()
+                    (history / "linked.md").symlink_to(source / "README.md")
+                assert_blocked_snapshots(
+                    lambda: handoff_scope(
+                        source, base, str(legacy_path.relative_to(source)),
+                        legacy_destination=".release-loop",
+                    ),
+                    source, base, "V1 root" if mutation == "root" else "symlink",
+                )
+                assert not (base / ".release-loop/.handoff/legacy.json").exists()
+
+            destination_root_source = new_repo(tmp, "v1-destination-root-symlink-source")
+            destination_root_base = new_repo(tmp, "v1-destination-root-symlink-base")
+            destination_root_progress = write_legacy_v1(destination_root_source)
+            destination_real = destination_root_base / ".release-loop/v1-real"
+            destination_real.mkdir(parents=True)
+            (destination_root_base / ".release-loop/v1").symlink_to(
+                destination_real, target_is_directory=True
+            )
+            assert_blocked_snapshots(
+                lambda: handoff_scope(
+                    destination_root_source, destination_root_base,
+                    str(destination_root_progress.relative_to(destination_root_source)),
+                    legacy_destination=".release-loop",
+                ),
+                destination_root_source, destination_root_base, "symlink",
+            )
+            assert not (destination_root_base / ".release-loop/.handoff/legacy.json").exists()
+
+            destination_nested_source = new_repo(tmp, "v1-destination-nested-symlink-source")
+            destination_nested_base = new_repo(tmp, "v1-destination-nested-symlink-base")
+            destination_nested_progress = write_legacy_v1(destination_nested_source)
+            try:
+                handoff_scope(
+                    destination_nested_source, destination_nested_base,
+                    str(destination_nested_progress.relative_to(destination_nested_source)),
+                    legacy_destination=".release-loop", failure="handoff-after-copy-one-file",
+                )
+            except Blocked:
+                pass
+            else:
+                raise AssertionError("V1 file-level interruption did not fire")
+            nested_link = destination_nested_base / ".release-loop/v1/linked.md"
+            nested_link.symlink_to(destination_nested_base / "README.md")
+            assert_blocked_snapshots(
+                lambda: handoff_scope(
+                    destination_nested_source, destination_nested_base,
+                    str(destination_nested_progress.relative_to(destination_nested_source)),
+                    legacy_destination=".release-loop",
+                ),
+                destination_nested_source, destination_nested_base, "symlink",
+            )
+        elif name == "legacy_handoff_source_changed":
+            source = repo
+            base = new_repo(tmp, "v1-source-changed-base")
+            legacy_path = write_legacy_v1(source)
+            try:
+                handoff_scope(
+                    source, base, str(legacy_path.relative_to(source)),
+                    legacy_destination=".release-loop", failure="handoff-after-copy-one-file",
+                )
+            except Blocked:
+                pass
+            else:
+                raise AssertionError("V1 file-level interruption did not fire")
+            (source / ".release-loop/v1/generation-receipt.md").write_text("changed\n", encoding="utf-8")
+            assert_blocked_snapshots(
+                lambda: handoff_scope(
+                    source, base, str(legacy_path.relative_to(source)),
+                    legacy_destination=".release-loop",
+                ),
+                source, base, "active manifest changed",
+            )
+        elif name == "legacy_handoff_complete_rerun":
+            source = repo
+            base = new_repo(tmp, "v1-complete-rerun-base")
+            legacy_path = write_legacy_v1(source)
+            first = handoff_scope(
+                source, base, str(legacy_path.relative_to(source)),
+                legacy_destination=".release-loop",
+            )
+            before = filesystem_manifest(base / ".release-loop")
+            git(base, "add", "-f", ".release-loop/progress.md", ".release-loop/v1")
+            git(base, "commit", "-qm", "fixture committed legacy handoff")
+            second = handoff_scope(
+                source, base, str(legacy_path.relative_to(source)),
+                legacy_destination=".release-loop",
+            )
+            assert first["cleanup_permitted"] is True and second["cleanup_permitted"] is True
+            assert filesystem_manifest(base / ".release-loop") == before
         elif name == "legacy_handoff_cli_contract":
             missing_source = new_repo(tmp, "cli-missing-source")
             missing_base = new_repo(tmp, "cli-missing-base")
