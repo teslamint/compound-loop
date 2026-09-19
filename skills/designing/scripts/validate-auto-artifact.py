@@ -19,6 +19,8 @@ TRADEOFF_HEADER = [
     "Metric it degrades",
     "Measured cost",
 ]
+OBSERVED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+BACKTICKED_COMMAND = re.compile(r"^`[^`\n]+`$")
 SEPARATOR = re.compile(r"^:?-{1,}:?$")
 
 
@@ -114,7 +116,10 @@ def validate_assumptions(section: list[str]) -> None:
     for row_number, row in enumerate(rows, start=1):
         if len(row) != len(ASSUMPTION_HEADER) or any(not cell for cell in row):
             fail(f"assumptions row {row_number} has a blank or malformed field")
-
+        if not BACKTICKED_COMMAND.fullmatch(row[1]):
+            fail(f"assumptions row {row_number} command is not a delimited rerunnable command")
+        if not OBSERVED_AT.fullmatch(row[2]):
+            fail(f"assumptions row {row_number} observed-at value is not an ISO-8601 UTC timestamp")
 
 def validate_tradeoffs(section: list[str]) -> None:
     rows = data_rows(section, TRADEOFF_HEADER, "trade-offs")
@@ -164,6 +169,17 @@ def validate_auto(path: Path) -> None:
     ]
     if mode_entries != ["auto"]:
         fail("frontmatter must contain exactly one mode: auto entry")
+    schema_entries = [
+        line.split(":", 1)[1].strip()
+        for line in frontmatter
+        if line.strip().startswith("schema:")
+    ]
+    if schema_entries == ["plan/v1"]:
+        required_content(
+            lines,
+            [re.compile(r"## Assumption Recheck")],
+            "assumption recheck",
+        )
 
     assumptions = heading_index(lines, re.compile(r"## Assumptions and Preconditions"))
     tradeoffs = heading_index(lines, re.compile(r"## Trade-offs"))

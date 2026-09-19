@@ -149,6 +149,8 @@ mode: auto
 Historical interactive artifacts do not migrate.
 ## Residual Risks
 Authors may still write vague evidence.
+## Assumption Recheck
+The fixture command and timestamp remain current.
 ## Architecture notes
 The selected fixture option is structured.
 ## Success Criteria
@@ -191,6 +193,12 @@ mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-mode.md" "mode: auto" ""
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-mode.md" "missing mode is rejected"
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-assumptions.md" "## Assumptions and Preconditions" "## Preconditions"
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-assumptions.md" "missing assumptions section is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/prose-command.md" "\`printf ok\`" "source is readable"
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/prose-command.md" "prose assumption command is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/bad-timestamp.md" "2026-09-19T00:00:00Z" "yesterday"
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/bad-timestamp.md" "non-timestamp assumption evidence is rejected"
+mutate "$TMP_ROOT/auto-plan.md" "$TMP_ROOT/missing-recheck.md" "## Assumption Recheck" "## Recheck"
+expect_reject "$PLAN_VALIDATOR" "$TMP_ROOT/missing-recheck.md" "missing plan assumption recheck is rejected"
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/blank-assumption.md" "| Source is readable |" "|  |"
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/blank-assumption.md" "blank assumption cell is rejected"
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/blank-tradeoff.md" "| Selected: structured |" "|  |"
