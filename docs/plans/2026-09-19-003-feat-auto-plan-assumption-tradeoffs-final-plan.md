@@ -24,7 +24,7 @@ retained command before mapping units.
 
 | Claim | Command | Observed at | Observed result | Evidence source |
 |---|---|---|---|---|
-| The target skills have no auto-mode contract yet. | `printf 'observed_at='; date -u +%Y-%m-%dT%H:%M:%SZ; python3 -c 'from pathlib import Path; names=("designing","planning"); print("; ".join(n+":auto="+str((Path("skills")/n/"SKILL.md").read_text().count("--auto"))+";tradeoff="+str((Path("skills")/n/"SKILL.md").read_text().lower().count("trade-off"))+";assumption-heading="+str((Path("skills")/n/"SKILL.md").read_text().count("Assumptions and Preconditions")) for n in names))'` | 2026-09-19T13:50:38Z | `designing:auto=0;tradeoff=1;assumption-heading=1; planning:auto=0;tradeoff=0;assumption-heading=0` | Feature worktree at `d17ee7e` |
+| The target skills have no auto-mode contract yet. | `printf 'observed_at='; date -u +%Y-%m-%dT%H:%M:%SZ; python3 -c 'from pathlib import Path; names=("designing","planning"); print("; ".join(n+":auto="+str((Path("skills")/n/"SKILL.md").read_text().count("--auto"))+";tradeoff="+str((Path("skills")/n/"SKILL.md").read_text().lower().count("trade-off"))+";assumption-heading="+str((Path("skills")/n/"SKILL.md").read_text().count("Assumptions and Preconditions")) for n in names))'` | 2026-09-19T13:50:38Z | `designing:auto=0;tradeoff=1;assumption-heading=1; planning:auto=0;tradeoff=0;assumption-heading=0` | Corrected design successor at `ab8ee60` |
 | Existing artifact migration would cover 27 specs and 29 plans. | `printf 'observed_at='; date -u +%Y-%m-%dT%H:%M:%SZ; wc -l skills/designing/SKILL.md skills/planning/SKILL.md; printf 'spec_count='; git ls-files 'docs/specs/*.md' \| wc -l; printf 'plan_count='; git ls-files 'docs/plans/*.md' \| wc -l` | 2026-09-19T13:50:38Z | `spec_count=28; plan_count=29`; the origin-aware follow-up returned `tracked_spec_count=28; excluding_origin=27` at `2026-09-19T13:51:10Z` | Feature worktree; addendum `docs/deviations/2026-09-19-auto-plan-assumption-inventory-001.md` |
 | The existing plugin skill discovery gate passes before this change. | `bash scripts/test-plugin-skill-discovery.sh` | 2026-09-19T13:50:38Z | `13 skills checked, 0 failures; ALL CHECKS PASSED` | Feature worktree command output |
 
@@ -36,8 +36,10 @@ approved scope remains unchanged, and the approved spec remains immutable.
 | Option | Metric it improves | Metric it degrades | Measured cost |
 |---|---|---|---|
 | Rejected: prose-only auto guidance | Smallest patch and no new validation surface | Contract detectability; later edits can remove the rule without a focused failure | Origin evidence measured `0` auto clauses in the target skills; no artifact negative control can run |
-| Selected: auto-only structured contract | Artifact completeness and reviewer visibility while preserving interactive behavior | Skill payload size and duplicated contract text across standalone packages | Bounded target-file diff; no existing specs or plans require migration |
+| Selected: auto-only structured contract | Artifact completeness and reviewer visibility while preserving interactive behavior | Skill payload size and duplicated contract text across standalone packages | `2` standalone validator copies, measured by the 2026-09-19T14:05:58Z validator-copy command; no existing specs or plans require migration |
 | Rejected: contract required in every mode | Uniform artifact shape across all callers | Backward compatibility and authoring cost for non-auto callers | Origin evidence measured `56` existing spec/plan files as the strict-backfill review surface; current scope leaves them unchanged |
+
+Measured-cost provenance: `python3 -c 'from pathlib import Path; print("validator_copies="+str(len(list(Path("skills").glob("*/scripts/validate-auto-artifact.py")))))'` returned `validator_copies=2` at `2026-09-19T14:05:58Z`.
 
 The selected option owns the decision. The focused harness owns contract
 presence and negative-control measurements. The rejected alternatives remain
