@@ -119,9 +119,14 @@ mode: auto
 |---|---|---|---|
 | Selected: structured | detection | prose size | `0` |
 | Rejected: prose-only | patch size | detection | `1 control` |
+## Non-goals
+Historical interactive artifacts do not migrate.
+## Residual Risks
+Authors may still write vague evidence.
 ## Architecture
 The selected fixture option is structured.
 ## Success Criteria
+Measured by this harness; negative controls must fail.
 The validator rejects malformed fixtures.
 EOF
 
@@ -140,12 +145,18 @@ mode: auto
 |---|---|---|---|
 | Selected: structured | detection | prose size | `0` |
 | Rejected: prose-only | patch size | detection | `1 control` |
+## Non-goals
+Historical interactive artifacts do not migrate.
+## Residual Risks
+Authors may still write vague evidence.
 ## Architecture notes
 The selected fixture option is structured.
+## Success Criteria
+Measured by this harness; negative controls must fail.
 ## Implementation Units
 The validator is a fixture dependency.
-EOF
 
+EOF
 cat >"$TMP_ROOT/historical-spec.md" <<'EOF'
 ---
 schema: spec/v1
@@ -188,6 +199,21 @@ mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-status.md" "| Rejected: prose
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-status.md" "missing rejected status is rejected"
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-cost.md" "| \`0\` |" "| zero |"
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-cost.md" "unquantified measured cost is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-nongoals.md" "## Non-goals" "## Goals"
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-nongoals.md" "missing non-goals is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-risks.md" "## Residual Risks" "## Risk Notes"
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-risks.md" "missing residual risks is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-success.md" "## Success Criteria" "## Criteria"
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-success.md" "missing success criteria is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/status-only.md" "| Selected: structured |" "| Selected: |"
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/status-only.md" "status-only selected row is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/duplicate-mode.md" "mode: auto" $'mode: auto\nmode: interactive'
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/duplicate-mode.md" "duplicate mode is rejected"
+if python3 "$DESIGN_VALIDATOR" --mode atuo "$TMP_ROOT/auto-spec.md" >/dev/null 2>&1; then
+  fail "unsupported mode is rejected"
+else
+  pass "unsupported mode is rejected"
+fi
 
 if bash "$REPO_ROOT/scripts/test-plugin-skill-discovery.sh" >/dev/null; then
   pass "plugin skill discovery remains green"
