@@ -2,11 +2,12 @@
 schema: plan/v1
 title: Auto Planning Assumption and Trade-off Contract
 type: feat
-status: approved
+status: superseded
 date: 2026-09-19
 execution: code
 origin: docs/specs/2026-09-19-auto-plan-assumption-tradeoffs-design.md
 body_seal: a4420c0183888602deebfdb73db50c8c9b9c5f756c0e0b8577ad2aeb7b5dad74
+superseded_by: docs/plans/2026-09-19-002-feat-auto-plan-assumption-tradeoffs-correction-plan.md
 ---
 
 # Auto Planning Assumption and Trade-off Contract Plan
