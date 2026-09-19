@@ -1,7 +1,7 @@
 ---
 module: release-loop
 date: "2026-08-15"
-last_updated: "2026-09-03"
+last_updated: "2026-09-09"
 problem_type: workflow_issue
 component: loop-state-lifecycle
 severity: medium
@@ -115,6 +115,17 @@ lifecycle contract gap, not a failure of run-integrity success criteria. After
 first-hand USER approval, create a recovery branch at the verified merged SHA.
 Run Retro and archive before cleanup. The durable follow-up is an explicit,
 collision-safe legacy destination with an acceptance matrix.
+
+V1 evidence is not a generic allowlist exception. Issue #31 showed that Ship
+required `.release-loop/v1`, while legacy handoff rejected it before transfer.
+Admit V1 only after the accepted pre-merge verification proves its ownership,
+paths, and digests. Transfer it under the existing manifest. Archive it before
+the `progress.md` commit point. Keep unowned entries rejected. PR #32 also added
+the previously missing changed-source and complete-rerun selectors plus a
+file-level interruption hook. These controls prove retry safety without granting
+authority to unrelated files. See
+`docs/specs/2026-08-31-legacy-handoff-v1-evidence-design.md` and
+`docs/plans/2026-08-31-001-fix-legacy-handoff-v1-evidence-plan.md`.
 
 A ledger summary is not a verification transcript. Preserve bounded raw failure
 output, exact environment observations, and both RED and GREEN results before
