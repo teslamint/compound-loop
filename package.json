@@ -1,0 +1,10 @@
+{
+  "name": "compound-loop",
+  "version": "0.11.0-dev.3",
+  "private": true,
+  "description": "Cross-harness engineering lifecycle skills: design, plan, implement, review, ship, retrospect, and compound knowledge.",
+  "license": "MIT",
+  "omp": {
+    "skills": ["./skills"]
+  }
+}
