@@ -190,9 +190,9 @@ def validate_auto(path: Path) -> None:
         "residual risks",
     )
     success = required_content(lines, [re.compile(r"## Success Criteria")], "success criteria")
-    if not re.search(r"Measured by|`(?:bash|python3) ", success):
-        fail("success criteria has no proving command or measurement")
-    if "control" not in success.casefold():
+    if not re.search(r"`(?:bash|python3|sh) [^`]+`", success):
+        fail("success criteria has no concrete proving command")
+    if not re.search(r"negative[- ]controls?", success.casefold()):
         fail("success criteria has no negative-control requirement")
 
 

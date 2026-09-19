@@ -126,7 +126,7 @@ Authors may still write vague evidence.
 ## Architecture
 The selected fixture option is structured.
 ## Success Criteria
-Measured by this harness; negative controls must fail.
+Measured by: `bash scripts/test-auto-artifact-contract.sh`; negative controls must fail.
 The validator rejects malformed fixtures.
 EOF
 
@@ -152,7 +152,7 @@ Authors may still write vague evidence.
 ## Architecture notes
 The selected fixture option is structured.
 ## Success Criteria
-Measured by this harness; negative controls must fail.
+Measured by: `bash scripts/test-auto-artifact-contract.sh`; negative controls must fail.
 ## Implementation Units
 The validator is a fixture dependency.
 
@@ -207,6 +207,10 @@ mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-success.md" "## Success Crite
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-success.md" "missing success criteria is rejected"
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/status-only.md" "| Selected: structured |" "| Selected: |"
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/status-only.md" "status-only selected row is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-proving-command.md" "Measured by: \`bash scripts/test-auto-artifact-contract.sh\`" "Measured by this harness"
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-proving-command.md" "missing proving command is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/unrelated-control.md" "negative controls" "source control"
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/unrelated-control.md" "unrelated control phrase is rejected"
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/duplicate-mode.md" "mode: auto" $'mode: auto\nmode: interactive'
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/duplicate-mode.md" "duplicate mode is rejected"
 if python3 "$DESIGN_VALIDATOR" --mode atuo "$TMP_ROOT/auto-spec.md" >/dev/null 2>&1; then
