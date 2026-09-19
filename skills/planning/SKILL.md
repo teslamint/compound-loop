@@ -33,6 +33,42 @@ When skipping, attest that all four conditions hold, citing the work's scope, th
 
 One compressed confirmation before spending research or authoring budget: state the scope read from the spec (stated intent plus any material forks) and ask the user to confirm or redirect, using the blocking-question pattern in `references/question-tools.md` at the plugin root. Skip the confirmation only for a trivial, single-unit plan with zero forks — proceed and say so in one line. When invoked as a dispatched phase worker under an AUTO gate (release-loop pipeline), this question is the orchestrator's to ask or waive — state the read scope in the ledger/log and proceed rather than blocking.
 
+## Auto mode contract
+
+When `release-loop` supplies an exact `progress_path`, validate that ledger
+before planning. Require its `artifact_root` to match the ledger directory,
+reject unsafe paths, and select auto mode only when `flags` contains `--auto`.
+Interactive planning keeps its existing contract and approval gate.
+
+For auto mode, write `mode: auto` in frontmatter. Place the following sections
+before Architecture notes and Implementation Units:
+
+## Assumptions and Preconditions
+
+Use a five-field evidence table with exact columns `Claim`, `Command`, `Observed at`, `Observed result`, and `Evidence source`. Every live-assumption cell must
+be non-empty. If no live assumption exists, write one explicit non-empty
+`no-live-assumptions` statement.
+
+## Trade-offs
+
+Use the exact columns `Option`, `Metric it improves`, `Metric it degrades`,
+and `Measured cost`. Every data cell must be non-empty, every measured cost
+must contain an ASCII digit, and rows must include `Selected:` plus either
+`Rejected:` or `No rejected alternative:`.
+
+Retain the separate `Assumption Recheck` section as the fresh-evidence
+authority. Record non-goals and residual risks. State the selected option and
+why each rejected option loses on its named metric. Run the standalone
+validator before committing:
+
+```sh
+python3 skills/planning/scripts/validate-auto-artifact.py --mode auto <plan-path>
+```
+
+If exact ledger selection, the explicit assumption and trade-off sections,
+non-goals, residual risks, or validator controls cannot be preserved, stop and
+return to the Design gate. Do not infer either section from arbitrary prose.
+
 ## 3. Context research
 
 Plans are written for a zero-context implementer, which makes the planner the one who must carry the context (`enforces: P5` — reuse before new).
