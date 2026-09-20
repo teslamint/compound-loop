@@ -2,12 +2,13 @@
 schema: plan/v1
 title: Auto Planning Assumption and Trade-off Coverage Plan
 type: feat
-status: approved
+status: superseded
 date: 2026-09-20
 execution: code
 origin: docs/specs/2026-09-20-auto-plan-assumption-tradeoffs-coverage-design.md
 mode: auto
 body_seal: 933e2764a3ed479d3f7370915acb18ea9f351ca6ea1fc74f2c14a9c9e4ae5576
+superseded_by: docs/plans/2026-09-20-006-feat-auto-plan-assumption-tradeoffs-coverage-authority-plan.md
 ---
 
 # Auto Planning Assumption and Trade-off Coverage Plan

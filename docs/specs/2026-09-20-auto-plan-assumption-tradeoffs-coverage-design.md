@@ -1,6 +1,6 @@
 ---
 title: Auto Planning Assumption and Trade-off Coverage Design
-status: approved
+status: superseded
 date: 2026-09-20
 schema: spec/v1
 mode: auto
