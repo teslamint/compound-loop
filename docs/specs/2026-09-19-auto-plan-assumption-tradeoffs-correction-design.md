@@ -1,6 +1,6 @@
 ---
 title: Auto Planning Assumption and Trade-off Records Correction
-status: approved
+status: superseded
 date: 2026-09-19
 schema: spec/v1
 mode: auto
