@@ -80,6 +80,7 @@ DESIGNING="$REPO_ROOT/skills/designing/SKILL.md"
 PLANNING="$REPO_ROOT/skills/planning/SKILL.md"
 DESIGN_VALIDATOR="$REPO_ROOT/skills/designing/scripts/validate-auto-artifact.py"
 PLAN_VALIDATOR="$REPO_ROOT/skills/planning/scripts/validate-auto-artifact.py"
+AUTHORITY_SPEC="$REPO_ROOT/docs/specs/2026-09-20-auto-plan-assumption-tradeoffs-coverage-authority-design.md"
 
 require_literal "$DESIGNING" "mode: auto" "designing declares auto mode"
 require_literal "$DESIGNING" "Assumptions and Preconditions" "designing declares assumptions section"
@@ -102,6 +103,14 @@ if [ -f "$DESIGN_VALIDATOR" ] && [ -f "$PLAN_VALIDATOR" ] && cmp -s "$DESIGN_VAL
   pass "standalone validators are byte-identical"
 else
   fail "standalone validators are byte-identical"
+fi
+if [ -f "$AUTHORITY_SPEC" ]; then
+  require_literal "$AUTHORITY_SPEC" "assert flag_values == ['[--auto]']" \
+    "coverage measurement asserts auto ledger flag"
+  require_literal "$AUTHORITY_SPEC" "assert set(fields) == {'spec', 'plan'}" \
+    "coverage measurement uses ledger spec and plan paths"
+else
+  pass "coverage authority fixture absent outside release run"
 fi
 
 cat >"$TMP_ROOT/auto-spec.md" <<'EOF'
