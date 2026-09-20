@@ -28,7 +28,7 @@ successor design records the coverage contract and the measured sample.
 ## Measurement
 
 The rerunnable Population and Coverage command in the successor design ran at
-`2026-09-20T02:19:58Z`. It validated the two artifacts named by the
+`2026-09-20T02:38:06Z`. It validated the two artifacts named by the
 authoritative ledger. It tested 17 fixed malformed mutations: the standalone
 validators detected 17/17, the downstream harness observed 17/17, validator
 recall was `1.000`, harness incremental recall was `0.000`, and stacked recall

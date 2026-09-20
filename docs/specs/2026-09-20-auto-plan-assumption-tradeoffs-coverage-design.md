@@ -256,6 +256,13 @@ root = Path('.')
 ledger = root / '.release-loop/runs/auto-plan-assumption-tradeoffs/progress.md'
 observed = subprocess.check_output(['date', '-u', '+%Y-%m-%dT%H:%M:%SZ'], text=True).strip()
 fields = {}
+ledger_lines = ledger.read_text(encoding='utf-8').splitlines()
+flag_values = [
+    line.split(':', 1)[1].strip()
+    for line in ledger_lines
+    if line.startswith('flags:')
+]
+assert flag_values == ['[--auto]']
 for line in ledger.read_text(encoding='utf-8').splitlines():
     match = re.match(r'^(spec|plan):\s+(.+)$', line)
     if match:
@@ -294,7 +301,7 @@ print(f'validator_detected_mutants={len(observed_labels)}/{len(expected)}; '
 PY
 ```
 
-Observed at `2026-09-20T02:19:58Z`: production population 2, validator
+Observed at `2026-09-20T02:38:06Z`: production population 2, validator
 detection 17/17, downstream harness observation 17/17, validator recall
 `1.000`, harness incremental recall `0.000`, and stacked recall `1.000`.
 The harness is downstream of the validator, so its incremental recall is
