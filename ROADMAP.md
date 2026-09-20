@@ -66,7 +66,8 @@ Open items registered by retro docs (`docs/retros/`), pushed here per `retrospec
 | Post-merge fix claims retain summarized results but not publisher-owned raw failure and RED/GREEN traces | 2026-08-25 run-artifact-integrity retro (T3) | P2 | Next merged-result failure that creates a follow-up — publish bounded raw output and exact environment observations before citing root cause |
 | Two spec-declared test case names (`legacy_handoff_source_changed`, `legacy_handoff_complete_rerun`) were never implemented; add them to close the SC3/SC4 measurement gap | 2026-08-25 legacy-handoff-contract retro (T2) | P2 | Next change to legacy handoff test cases or spec measurement contract |
 | Add a mid-directory-copy fault injection (`handoff-after-copy-one-file`) to exercise partial-directory recovery directly | 2026-08-25 legacy-handoff-contract retro (T3) | P3 | Next change to handoff fault injection or recovery code |
-| Structured review events must be populated when `completeness: exact` — either use the event system or downgrade to `partial` | 2026-08-25 legacy-handoff-contract retro | P3 | Next review phase that sets `completeness: exact` |
+| ~~Structured review events must be populated when `completeness: exact` — either use the event system or downgrade to `partial`~~ **Done** | 2026-08-25 legacy-handoff-contract retro; resolved 2026-09-20 auto-plan-assumption-tradeoffs retro (T1) | P3 | Resolved: events 1–3 use publisher-owned wrappers, and the ledger explicitly retains `completeness: partial` rather than claiming exact historical coverage |
+| Review re-review verification must be executable rather than manual ledger editing | 2026-09-19 auto-plan-assumption-tradeoffs retro (T2) | P2 | Next change to reviewing or implementing review-event operations — expose a packaged `verify_re_review` path that validates source/result inventories and writes fixed dispositions atomically |
 
 ## Non-goals (re-affirmed)
 
