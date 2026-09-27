@@ -88,7 +88,7 @@ Write a 2-3 line intent summary (PR title/body, commits, `plan:`, conversation) 
 
 ## Step 4: Dispatch
 
-Degradation ladder per `references/dispatch-degradation.md` (native parallel -> sequential passes -> single-call fallback; capacity errors are backpressure, never lane failure). **Model tiering**: `correctness`, `security`, and `adversarial` inherit the session model (highest-stakes analysis); every other lane runs on the harness's mid-tier model. The orchestrating pass (this skill) also inherits the session model.
+Degradation ladder per `references/dispatch-degradation.md` (plugin root; native parallel -> sequential passes -> single-call fallback; capacity errors are backpressure, never lane failure). **Model tiering**: `correctness`, `security`, and `adversarial` inherit the session model (highest-stakes analysis); every other lane runs on the harness's mid-tier model. The orchestrating pass (this skill) also inherits the session model.
 
 For each integrity mechanism, add one invariant-attack instruction to the dispatch. It asks for the cheapest artifact that satisfies every written check while violating the mechanism's stated guarantee. Keep conformance review as a separate obligation.
 

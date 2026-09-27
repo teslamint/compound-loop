@@ -99,6 +99,36 @@ if bad:
 print("ok:   all enforces: tags reference existing principles")
 PY
 
+# 5a. Shared root references: single copy, and skill citations name the plugin root
+python3 - "$ROOT" <<'PY' || FAIL=1
+import sys, pathlib
+root = pathlib.Path(sys.argv[1])
+shared = sorted(p.name for p in (root / "references").glob("*.md"))
+# A bare `references/<name>` inside a skill reads as skill-local; these must say where it lives.
+root_qualified = ["dispatch-degradation.md"]
+markers = ("plugin root", "repo root", "repo-root")
+bad = []
+for name in root_qualified:
+    if name not in shared:
+        bad.append(f"references/{name} missing")
+for name in shared:
+    for copy in sorted(root.glob(f"skills/*/references/{name}")):
+        bad.append(f"{copy.relative_to(root)} shadows shared references/{name}")
+for f in sorted(root.glob("skills/**/*.md")):
+    try:
+        lines = f.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        bad.append(f"{f.relative_to(root)}: unreadable ({exc.strerror or exc})")
+        continue
+    for n, line in enumerate(lines, 1):
+        for name in root_qualified:
+            if f"`references/{name}`" in line and not any(m in line for m in markers):
+                bad.append(f"{f.relative_to(root)}:{n} cites references/{name} without naming the plugin root")
+if bad:
+    print("FAIL: " + "; ".join(bad)); sys.exit(1)
+print(f"ok:   shared references ({', '.join(shared)}) have one copy; root-qualified citations name the plugin root")
+PY
+
 # 6. Terminal signal lines in consumer SKILL.md files match schemas/headless-contract.md
 python3 - "$ROOT" <<'PY' || FAIL=1
 import re, sys, pathlib

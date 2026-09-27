@@ -28,7 +28,7 @@ Strip a leading `mode:headless` token from arguments before treating the remaind
 
 ### Phase 1: Parallel Research
 
-Dispatch per `references/dispatch-degradation.md` (native parallel → sequential passes → single-call fallback; correctness never depends on tier 1):
+Dispatch per `references/dispatch-degradation.md` (plugin root; native parallel → sequential passes → single-call fallback; correctness never depends on tier 1):
 
 - **Context Analyzer** — determines track and category from `references/schema.md`, drafts the frontmatter skeleton, suggests a filename (`[problem-slug].md`, no date suffix — `date:` frontmatter is the canonical date).
 - **Solution Extractor** — writes the track-appropriate body sections (bug: Problem/Symptoms/What Didn't Work/Solution/Why This Works/Prevention; knowledge: Context/Guidance/Why This Matters/When to Apply/Examples).

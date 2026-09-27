@@ -115,7 +115,7 @@ Requirements get stable R-IDs, grouped by concern, only when the spec's scope wa
 
 ## Step 10: Independent Review Gate
 
-Before the user sees the spec, get a review from a fresh perspective — distinct from the user's own review in Step 12. Dispatch per `references/dispatch-degradation.md`: native reviewer subagent (most capable model) first; the `advisor` tool if the harness provides one and no subagent primitive exists; if neither is available, state that explicitly and perform a distanced self-review pass instead of skipping silently.
+Before the user sees the spec, get a review from a fresh perspective — distinct from the user's own review in Step 12. Dispatch per `references/dispatch-degradation.md` (plugin root): native reviewer subagent (most capable model) first; the `advisor` tool if the harness provides one and no subagent primitive exists; if neither is available, state that explicitly and perform a distanced self-review pass instead of skipping silently.
 
 Treat independent review as mandatory for schema or pipeline changes, not optional ceremony. Schema or pipeline changes cannot proceed without an independent reviewer; distanced self-review does not satisfy this requirement for such changes.
 
