@@ -31,7 +31,7 @@ When skipping, attest that all four conditions hold, citing the work's scope, th
 
 ## 2. Scope confirmation
 
-One compressed confirmation before spending research or authoring budget: state the scope read from the spec (stated intent plus any material forks) and ask the user to confirm or redirect, using the blocking-question pattern in `references/question-tools.md`. Skip the confirmation only for a trivial, single-unit plan with zero forks — proceed and say so in one line. When invoked as a dispatched phase worker under an AUTO gate (release-loop pipeline), this question is the orchestrator's to ask or waive — state the read scope in the ledger/log and proceed rather than blocking.
+One compressed confirmation before spending research or authoring budget: state the scope read from the spec (stated intent plus any material forks) and ask the user to confirm or redirect, using the blocking-question pattern in `references/question-tools.md` at the plugin root. Skip the confirmation only for a trivial, single-unit plan with zero forks — proceed and say so in one line. When invoked as a dispatched phase worker under an AUTO gate (release-loop pipeline), this question is the orchestrator's to ask or waive — state the read scope in the ledger/log and proceed rather than blocking.
 
 ## 3. Context research
 

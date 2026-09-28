@@ -19,7 +19,7 @@ Strip a leading `mode:headless` token from arguments before treating the remaind
 
 | Mode | Behavior |
 |---|---|
-| **Interactive** (default) | Ask Full vs. Lightweight via the blocking-question pattern in `references/question-tools.md`; Full mode may also offer session-history search |
+| **Interactive** (default) | Ask Full vs. Lightweight via the blocking-question pattern in `references/question-tools.md` at the plugin root; Full mode may also offer session-history search |
 | **Headless** | No questions. Run **Full mode** without session history. Apply Discoverability edits silently if a gap exists. Skip the optional-review phase. End with the exact terminal signal from `schemas/headless-contract.md` |
 
 ## Full Mode

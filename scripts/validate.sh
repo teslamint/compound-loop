@@ -105,7 +105,7 @@ import sys, re, pathlib
 root = pathlib.Path(sys.argv[1])
 shared = sorted(p.name for p in (root / "references").glob("*.md"))
 # A bare `references/<name>` inside a skill reads as skill-local; these must say where it lives.
-root_qualified = ["dispatch-degradation.md"]
+root_qualified = ["dispatch-degradation.md", "question-tools.md"]
 markers = ("plugin root", "repo root", "repo-root")
 bad = []
 for name in root_qualified:
