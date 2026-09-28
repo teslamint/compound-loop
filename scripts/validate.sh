@@ -106,7 +106,8 @@ root = pathlib.Path(sys.argv[1])
 shared = sorted(p.name for p in (root / "references").glob("*.md"))
 # A bare `references/<name>` inside a skill reads as skill-local; these must say where it lives.
 root_qualified = ["dispatch-degradation.md", "question-tools.md"]
-markers = ("plugin root", "repo root", "repo-root")
+# The marker must qualify the citation itself: "`references/x.md` at the plugin root" or "(plugin root".
+qualifier = re.compile(r"`?\s*(?:\(\s*|at the )(?:plugin root|repo root|repo-root)")
 bad = []
 for name in root_qualified:
     if name not in shared:
@@ -122,9 +123,9 @@ for f in sorted(root.glob("skills/**/*.md")):
         continue
     for n, line in enumerate(lines, 1):
         for name in root_qualified:
-            cited = re.search(r"(?<![\w./-])references/" + re.escape(name), line)
-            if cited and not any(m in line for m in markers):
-                bad.append(f"{f.relative_to(root)}:{n} cites references/{name} without naming the plugin root")
+            for cited in re.finditer(r"(?<![\w./-])(?:\./)?references/" + re.escape(name), line):
+                if not qualifier.match(line, cited.end()):
+                    bad.append(f"{f.relative_to(root)}:{n} cites references/{name} without naming the plugin root")
 if bad:
     print("FAIL: " + "; ".join(bad)); sys.exit(1)
 print(f"ok:   shared references ({', '.join(shared)}) have one copy; root-qualified citations name the plugin root")
