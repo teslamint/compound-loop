@@ -7,7 +7,7 @@
       "path": "skills/release-loop/SKILL.md",
       "heading": "# Release Loop",
       "text": "| 1 | Design | `designing` | **USER** — always human, never auto-skip |",
-      "sha256": "6f638235acd2dd113c1ba7d7b48527ca0c974f0750efefa28196318aadcb89df"
+      "sha256": "b031b02447913c12291af6e2a26308dcb626d7de0ee3a55d759739dd32bea45e"
     },
     {
       "id": "resume-after-merge",
@@ -35,7 +35,7 @@
       "path": "skills/release-loop/SKILL.md",
       "heading": "## Gate handling",
       "text": "- Before answering a pending USER gate, require exactly one valid `pending_gate` from `references/progress-schema.md`.",
-      "sha256": "5f7ef50ec759e06e081f7cd2986475bbaf6b9ca2a0daee492874017ea7d25442"
+      "sha256": "2f29e93247b5cb106b783cb63dc1bded352cb1662dec49105d68ff3b1f8cea3c"
     },
     {
       "id": "pending-gate-schema",

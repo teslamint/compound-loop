@@ -3,6 +3,6 @@
   "state": "bootstrap",
   "approved_spec": "docs/specs/2026-08-24-release-loop-conformance-fuzzing-design.md",
   "approved_spec_sha256": "2cde033379b87d6c8eb92ea32ea3800a82625d86056da496343a91cf0bd8930b",
-  "source_generation": "0397746ca681e86784ca2ba717da01934c7788df982836a0caac3541e3498345",
+  "source_generation": "7ab46dfd4e2d45fd6e82d6cdb48e6c83ec92d7d6a87a4b8dfa1c25848c92c53f",
   "roadmap_item": "Conformance suite"
 }

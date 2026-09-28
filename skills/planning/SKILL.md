@@ -173,7 +173,7 @@ Fix issues inline; no separate review pass is needed.
 
 ## 15. Deepening pass
 
-After self-review, run the confidence check in `references/deepening.md`: six trigger categories score the plan (vague rationale, missing risk treatment, weak sequencing, thin external grounding, unclear verification, thin scenario coverage) — skip deepening entirely when nothing scores. When triggered, dispatch reviewer personas — Architecture and Feasibility always-on, Security/Risk and Scope/Coherence conditional on activation signals — per the dispatch ladder in `references/dispatch-degradation.md` (native parallel → sequential passes; correctness never depends on parallelism being available). Change discipline: tightening prose is in scope; writing implementation code is not; U-IDs are never renumbered; superseded text is resolved in place, never stacked as a separate layer.
+After self-review, run the confidence check in `references/deepening.md`: six trigger categories score the plan (vague rationale, missing risk treatment, weak sequencing, thin external grounding, unclear verification, thin scenario coverage) — skip deepening entirely when nothing scores. When triggered, dispatch reviewer personas — Architecture and Feasibility always-on, Security/Risk and Scope/Coherence conditional on activation signals — per the dispatch ladder in `references/dispatch-degradation.md` (plugin root; native parallel → sequential passes; correctness never depends on parallelism being available). Change discipline: tightening prose is in scope; writing implementation code is not; U-IDs are never renumbered; superseded text is resolved in place, never stacked as a separate layer.
 
 ## 16. Outstanding-question triage
 
