@@ -101,7 +101,7 @@ PY
 
 # 5a. Shared root references: single copy, and skill citations name the plugin root
 python3 - "$ROOT" <<'PY' || FAIL=1
-import sys, pathlib
+import sys, re, pathlib
 root = pathlib.Path(sys.argv[1])
 shared = sorted(p.name for p in (root / "references").glob("*.md"))
 # A bare `references/<name>` inside a skill reads as skill-local; these must say where it lives.
@@ -122,7 +122,8 @@ for f in sorted(root.glob("skills/**/*.md")):
         continue
     for n, line in enumerate(lines, 1):
         for name in root_qualified:
-            if f"`references/{name}`" in line and not any(m in line for m in markers):
+            cited = re.search(r"(?<![\w./-])references/" + re.escape(name), line)
+            if cited and not any(m in line for m in markers):
                 bad.append(f"{f.relative_to(root)}:{n} cites references/{name} without naming the plugin root")
 if bad:
     print("FAIL: " + "; ".join(bad)); sys.exit(1)
