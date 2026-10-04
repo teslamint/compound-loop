@@ -63,7 +63,7 @@ Before proposing approaches, scan the opening for gaps: evidence, specificity, c
 
 ## Step 6: Collaborative Dialogue
 
-Follow `references/question-tools.md` for the blocking-tool table and the open-ended-vs-menu test. Ask what the user is already thinking before offering your own framing. Start broad (problem, users, value), then narrow (constraints, exclusions, edge cases). All rigor-gap probes from Step 5 must fire before Step 7.
+Follow `references/question-tools.md` (plugin root) for the blocking-tool table and the open-ended-vs-menu test. Ask what the user is already thinking before offering your own framing. Start broad (problem, users, value), then narrow (constraints, exclusions, edge cases). All rigor-gap probes from Step 5 must fire before Step 7.
 
 **Integration check before exiting dialogue**: mentally combine what's been said so far (user-stated X + user-stated Y + your default Z) and probe any non-obvious downstream consequence the one-question-at-a-time flow hasn't surfaced yet — one probe per genuine combination effect.
 

@@ -384,7 +384,7 @@ Present one review packet before asking anything:
    `Release v<resolved-version>`.
 
 Use the harness's blocking question tool per
-`references/question-tools.md`. Ask one single-select question with these
+`references/question-tools.md` at the plugin root. Ask one single-select question with these
 distinct outcomes: **Approve this exact release** (recommended), **Revise the
 draft or version**, and **Cancel the release**. A revision returns to Draft or
 Version and presents a new complete packet; rewrite `.release/draft.md` before
