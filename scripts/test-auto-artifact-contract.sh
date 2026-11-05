@@ -69,18 +69,27 @@ expect_reject() {
   validator="$1"
   fixture="$2"
   label="$3"
-  if python3 "$validator" --mode auto "$fixture" >/dev/null 2>&1; then
-    fail "$label"
-  else
+  status=0
+  err="$(python3 "$validator" --mode auto "$fixture" 2>&1 >/dev/null)" || status=$?
+  if [ "$status" -eq 1 ] && printf '%s\n' "$err" | grep -q '^validate-auto-artifact: ' &&
+     ! printf '%s\n' "$err" | grep -q 'Traceback'; then
     pass "$label"
+  else
+    fail "$label"
   fi
 }
+
 
 DESIGNING="$REPO_ROOT/skills/designing/SKILL.md"
 PLANNING="$REPO_ROOT/skills/planning/SKILL.md"
 DESIGN_VALIDATOR="$REPO_ROOT/skills/designing/scripts/validate-auto-artifact.py"
 PLAN_VALIDATOR="$REPO_ROOT/skills/planning/scripts/validate-auto-artifact.py"
 AUTHORITY_SPEC="$REPO_ROOT/docs/specs/2026-09-20-auto-plan-assumption-tradeoffs-coverage-authority-design.md"
+require_literal "$DESIGNING" "progress_path" "designing pins release ledger path"
+require_literal "$DESIGNING" "flags" "designing reads ledger flags"
+require_literal "$DESIGNING" "--auto" "designing selects auto mode by flag"
+require_literal "$DESIGNING" "symlinked" "designing rejects symlinked ledger"
+require_literal "$DESIGNING" "out-of-root" "designing rejects ledger outside repository"
 
 require_literal "$DESIGNING" "mode: auto" "designing declares auto mode"
 require_literal "$DESIGNING" "Assumptions and Preconditions" "designing declares assumptions section"
@@ -198,6 +207,14 @@ Path(target).write_text(text.replace(old, new, 1), encoding="utf-8")
 PY
 }
 
+assert_command_accept() {
+  command="$1"
+  mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/arbitrary-command.md" \
+    "bash scripts/test-auto-artifact-contract.sh" "$command"
+  expect_accept "$DESIGN_VALIDATOR" auto "$TMP_ROOT/arbitrary-command.md" \
+    "success criterion accepts $command"
+}
+
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-mode.md" "mode: auto" ""
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-mode.md" "missing mode is rejected"
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-assumptions.md" "## Assumptions and Preconditions" "## Preconditions"
@@ -226,8 +243,49 @@ mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/status-only.md" "| Selected: structur
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/status-only.md" "status-only selected row is rejected"
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/missing-proving-command.md" "Measured by: \`bash scripts/test-auto-artifact-contract.sh\`" "Measured by this harness"
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-proving-command.md" "missing proving command is rejected"
+for non_command in 'progress_path' 'mode: auto'; do
+  mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/non-command-span.md" \
+    "Measured by: \`bash scripts/test-auto-artifact-contract.sh\`" "Measured by \`$non_command\`"
+  expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/non-command-span.md" "non-command code span \`$non_command\` is rejected"
+done
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/unrelated-control.md" "negative controls" "source control"
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/unrelated-control.md" "unrelated control phrase is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/negated-control.md" \
+  "negative controls must fail" "No negative controls are required."
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/negated-control.md" "negated negative-control requirement is rejected"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/no-live-malformed.md" \
+  "| Source is readable |" "|  |"
+mutate "$TMP_ROOT/no-live-malformed.md" "$TMP_ROOT/no-live-malformed.md" \
+  "## Assumptions and Preconditions" $'## Assumptions and Preconditions\nno-live-assumptions'
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/no-live-malformed.md" "no-live marker does not bypass table validation"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/nongoals-subheading.md" \
+  "## Non-goals" "### Out"
+mutate "$TMP_ROOT/nongoals-subheading.md" "$TMP_ROOT/nongoals-subheading.md" \
+  "Historical interactive artifacts do not migrate." $'### Additional scope\nThis text is not a non-goal.'
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/nongoals-subheading.md" "same-level subheading cannot satisfy empty Out section"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/fenced-heading.md" \
+  "## Assumptions and Preconditions" $'````markdown\n## Assumptions and Preconditions\n| Claim | Command | Observed at | Observed result | Evidence source |\n| fake | `echo fake` | 2026-09-19T00:00:00Z | fake | fake |\n```\n````\n## Assumptions and Preconditions'
+expect_accept "$DESIGN_VALIDATOR" auto "$TMP_ROOT/fenced-heading.md" "short fence marker does not close long fence"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/fenced-only-assumptions.md" \
+  "## Assumptions and Preconditions" "## Preconditions"
+mutate "$TMP_ROOT/fenced-only-assumptions.md" "$TMP_ROOT/fenced-only-assumptions.md" \
+  "## Trade-offs" $'```\n## Assumptions and Preconditions\n| Claim | Command | Observed at | Observed result | Evidence source |\n| fake | `echo fake` | 2026-09-19T00:00:00Z | fake | fake |\n```\n## Trade-offs'
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/fenced-only-assumptions.md" "fenced headings and tables do not satisfy required sections"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/assumptions-after-success.md" \
+  "## Assumptions and Preconditions" "## Preconditions"
+mutate "$TMP_ROOT/assumptions-after-success.md" "$TMP_ROOT/assumptions-after-success.md" \
+  "## Architecture" $'## Architecture\n## Assumptions and Preconditions'
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/assumptions-after-success.md" "assumptions after architecture are rejected"
+mutate "$TMP_ROOT/auto-plan.md" "$TMP_ROOT/tradeoffs-after-units.md" "## Trade-offs" "## Tradeoffs"
+mutate "$TMP_ROOT/tradeoffs-after-units.md" "$TMP_ROOT/tradeoffs-after-units.md" \
+  "The validator is a fixture dependency." $'The validator is a fixture dependency.\n## Trade-offs'
+expect_reject "$PLAN_VALIDATOR" "$TMP_ROOT/tradeoffs-after-units.md" "trade-offs after implementation units are rejected"
+mutate "$TMP_ROOT/auto-plan.md" "$TMP_ROOT/quoted-mode-schema.md" "schema: plan/v1" 'schema: "plan/v1"'
+mutate "$TMP_ROOT/quoted-mode-schema.md" "$TMP_ROOT/quoted-mode-schema.md" "mode: auto" 'mode: "auto"'
+expect_accept "$PLAN_VALIDATOR" auto "$TMP_ROOT/quoted-mode-schema.md" "quoted plan mode and schema are normalized"
+for proving_command in 'npm test' 'pytest tests/foo.py' 'go test ./...'; do
+  assert_command_accept "$proving_command"
+done
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/duplicate-mode.md" "mode: auto" $'mode: auto\nmode: interactive'
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/duplicate-mode.md" "duplicate mode is rejected"
 if python3 "$DESIGN_VALIDATOR" --mode atuo "$TMP_ROOT/auto-spec.md" >/dev/null 2>&1; then
