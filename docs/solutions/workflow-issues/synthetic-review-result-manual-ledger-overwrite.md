@@ -81,13 +81,14 @@ when the review never ran.
    review the new head fresh, and publish the verbatim reviewer output
    through the packaged phase publisher, which validates the wrapper against
    the body manifest and persists the final SHA-256.
-4. Let the findings flip through the only authorized writer: the packaged
-   verifying re-review operation records source fingerprints as `fixed` only
-   after it validates the explicit linkage, sequential source, sealed source
-   and current inventories, and absence of the findings in the new inventory.
-   The generic disposition operation records only reasoned `deferred`; it
-   rejects `fixed` from every caller. There is no fallback where a human or
-   agent hand-authors `fixed`.
+4. A verifying re-review operation is not currently available as a packaged
+   operation in this repository. The generic disposition operation rejects
+   `fixed`, and no other packaged writer can record it. Until the missing
+   operation is implemented (`ROADMAP.md` carry-forward row "Review re-review
+   verification must be executable"), stop this recovery flow before
+   attempting to mark findings fixed or restore the Ship gate.
+   Preserve the source worktree and its ledger unchanged. Do not hand-author
+   `fixed` or define an alternate transfer or verification procedure.
 5. Derive counters; never compute them. After the rebuilt chain, derived
    totals reflected the real state (`final_passes: 2`, `findings_fixed: 2`)
    without anyone incrementing a field.
@@ -95,16 +96,17 @@ when the review never ran.
    one instead of leaving operators with manual edits as the only path —
    a missing packaged verification operation is precisely what made the
    synthetic attempt tempting.
-7. Recovering from a discovered manual edit: discard the synthetic state,
-   re-publish the authoritative rows through the packaged publisher, and
-   rebuild the chain through operations. Do not "finish" the fabrication.
+7. Recovering from a discovered manual edit: do not finish or transfer the
+   synthetic state. Preserve the source worktree and its ledger unchanged.
+   The packaged re-review verification operation is not yet available; stop
+   before trying to mark findings fixed or restore the Ship gate. See the
+   same `ROADMAP.md` carry-forward row.
 
-**The correct linked re-review flow, in one sequence:** preserve the
-`actionable` source event → fix the findings (new commits, new head) →
-allocate a re-review event with `re_review_of` = the source event at the new
-head → publish the fresh verbatim review through the packaged publisher → run
-the verifying re-review operation so source fingerprints become `fixed` → set
-and verify the exact-head review gate before Ship.
+**Current status:** the linked re-review cannot currently be completed through
+packaged operations. The source event, new-head review, and published wrapper
+do not authorize writing `fixed`; preserve the source worktree and stop before
+restoring the exact-head review gate. Resume only after that ROADMAP row's
+operation is implemented.
 
 ## Why This Matters
 
