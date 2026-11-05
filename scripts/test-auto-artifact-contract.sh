@@ -261,7 +261,7 @@ expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/unrelated-control.md" "unrelated co
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/prose-control.md" \
   "Negative controls: mutated fixtures must be rejected." "Negative controls must fail."
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/prose-control.md" "rejects prose without the Negative controls: marker"
-for placeholder in '' 'none' 'None.' 'N/A' 'not required' 'not applicable' 'optional' 'TBD' '-'; do
+for placeholder in '' 'none' 'None.' 'N/A' 'not required' 'not applicable' 'optional' 'TBD' '-' '**none**' '`N/A`' '_TBD_.'; do
   mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/placeholder-control.md" \
     "Negative controls: mutated fixtures must be rejected." "Negative controls: $placeholder"
   expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/placeholder-control.md" "placeholder negative-control value is rejected: '$placeholder'"

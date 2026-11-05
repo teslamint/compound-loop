@@ -115,7 +115,10 @@ PLACEHOLDER_VALUES = {
 def has_negative_control_requirement(text: str) -> bool:
     for line in text.splitlines():
         match = NEGATIVE_CONTROL_MARKER.match(line)
-        if match and match.group(1).rstrip(".").strip().casefold() not in PLACEHOLDER_VALUES:
+        if not match:
+            continue
+        value = re.sub(r"[*_`]", "", match.group(1)).strip().rstrip(".").strip()
+        if value.casefold() not in PLACEHOLDER_VALUES:
             return True
     return False
 
