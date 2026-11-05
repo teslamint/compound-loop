@@ -79,12 +79,15 @@ python3 scripts/eval-test-integrity-model.py plan \
 shasum -a 256 /tmp/c2ti-model-plan/plan.json
 ```
 
-Review the request payloads and explicitly approve the printed `plan.json` SHA-256 before any model call. Only then run the caller-selected model command, passing that exact digest as `--approval`; the command receives each request on stdin and raw responses are stored under `responses/`:
+Review the request payloads and explicitly approve the printed `plan.json` SHA-256 before any model call. Only then run the caller-selected model command, passing that exact digest as `--approval`; the command receives each request on stdin and raw responses are stored under `responses/`.
+
+The model command MUST be tool-free: the model may see only the planned messages. Agent CLIs such as `claude -p` or `codex exec` can read files, run shell commands, or call MCP servers, so the model could read the corpus answers in this repository; their results do not count. Use `scripts/model-chat-adapter.py`, which sends the planned messages to an OpenAI-compatible endpoint and prints the reply unchanged:
 
 ```sh
+C2TI_MODEL_BASE_URL=<https://host/v1> C2TI_MODEL=<model> C2TI_MODEL_TOKEN=<token> \
 python3 scripts/eval-test-integrity-model.py run \
   --plan /tmp/c2ti-model-plan/plan.json \
-  --command 'claude -p --output-format json --model <model>' \
+  --command 'python3 scripts/model-chat-adapter.py' \
   --approval <approved-plan-json-sha256>
 ```
 
