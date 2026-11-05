@@ -6,12 +6,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-dogfood}"
 
 if [[ "$MODE" == "contract" ]]; then
-  python3 - "$ROOT/skills/reviewing/references/lanes.md" <<'PY'
+  python3 - "$ROOT/skills/reviewing/references/lanes.md" "$ROOT/skills/reviewing/SKILL.md" "$ROOT/skills/reviewing/references/test-integrity.md" "$ROOT/skills/reviewing/references/merge-pipeline.md" <<'PY'
 import sys
 from pathlib import Path
 
-lane_path = Path(sys.argv[1])
-text = lane_path.read_text(encoding="utf-8")
+text = "\n".join(Path(path).read_text(encoding="utf-8") for path in sys.argv[1:])
 required = (
     "test-integrity",
     "network isolation",
@@ -22,6 +21,9 @@ required = (
     "fixture Git signing/hooks",
     "schemas/lane-findings.schema.json",
     "references/merge-pipeline.md",
+    "every phase-gate review",
+    "test-integrity-run/v1",
+    "missing, cancelled, or malformed",
 )
 missing = [item for item in required if item not in text]
 if missing:
@@ -63,10 +65,10 @@ from pathlib import Path
 
 root = Path(sys.argv[1]).resolve()
 mode = sys.argv[2]
-corpus_path = root / "tests/conformance/review/test-integrity-corpus.json"
+corpus_path = Path(os.environ.get("C2_TI_CORPUS", root / "tests/conformance/review/test-integrity-corpus.json"))
 schema_path = root / "schemas/lane-findings.schema.json"
 
-if mode not in {"dogfood", "seeded", "clean", "isolation"}:
+if mode not in {"dogfood", "seeded", "clean", "isolation", "records", "record"}:
     raise SystemExit(f"C2-TI unknown mode: {mode}")
 
 corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
@@ -82,9 +84,20 @@ class_ids = {
     "hidden-environment-dependencies",
     "fixture-git-signing-hooks",
 }
+CLASS_SEVERITY = {
+    "network-isolation": "P1",
+    "shared-temporary-directories": "P1",
+    "verifier-fail-open": "P1",
+    "assertion-specificity": "P2",
+    "hidden-environment-dependencies": "P1",
+    "fixture-git-signing-hooks": "P1",
+}
 classes = {item["id"]: item for item in corpus.get("classes", [])}
 if set(classes) != class_ids:
     raise SystemExit(f"C2-TI class inventory mismatch: {sorted(classes)}")
+for class_id, severity in CLASS_SEVERITY.items():
+    if classes[class_id].get("severity") != severity:
+        raise SystemExit(f"C2-TI corpus class severity disagrees with analyzer for {class_id}")
 
 cases = corpus.get("cases", [])
 case_ids = [case.get("id") for case in cases]
@@ -101,44 +114,82 @@ for case in cases:
         raise SystemExit(f"C2-TI expected findings missing: {case.get('id')}")
 for class_id in class_ids:
     members = [case for case in cases if case.get("class") == class_id]
-    if len([case for case in members if case["kind"] == "seed"]) != 2:
-        raise SystemExit(f"C2-TI requires two seeds for {class_id}")
-    if len([case for case in members if case["kind"] == "holdout"]) != 1:
-        raise SystemExit(f"C2-TI requires one holdout for {class_id}")
-if len([case for case in cases if case["kind"] == "clean"]) != 1:
-    raise SystemExit("C2-TI requires one clean fixture")
+    if len([case for case in members if case["kind"] == "seed"]) < 2:
+        raise SystemExit(f"C2-TI requires at least two seeds for {class_id}")
+if len([case for case in cases if case["kind"] == "clean"]) < 1:
+    raise SystemExit("C2-TI requires at least one clean fixture")
+extra_holdouts = []
+holdout_path = os.environ.get("C2_TI_HOLDOUTS")
+if holdout_path:
+    extra = json.loads(Path(holdout_path).read_text(encoding="utf-8"))
+    if extra.get("schema") != "c2-ti/v1":
+        raise SystemExit("C2-TI holdout corpus schema is unknown")
+    extra_holdouts = extra.get("cases", [])
+    if any(case.get("kind") != "holdout" for case in extra_holdouts):
+        raise SystemExit("C2-TI external corpus may contain holdouts only")
+    known_ids = set(case_ids)
+    for case in extra_holdouts:
+        if case.get("id") in known_ids or case.get("class") not in class_ids:
+            raise SystemExit(f"C2-TI invalid or duplicate external holdout: {case.get('id')}")
+        known_ids.add(case["id"])
+        if not isinstance(case.get("source"), str) or not case["source"] or not isinstance(case.get("expected_findings"), list):
+            raise SystemExit(f"C2-TI malformed external holdout: {case.get('id')}")
+    for class_id in class_ids:
+        members = [case for case in extra_holdouts if case["class"] == class_id]
+        if not any(case["expected_findings"] for case in members) or not any(not case["expected_findings"] for case in members):
+            raise SystemExit(f"C2-TI external holdouts require positive and negative cases for {class_id}")
 
 PROBES = {
     "network-isolation": (
-        re.compile(r"\b(?:requests|httpx|urllib\.request)\.(?:get|post|urlopen)\s*\("),
-        re.compile(r"\bsocket\.(?:create_connection|socket)\s*\("),
-        re.compile(r"[\"'](?:curl|wget|ssh)[\"']"),
+        re.compile(r"\b(?:requests|httpx|urllib\.request|aiohttp)\.(?:get|post|put|delete|request|urlopen|urlretrieve)\s*\("),
+        re.compile(r"\b(?:socket\.(?:create_connection|socket|connect)|create_connection|urlopen|urlretrieve)\s*\("),
+        re.compile(r"\b(?:curl|wget|ssh|scp|sftp|nc|ncat|netcat|ping|ftp)\b.{0,180}(?:https?://|ftp://|\s-[A-Za-z]*[pP]|@[\w.-]+)"),
+        re.compile(r"\b(?:pip|pip3|uv|npm|npx|yarn|pnpm)\s+(?:install|download|add|exec)\b"),
+        re.compile(r"\b(?:git|git-remote-[\w-]+)\b.{0,160}\b(?:clone|fetch|pull|push)\b.{0,160}(?:https?://|ssh://|git@)"),
+        re.compile(r"subprocess\.(?:run|call|Popen|check_call|check_output)\s*\([^)]*(?:curl|wget|ssh|scp|pip|uv|npm|https?://)"),
     ),
     "shared-temporary-directories": (
-        re.compile(r"/tmp/[^\"']+"),
-        re.compile(r"tempfile\.gettempdir\(\)"),
+        re.compile(r"(?:[\"']|Path\s*\()/?(?:tmp|var/tmp)/[^\"']+"),
+        re.compile(r"tempfile\.gettempdir\(\)(?!\s*/\s*(?:tempfile\.)?mkdtemp)"),
+        re.compile(r"(?:mkdir(?:\s+-p)?|Path\([^)]*\)\.mkdir)[^\n]*(?:/tmp/|/var/tmp/|(?:integration|project|fixture|test|output|cache)[-_](?:artifacts|data|dir|root|path|files))"),
+        re.compile(r"(?:shutil\.)?rmtree\(\s*[\"'](?:/tmp|/var/tmp|fixture|test|output|cache|repo)[^\"']*[\"']"),
+        re.compile(r"\brm\s+-[^\n]*\s(?:/tmp|/var/tmp|[\"']?(?:fixture|test|output|cache|repo)[-_](?:dir|root|path|files))"),
+        re.compile(r"(?:fixture|output|cache|repo)[-_](?:dir|root|path|socket|log|repo)\s*=\s*(?:[\"']|Path\s*\()"),
     ),
     "verifier-fail-open": (
-        re.compile(r"except\s+[^:]+:\s*(?:return\s+True|pass)\b"),
+        re.compile(r"except(?:\s+[^:]+)?:\s*(?:return\s+(?:True|['\"](?:clean|pass|success)['\"]|\[\])|pass)\b"),
+        re.compile(r"subprocess\.(?:run|call|check_call|check_output)\([^\n]*\bcheck\s*=\s*False"),
+        re.compile(r"(?:verdict|status|result)\s*=\s*['\"](?:clean|pass|success)['\"]"),
+        re.compile(r"(?:return|default)\s*[:=]\s*(?:True|['\"](?:clean|pass|success)['\"]|\[\])"),
+        re.compile(r"\|\|\s*true\b"),
+        re.compile(r"\b(?:except|catch)\b[^\n]*(?:Exception|Error)[^\n]*(?:continue|pass|return\s+None|return\s+True)"),
+        re.compile(r"\b(?:result|completed|response)\s*=\s*subprocess\.(?:run|call)\s*\("),
     ),
     "assertion-specificity": (
-        re.compile(r"^\s*assert\s+(?:True|False|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*$"),
-        re.compile(r"^\s*assert\s+[\"'][^\"']+[\"']\s+in\s+\w+\s*$"),
+        re.compile(r"^\s*assert\s+(?:True|False|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*(?:#.*)?$"),
+        re.compile(r"^\s*assert\s+['\"][^'\"]+['\"]\s+in\s+[^#]+$"),
+        re.compile(r"^\s*assert\s+[^#]*(?:stdout|stderr|output)\s+in\s+[^#]+$"),
+        re.compile(r"^\s*assert\s+len\([^)]*\)\s*>\s*0\s*(?:#.*)?$"),
+        re.compile(r"^\s*assert\s+[^#]*\.exit_code\s*(?:==\s*0)?\s*(?:#.*)?$"),
+        re.compile(r"\bgrep\s+-q\s+['\"][^'\"]+['\"]"),
     ),
     "hidden-environment-dependencies": (
-        re.compile(
-            r"os\.environ\[\s*[\"'](?:HOME|PATH|TMPDIR|SSH_AUTH_SOCK|HTTP_PROXY|HTTPS_PROXY|GPG_TTY)[\"']\s*\]"
-        ),
-        re.compile(
-            r"os\.getenv\(\s*[\"'](?:HOME|PATH|TMPDIR|SSH_AUTH_SOCK|HTTP_PROXY|HTTPS_PROXY|GPG_TTY)[\"']"
-        ),
+        re.compile(r"os\.environ\[\s*['\"](?:HOME|PATH|TMPDIR|SSH_AUTH_SOCK|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|GPG_TTY|LANG|LC_ALL|LC_CTYPE|TZ|GIT_CONFIG_[A-Z_]+|[A-Z_]*(?:TOKEN|KEY|PASSWORD))['\"]\s*\]"),
+        re.compile(r"os\.(?:getenv|environ\.get)\(\s*['\"](?:HOME|PATH|TMPDIR|SSH_AUTH_SOCK|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|GPG_TTY|LANG|LC_ALL|LC_CTYPE|TZ|GIT_CONFIG_[A-Z_]+|[A-Z_]*(?:TOKEN|KEY|PASSWORD))['\"]"),
+        re.compile(r"\bPath\.home\s*\("),
+        re.compile(r"\b(?:os\.path\.expanduser|expanduser)\s*\("),
+        re.compile(r"\b(?:getpass\.get(?:user|pass)|getuser)\s*\("),
+        re.compile(r"\b(?:shutil\.which|which)\s*\("),
+        re.compile(r"\bcommand\s+-v\s+[A-Za-z0-9_.+-]+"),
+        re.compile(r"\b(?:locale\.getpreferredencoding|locale\.getlocale|time\.tzname|datetime\.now)\s*\("),
+        re.compile(r"\b(?:env|printenv)\s+(?:HOME|PATH|TMPDIR|LANG|LC_ALL|TZ|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY)\b"),
+        re.compile(r"\bgit\s+config\s+(?:--global|--system)\b"),
     ),
     "fixture-git-signing-hooks": (
-        re.compile(r"[\"']git[\"'].+[\"']config[\"'].+[\"']--global[\"']"),
-        re.compile(r"--global.*(?:commit\.gpgsign|core\.hooksPath)"),
+        re.compile(r"['\"]git['\"].{0,140}['\"]config['\"].{0,140}['\"]--(?:global|system)['\"]"),
+        re.compile(r"\bgit\s+config\s+(?:--global|--system)\b"),
     ),
 }
-
 def validate_json_schema(value, schema, path="root"):
     expected_type = schema.get("type")
     if expected_type:
@@ -192,9 +243,8 @@ def validate_envelope(envelope):
             raise AssertionError("C2-TI schema: detail field is empty")
 
 
-def finding_for(case, line_number, source_line):
-    severity = case["expected_findings"][0]["severity"]
-    class_id = case["class"]
+def finding_for(case, class_id, line_number, source_line):
+    severity = CLASS_SEVERITY[class_id]
     titles = {
         "network-isolation": "Fixture can reach an external target",
         "shared-temporary-directories": "Fixture uses a shared temporary path",
@@ -211,8 +261,11 @@ def finding_for(case, line_number, source_line):
         "hidden-environment-dependencies": "A host-specific value can change the verdict outside the fixture.",
         "fixture-git-signing-hooks": "Host signing or hook state can execute code or make commits unreproducible.",
     }
+    # The case ID identifies its seeded defect; cross-class matches are distinct
+    # observations and therefore cannot be mistaken for expected true positives.
+    seed_id = case["id"] if case.get("class") == class_id else f"{case['id']}@{class_id}"
     return {
-        "seed_id": case["id"],
+        "seed_id": seed_id,
         "integrity_class": class_id,
         "title": titles[class_id],
         "severity": severity,
@@ -229,13 +282,34 @@ def finding_for(case, line_number, source_line):
     }
 
 
-def analyze(case, disabled_class=None):
+def analyze(case):
     findings = []
-    class_id = case.get("class")
-    if class_id in PROBES and class_id != disabled_class:
-        for line_number, source_line in enumerate(case["source"].splitlines(), 1):
-            if any(pattern.search(source_line) for pattern in PROBES[class_id]):
-                findings.append(finding_for(case, line_number, source_line))
+    source_lines = case["source"].splitlines()
+    output_asserted = any(
+        re.search(r"^\s*assert\s+[^#]*(?:stdout|stderr|output)[^#]*(?:==|!=)", line)
+        for line in source_lines
+    )
+    for class_id, patterns in PROBES.items():
+        for line_number, source_line in enumerate(source_lines, 1):
+            if class_id == "assertion-specificity" and output_asserted and ".exit_code" in source_line:
+                continue
+            if any(pattern.search(source_line) for pattern in patterns):
+                findings.append(finding_for(case, class_id, line_number, source_line))
+    joined_source = case["source"]
+    if re.search(r"except\s+(?:Exception|BaseException|\w+Error)\s*:\s*\n(?:[ \t]+[^\n]*\n)*[ \t]+return\s+(?:True|['\"](?:clean|pass|success)['\"]|\[\])", joined_source):
+        line_number = next((i for i, line in enumerate(source_lines, 1) if re.search(r"except\s+(?:Exception|BaseException|\w+Error)", line)), None)
+        if line_number is not None and not any(f["integrity_class"] == "verifier-fail-open" for f in findings):
+            findings.append(finding_for(case, "verifier-fail-open", line_number, source_lines[line_number - 1]))
+    git_source = case["source"]
+    git_setup = re.search(r"\bgit\b.*\b(?:init|commit)\b(?![.\w])", git_source)
+    hooks_unverified = not re.search(r"\bcore\.hooksPath\b", git_source) or (
+        re.search(r"\bcore\.hooksPath\s*=\s*(?:\"\"|''|(?=\s+-c))", git_source)
+        and not re.search(r"iterdir\(\)\)\s*==\s*\[\]", git_source)
+    )
+    if git_setup and hooks_unverified and not any(f["integrity_class"] == "fixture-git-signing-hooks" for f in findings):
+        git_line = next((i for i, line in enumerate(source_lines, 1) if re.search(r"\bgit\b.*\b(?:init|commit)\b", line)), None)
+        if git_line is not None:
+            findings.append(finding_for(case, "fixture-git-signing-hooks", git_line, source_lines[git_line - 1]))
     envelope = {
         "reviewer": "test-integrity",
         "findings": findings,
@@ -268,7 +342,95 @@ def check_case(case):
         raise AssertionError(
             f"C2-TI case {case['id']} expected {expected}, got {actual}"
         )
+    if case["expected_findings"]:
+        expected_severity = {
+            item["seed_id"]: item["severity"] for item in case["expected_findings"]
+        }
+        class_severity = CLASS_SEVERITY[case["class"]]
+        if any(severity != class_severity for severity in expected_severity.values()):
+            raise AssertionError(
+                f"C2-TI case {case['id']} expected severity disagrees with class "
+                f"{case['class']} ({class_severity})"
+            )
+        for finding in envelope["findings"]:
+            if finding["severity"] != expected_severity[finding["seed_id"]]:
+                raise AssertionError(
+                    f"C2-TI case {case['id']} severity mismatch for "
+                    f"{finding['seed_id']}: expected {expected_severity[finding['seed_id']]}, "
+                    f"got {finding['severity']}"
+                )
     return envelope
+
+
+def validate_run_record(record):
+    if not isinstance(record, dict) or record.get("schema") != "test-integrity-run/v1":
+        raise AssertionError("C2-TI run record missing or malformed")
+    if not isinstance(record.get("run_id"), str) or not record["run_id"]:
+        raise AssertionError("C2-TI run record identity is malformed")
+    if record.get("event_id") != os.environ.get("COMPOUND_LOOP_TEST_INTEGRITY_EVENT_ID"):
+        raise AssertionError("C2-TI run record event does not match current review event")
+    if record.get("reviewed_head") != os.environ.get("COMPOUND_LOOP_TEST_INTEGRITY_REVIEWED_HEAD"):
+        raise AssertionError("C2-TI run record head does not match current reviewed head")
+    if record.get("status") != "complete":
+        raise AssertionError("C2-TI run record is not complete")
+    if not isinstance(record.get("raw_evidence"), list):
+        raise AssertionError("C2-TI run record raw evidence is malformed")
+    if not isinstance(record.get("normalized_findings"), list):
+        raise AssertionError("C2-TI run record findings are malformed")
+    for index, finding in enumerate(record["normalized_findings"]):
+        validate_json_schema(finding, lane_schema["properties"]["findings"]["items"], f"normalized_findings[{index}]")
+
+
+def load_run_record(path):
+    record = json.loads(Path(path).read_text(encoding="utf-8"))
+    validate_run_record(record)
+    return record
+
+
+if mode == "record":
+    record_path = os.environ.get("COMPOUND_LOOP_TEST_INTEGRITY_RECORD")
+    if not record_path:
+        raise SystemExit("C2-TI record mode requires COMPOUND_LOOP_TEST_INTEGRITY_RECORD")
+    try:
+        load_run_record(record_path)
+    except (OSError, json.JSONDecodeError, AssertionError) as error:
+        raise SystemExit(str(error))
+    print("C2-TI persisted run record: complete")
+    raise SystemExit(0)
+
+if mode == "records":
+    with tempfile.TemporaryDirectory(prefix="c2-ti-record-") as temp_root:
+        os.environ["COMPOUND_LOOP_TEST_INTEGRITY_EVENT_ID"] = "current-event"
+        os.environ["COMPOUND_LOOP_TEST_INTEGRITY_REVIEWED_HEAD"] = "current-head"
+        missing_path = Path(temp_root) / "missing.json"
+        invalid_records = (
+            {"schema": "test-integrity-run/v1", "run_id": "run-1", "event_id": "current-event", "reviewed_head": "current-head",
+             "status": "cancelled", "raw_evidence": [], "normalized_findings": []},
+            {"schema": "test-integrity-run/v1", "run_id": "run-1", "event_id": "current-event", "reviewed_head": "current-head",
+             "status": "complete", "raw_evidence": {}, "normalized_findings": []},
+            {"schema": "test-integrity-run/v1", "run_id": "run-1", "event_id": "current-event", "reviewed_head": "current-head",
+             "status": "complete", "raw_evidence": [], "normalized_findings": [1, "x", {}]},
+            {"schema": "test-integrity-run/v1", "run_id": "run-1", "event_id": "old-event", "reviewed_head": "current-head",
+             "status": "complete", "raw_evidence": [], "normalized_findings": []},
+            {"schema": "test-integrity-run/v1", "run_id": "run-1", "event_id": "current-event", "reviewed_head": "old-head",
+             "status": "complete", "raw_evidence": [], "normalized_findings": []},
+        )
+        try:
+            load_run_record(missing_path)
+        except FileNotFoundError:
+            pass
+        else:
+            raise AssertionError("C2-TI missing run record unexpectedly passed")
+        for index, record in enumerate(invalid_records):
+            record_path = Path(temp_root) / f"invalid-{index}.json"
+            record_path.write_text(json.dumps(record), encoding="utf-8")
+            try:
+                load_run_record(record_path)
+            except (json.JSONDecodeError, AssertionError):
+                continue
+            raise AssertionError(f"C2-TI accepted invalid run record: {record!r}")
+    print("C2-TI run-record fail-closed cases: missing=blocked cancelled=blocked malformed=blocked stale-event=blocked stale-head=blocked")
+    raise SystemExit(0)
 
 
 def run_cases(selected):
@@ -370,6 +532,9 @@ if mode == "clean":
     selected = [case for case in cases if case["kind"] == "clean"]
 
 first = run_cases(selected)
+holdout_results = {case["id"]: check_case(case) for case in extra_holdouts}
+for case in extra_holdouts:
+    print(f"holdout {case['id']}: pass")
 if mode == "dogfood":
     malformed = dict(next(iter(first.values()))["findings"][0])
     malformed.pop("evidence")
@@ -405,52 +570,69 @@ if mode == "clean":
         for finding in envelope["findings"]
     ):
         raise AssertionError("C2-TI clean fixture has a P0/P1 finding")
-    print("clean-fixture: P0/P1 findings=0; repeated-runs=3; fingerprints=equal")
+    p0_p1 = sum(
+        finding["severity"] in {"P0", "P1"}
+        for envelope in first.values()
+        for finding in envelope["findings"]
+    )
+    print(
+        f"clean-fixture: cases={len(selected)} P0/P1 findings={p0_p1}; "
+        "repeated-runs=3; fingerprints=equal"
+    )
     raise SystemExit(0)
 
 if mode == "seeded":
-    print("seeded-defects: schema=valid; holdouts=clean")
+    seed_count = sum(case["kind"] == "seed" for case in selected)
+    positive_count = sum(bool(case["expected_findings"]) for case in extra_holdouts)
+    negative_count = sum(not case["expected_findings"] for case in cases if case["kind"] == "holdout") + sum(not case["expected_findings"] for case in extra_holdouts)
+    print(f"seeded-defects: seeds={seed_count} positive_holdouts={positive_count} negative_holdouts={negative_count}; schema=valid")
     raise SystemExit(0)
 
 seed_cases = [case for case in cases if case["kind"] == "seed"]
-expected = {
-    item["seed_id"]: item["severity"]
-    for case in seed_cases
-    for item in case["expected_findings"]
-}
-actual = [
-    finding
-    for envelope in first.values()
-    for finding in envelope["findings"]
-]
-true_positives = sum(
-    1
-    for finding in actual
-    if finding.get("seed_id") in expected
-    and finding["severity"] == expected[finding["seed_id"]]
-)
+base_holdouts = [case for case in cases if case["kind"] == "holdout"]
+positive_holdouts = [case for case in base_holdouts + extra_holdouts if case["expected_findings"]]
+negative_holdouts = [case for case in base_holdouts + extra_holdouts if not case["expected_findings"]]
+seed_expected = {case["id"]: CLASS_SEVERITY[case["class"]] for case in seed_cases}
+holdout_expected = {case["id"]: CLASS_SEVERITY[case["class"]] for case in positive_holdouts}
+expected = {**seed_expected, **holdout_expected}
+actual = [finding for envelope in first.values() for finding in envelope["findings"]]
+actual.extend(finding for result in holdout_results.values() for finding in result["findings"])
+holdout_actual = [finding for case in base_holdouts for finding in first[case["id"]]["findings"]]
+holdout_actual.extend(finding for result in holdout_results.values() for finding in result["findings"])
+found_ids = {finding["seed_id"] for finding in actual if finding["seed_id"] in expected and finding["severity"] == expected[finding["seed_id"]]}
+true_positives = len(found_ids)
 false_positives = len(actual) - true_positives
-false_negatives = len(expected) - len(
-    {finding["seed_id"] for finding in actual if finding.get("seed_id") in expected}
-)
-precision = true_positives / (true_positives + false_positives) if actual else 0.0
+false_negatives = len(expected) - true_positives
+precision = true_positives / (true_positives + false_positives) if actual else 1.0
+seed_recall = len(found_ids.intersection(seed_expected)) / len(seed_expected) if seed_expected else 1.0
+positive_ids = set(holdout_expected)
+holdout_found = {finding["seed_id"] for finding in holdout_actual if finding["seed_id"] in positive_ids and finding["severity"] == holdout_expected[finding["seed_id"]]}
+holdout_tp = len(holdout_found)
+holdout_fp = len(holdout_actual) - holdout_tp
+positive_holdout_recall = holdout_tp / len(positive_ids) if positive_ids else None
+holdout_precision = holdout_tp / (holdout_tp + holdout_fp) if holdout_tp + holdout_fp else None
 high_expected = {
-    seed_id for seed_id, severity in expected.items() if severity in {"P0", "P1"}
+    seed_id for seed_id, severity in seed_expected.items() if severity in {"P0", "P1"}
 }
-high_found = {
-    finding["seed_id"]
-    for finding in actual
-    if finding.get("seed_id") in high_expected
-    and finding["severity"] in {"P0", "P1"}
-}
+high_found = found_ids.intersection(high_expected)
 high_recall = len(high_found) / len(high_expected) if high_expected else 1.0
+if seed_recall < 1.0:
+    raise AssertionError(f"C2-TI seed recall below 100%: {seed_recall:.1%}")
+if positive_holdout_recall is not None and positive_holdout_recall < 1.0:
+    raise AssertionError(
+        f"C2-TI positive-holdout recall below 100%: {positive_holdout_recall:.1%}"
+    )
 if high_recall < 1.0:
-    raise AssertionError(f"C2-TI P0/P1 recall below 100%: {high_recall:.1%}")
+    raise AssertionError(f"C2-TI P0/P1 seed recall below 100%: {high_recall:.1%}")
 if precision < 0.90:
     raise AssertionError(f"C2-TI precision below 90%: {precision:.1%}")
-clean = [case for case in cases if case["kind"] == "clean"][0]
-if any(finding["severity"] in {"P0", "P1"} for finding in analyze(clean)["findings"]):
-    raise AssertionError("C2-TI clean fixture has a P0/P1 false positive")
+clean_cases = [case for case in cases if case["kind"] == "clean"]
+for clean in clean_cases:
+    if any(
+        finding["severity"] in {"P0", "P1"}
+        for finding in analyze(clean)["findings"]
+    ):
+        raise AssertionError(f"C2-TI clean fixture {clean['id']} has a P0/P1 finding")
 
 repeat_runs = []
 for _ in range(2):
@@ -469,21 +651,54 @@ if not all(item == fingerprints[0] for item in fingerprints[1:]):
     raise AssertionError("C2-TI repeated finding fingerprints differ")
 
 for class_id in sorted(class_ids):
-    mutated = [case for case in seed_cases if case["class"] == class_id][0]
-    mutated_ids = [
-        finding["seed_id"]
-        for finding in analyze(mutated, disabled_class=class_id)["findings"]
+    seed = next(case for case in seed_cases if case["class"] == class_id)
+    matching_lines = [
+        line for line in seed["source"].splitlines()
+        if any(pattern.search(line) for pattern in PROBES[class_id])
     ]
-    if mutated["id"] in mutated_ids:
-        raise AssertionError(f"C2-TI mutation guard did not kill {class_id}")
-    print(f"mutation-guard {class_id}: killed")
-
+    if not matching_lines:
+        raise AssertionError(
+            f"C2-TI mutation setup failed: no seeded defect line in {seed['id']}"
+        )
+    source_lines = seed["source"].splitlines()
+    source_lines.remove(matching_lines[0])
+    mutated = {**seed, "source": "\n".join(source_lines) + "\n"}
+    try:
+        check_case(mutated)
+    except AssertionError as error:
+        if seed["id"] not in str(error):
+            raise AssertionError(
+                f"C2-TI mutation setup failure for {seed['id']}: {error}"
+            ) from error
+        print(f"mutation-guard {class_id}: killed by removing {seed['id']} defect line")
+    else:
+        raise AssertionError(
+            f"C2-TI mutation guard survived removal of {seed['id']} defect line"
+        )
+record_contract = subprocess.run(
+    ["bash", str(root / "scripts/test-review-test-integrity.sh"), "records"],
+    cwd=root,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+    check=False,
+)
+if record_contract.returncode != 0:
+    raise AssertionError("C2-TI record fail-closed evaluator failed:\n" + record_contract.stdout)
+print(record_contract.stdout.strip())
 isolation_audit()
+holdout_recall_display = f"{positive_holdout_recall:.1%}" if positive_holdout_recall is not None else "not-evaluated"
+holdout_precision_display = f"{holdout_precision:.1%}" if holdout_precision is not None else "not-evaluated"
 print(
     "metrics: "
-    f"seeded={len(expected)} true_positive={true_positives} false_positive={false_positives} "
-    f"false_negative={false_negatives} precision={precision:.1%} p0_p1_recall={high_recall:.1%} "
-    "clean_p0_p1=0 repeated_runs=3 fingerprints=equal schema=valid network_calls=0 model_calls=0"
+    f"seeds={len(seed_expected)} seed_recall={seed_recall:.1%} "
+    f"positive_holdouts={len(holdout_expected)} negative_holdouts={len(negative_holdouts)} "
+    f"positive_holdout_recall={holdout_recall_display} holdout_precision={holdout_precision_display} "
+    f"true_positive={true_positives} false_positive={false_positives} "
+    f"false_negative={false_negatives} precision={precision:.1%} "
+    f"p0_p1_seed_recall={high_recall:.1%} "
+    f"clean_p0_p1=0 repeated_runs=3 fingerprints=equal schema=valid "
+    "network_calls=0 model_calls=0"
 )
 if mode == "dogfood" and os.environ.get("COMPOUND_LOOP_IN_VALIDATE") != "1":
     nested_env = os.environ.copy()

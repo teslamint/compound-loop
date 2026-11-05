@@ -92,6 +92,8 @@ Degradation ladder per `references/dispatch-degradation.md` (plugin root; native
 
 For each integrity mechanism, add one invariant-attack instruction to the dispatch. It asks for the cheapest artifact that satisfies every written check while violating the mechanism's stated guarantee. Keep conformance review as a separate obligation.
 
+For every full review, including every phase-gate review, dispatch the `test-integrity` sub-check as part of the always-on `tests` lane regardless of whether tests change; follow [references/test-integrity.md](references/test-integrity.md). For a phase-gate event, persist its raw evidence and normalized findings in the event-owned record under `<artifact_root>/reviews/events/` before verdict selection. A missing, cancelled, stale-event, stale-head, or malformed record is a degraded lane failure that blocks `clean`; apply the worker-failure rule in [references/merge-pipeline.md](references/merge-pipeline.md).
+
 ## Step 5: Merge, Dedup, Confidence Gate
 
 Full pipeline in `references/merge-pipeline.md` (fingerprint dedup, cross-lane promotion, mode-aware demotion, confidence gate last with the P0-at-50 exception, atomic artifact writes). Severity is **P0-P3 everywhere** -- the envelope's critical/important/minor `rollup` is a presentation-only projection, never a second severity scale.
