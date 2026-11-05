@@ -28,7 +28,7 @@
       "path": "skills/planning/SKILL.md",
       "heading": "## 14. Self-review",
       "text": "- **Discrimination check** — for every step that compares two things, run the step's own comparison on two controlled fixture pairs.",
-      "sha256": "1673a875cde4b2b361083b9cc0e2da35ef6480490bdda653946750f502f75799"
+      "sha256": "4352c76af3a93f1b4e75a373b6301ea4d7df0e12a2254bfbd5e5243b28bf8e55"
     },
     {
       "id": "release-loop-pending-gate",

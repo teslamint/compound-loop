@@ -1377,6 +1377,9 @@ def require_phase_consumer_contract(texts: dict[str, str] | None = None) -> None
         (PLAN_SCHEMA, "executable probe"),
         (PLAN_SCHEMA, "exact partial durable state"),
         (PLAN_SCHEMA, "compensation owner"),
+        (PLAN_SCHEMA, "escapes every literal `|` as `\\|`"),
+        (selected["planning"], "escapes every literal `|` as `\\|`"),
+        (selected["planning"], "passes `bash -n`"),
     )
     missing.extend(fragment for text, fragment in required if fragment not in text)
     if missing:
