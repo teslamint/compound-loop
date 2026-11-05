@@ -2,10 +2,11 @@
 schema: plan/v1
 title: Test-integrity review sub-check
 type: feat
-status: draft
+status: approved
 date: 2026-08-30
 execution: code
 origin: docs/specs/2026-08-30-test-integrity-review-lane-design.md
+body_seal: 54627347f8ddb139e946478f331cc8af2ee9e7129e5301e1f024b15f217581d8
 ---
 
 # Test-integrity Review Sub-check Plan
