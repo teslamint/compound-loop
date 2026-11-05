@@ -99,22 +99,23 @@ def frontmatter_scalar(line: str) -> str:
     return value
 
 
-NEGATED_CONTROL = re.compile(
-    # A negator or "optional" directly before the phrase ("no negative controls",
-    # "don't need negative controls"), or the phrase itself declared not required,
-    # optional, or omittable afterwards ("should not be required", "can be
-    # omitted"). Other negation in the sentence ("must not pass", "not optional",
-    # "cover optional integrations") still states a requirement.
-    r"(?<![\w-])(?:no|never|without|skip|omit|zero|optional|don't|doesn't)\s+(?:\w+\s+)?negative[- ]controls?\b"
-    r"|negative[- ]controls?(?:\s+\w+){0,2}?\s+(?:not|\w+n't)\s+(?:be\s+)?(?:required|needed|necessary|mandatory|need)\b"
-    r"|negative[- ]controls?\s+(?:\w+\s+)?(?:are|is|be)\s+(?:(?!not\b)\w+\s+)?(?:optional|unnecessary|unneeded)\b"
-    r"|negative[- ]controls?(?:\s+(?!not\b)\w+){0,2}?\s+be\s+(?:omitted|skipped|dropped)\b"
+# Success Criteria declares negative controls on a labeled line, e.g.
+# "Negative controls: mutated fixtures must be rejected." Reading negation in
+# free prose with patterns did not converge, so only the marker counts.
+NEGATIVE_CONTROL_MARKER = re.compile(
+    r"^\s*(?:[-*]\s+)?(?:\*\*)?negative[- ]controls?(?:\*\*)?:(?:\*\*)?\s*(.*?)\s*$",
+    re.IGNORECASE,
 )
+PLACEHOLDER_VALUES = {
+    "", "-", "none", "n/a", "na", "tbd", "optional",
+    "not required", "not needed", "not applicable",
+}
 
 
 def has_negative_control_requirement(text: str) -> bool:
-    for sentence in re.split(r"[\n.!?]+", text.casefold()):
-        if re.search(r"\bnegative[- ]controls?\b", sentence) and not NEGATED_CONTROL.search(sentence):
+    for line in text.splitlines():
+        match = NEGATIVE_CONTROL_MARKER.match(line)
+        if match and match.group(1).rstrip(".").strip().casefold() not in PLACEHOLDER_VALUES:
             return True
     return False
 

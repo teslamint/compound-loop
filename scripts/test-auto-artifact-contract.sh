@@ -99,6 +99,7 @@ for skill in "$DESIGNING" "$PLANNING"; do
   require_literal "$skill" '`## Non-goals` or `### Out`' "auto contract names accepted non-goals headings"
   require_literal "$skill" '`## Residual Risks`, `## Risks`, or `## Risks and Mitigations`' "auto contract names accepted risk headings"
   require_literal "$skill" "outside code fences" "auto contract states fenced text does not count"
+  require_literal "$skill" '`Negative controls:`' "auto contract names the negative-control marker"
 done
 require_order "$DESIGNING" "## Assumptions and Preconditions" "## Step 9" "designing places assumptions before spec writing"
 require_literal "$PLANNING" "mode: auto" "planning declares auto mode"
@@ -149,7 +150,8 @@ Authors may still write vague evidence.
 ## Architecture
 The selected fixture option is structured.
 ## Success Criteria
-Measured by: `bash scripts/test-auto-artifact-contract.sh`; negative controls must fail.
+Measured by: `bash scripts/test-auto-artifact-contract.sh`.
+Negative controls: mutated fixtures must be rejected.
 The validator rejects malformed fixtures.
 EOF
 
@@ -177,7 +179,8 @@ The fixture command and timestamp remain current.
 ## Architecture notes
 The selected fixture option is structured.
 ## Success Criteria
-Measured by: `bash scripts/test-auto-artifact-contract.sh`; negative controls must fail.
+Measured by: `bash scripts/test-auto-artifact-contract.sh`.
+Negative controls: mutated fixtures must be rejected.
 ## Implementation Units
 The validator is a fixture dependency.
 
@@ -251,18 +254,29 @@ expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/missing-proving-command.md" "missin
 for non_command in 'progress_path' 'mode: auto'; do
   mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/non-command-span.md" \
     "Measured by: \`bash scripts/test-auto-artifact-contract.sh\`" "Measured by \`$non_command\`"
-  expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/non-command-span.md" "non-command code span \`$non_command\` is rejected"
+  expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/non-command-span.md" "rejects non-command code span \`$non_command\`"
 done
-mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/unrelated-control.md" "negative controls" "source control"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/unrelated-control.md" "Negative controls:" "Source controls:"
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/unrelated-control.md" "unrelated control phrase is rejected"
-for negated in 'No negative controls are required.' 'Negative controls are not needed.' "We don't need negative controls." 'Negative controls are optional.' 'Optional negative controls only.' 'Negative controls should not be required.' 'Negative controls should be optional.' 'Negative controls do not need to run.' 'Negative controls can be omitted.' 'Negative controls are not mandatory.'; do
-  mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/negated-control.md" "negative controls must fail" "$negated"
-  expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/negated-control.md" "negated negative-control statement is rejected: $negated"
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/prose-control.md" \
+  "Negative controls: mutated fixtures must be rejected." "Negative controls must fail."
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/prose-control.md" "rejects prose without the Negative controls: marker"
+for placeholder in '' 'none' 'None.' 'N/A' 'not required' 'not applicable' 'optional' 'TBD' '-'; do
+  mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/placeholder-control.md" \
+    "Negative controls: mutated fixtures must be rejected." "Negative controls: $placeholder"
+  expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/placeholder-control.md" "placeholder negative-control value is rejected: '$placeholder'"
 done
-for required in 'negative controls must not pass' 'never merge unless negative controls fail' 'negative controls must cover optional integrations' 'include non-optional negative controls' 'negative controls are not optional' 'negative controls must not be skipped'; do
-  mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/required-control.md" "negative controls must fail" "$required"
-  expect_accept "$DESIGN_VALIDATOR" auto "$TMP_ROOT/required-control.md" "negative-control requirement with other negation is accepted: $required"
+for marker in '- **Negative controls:** mutated fixtures must not pass.' 'Negative control: one optional integration fixture must fail.'; do
+  mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/marker-control.md" \
+    "Negative controls: mutated fixtures must be rejected." "$marker"
+  expect_accept "$DESIGN_VALIDATOR" auto "$TMP_ROOT/marker-control.md" "negative-control marker is accepted: $marker"
 done
+mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/fenced-control.md" \
+  "Negative controls: mutated fixtures must be rejected." $'```\nNegative controls: mutated fixtures must be rejected.\n```'
+expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/fenced-control.md" "rejects fenced negative-control marker"
+mutate "$TMP_ROOT/auto-plan.md" "$TMP_ROOT/plan-prose-control.md" \
+  "Negative controls: mutated fixtures must be rejected." "Negative controls must fail."
+expect_reject "$PLAN_VALIDATOR" "$TMP_ROOT/plan-prose-control.md" "rejects plan prose without the Negative controls: marker"
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/no-live-malformed.md" \
   "| Source is readable |" "|  |"
 mutate "$TMP_ROOT/no-live-malformed.md" "$TMP_ROOT/no-live-malformed.md" \

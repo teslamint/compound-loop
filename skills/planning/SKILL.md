@@ -60,7 +60,8 @@ Retain the separate `Assumption Recheck` section as the fresh-evidence
 authority. Record non-goals under `## Non-goals` or `### Out` and residual
 risks under `## Residual Risks`, `## Risks`, or `## Risks and Mitigations`.
 `## Success Criteria` needs at least one backticked proving command with
-arguments or a path, and one sentence that requires negative controls. The
+arguments or a path, and a `Negative controls:` line that names the controls
+that must fail; a value such as `none` or `N/A` fails. The
 validator reads only text outside code fences. State the selected option and
 why each rejected option loses on its named metric. Set `planning_skill_root`
 to the directory containing this loaded `SKILL.md`, then run the standalone

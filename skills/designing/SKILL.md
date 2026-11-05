@@ -132,8 +132,9 @@ must contain an ASCII digit, and the rows must include `Selected:` plus either
 Record non-goals under `## Non-goals` or `### Out` and residual risks under
 `## Residual Risks`, `## Risks`, or `## Risks and Mitigations`. In auto mode,
 `## Success Criteria` needs at least one backticked proving command with
-arguments or a path, and one sentence that requires negative controls; a
-judgment rubric alone does not satisfy the validator. The validator reads only
+arguments or a path, and a `Negative controls:` line that names the controls
+that must fail; a value such as `none` or `N/A` fails, and a judgment rubric
+alone does not satisfy the validator. The validator reads only
 text outside code fences. State the selected option and why each
 rejected option loses on its named metric. Set `designing_skill_root` to the
 directory containing this loaded `SKILL.md`, then run the standalone validator
