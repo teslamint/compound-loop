@@ -532,8 +532,8 @@ def validate_gh_command(argv, fixture_root):
     if len(argv) == 6 and argv[1:4] == ["pr", "comment", "1"] and argv[4] == "--body" and argv[5]:
         return True, "fixture-gh-comment"
     if argv in (
-        ["gh", "pr", "merge", "1", "--squash", "--delete-branch"],
-        ["gh", "pr", "merge", "1", "--squash", "--delete-branch", "--auto"],
+        ["gh", "pr", "merge", "1", "--squash"],
+        ["gh", "pr", "merge", "1", "--squash", "--auto"],
     ):
         return True, "fixture-gh-merge"
     if argv in (
@@ -753,8 +753,8 @@ def gh_allowed():
     if len(args) == 6 and args[1:4] == ["pr", "comment", "1"] and args[4] == "--body" and args[5]:
         return True
     if args in (
-        ["gh", "pr", "merge", "1", "--squash", "--delete-branch"],
-        ["gh", "pr", "merge", "1", "--squash", "--delete-branch", "--auto"],
+        ["gh", "pr", "merge", "1", "--squash"],
+        ["gh", "pr", "merge", "1", "--squash", "--auto"],
     ):
         return True
     if args in (
@@ -860,8 +860,6 @@ elif args[:2] == ["pr", "merge"]:
     git("merge", "--squash", "origin/feat/fuzz-fixture", cwd=merge_repo)
     git("commit", "-m", "fixture squash merge", cwd=merge_repo)
     git("push", "origin", "main", cwd=merge_repo)
-    if "--delete-branch" in args:
-        git("push", "origin", "--delete", "feat/fuzz-fixture", cwd=merge_repo)
     pr["merged"] = True
     pr["merge_sha"] = git("rev-parse", "HEAD", cwd=merge_repo)
     save()
@@ -1251,7 +1249,7 @@ def validate_fixture():
             ["gh", "api", "repos/{owner}/{repo}/pulls/1/reviews", "--jq", "length"],
             ["gh", "api", "repos/{owner}/{repo}/pulls/1/comments", "--jq", "length"],
             ["gh", "api", "graphql", "-F", "number=1", "-f", "query=fixture"],
-            ["gh", "pr", "merge", "1", "--squash", "--delete-branch"],
+            ["gh", "pr", "merge", "1", "--squash"],
             ["gh", "pr", "view", "1", "--json", "mergeCommit", "--jq", ".mergeCommit.oid // empty"],
         )
         results = [
@@ -1288,7 +1286,7 @@ def validate_fixture():
             wrapper_command + ["git", "push", "origin", "--receive-pack=false", "main"],
             wrapper_command + ["gh", "release", "create", "v1"],
             wrapper_command + ["gh", "pr", "view", "1", "--repo", "outside/repo"],
-            wrapper_command + ["gh", "pr", "merge", "1", "--squash", "--delete-branch", "--repo", "outside/repo"],
+            wrapper_command + ["gh", "pr", "merge", "1", "--squash", "--repo", "outside/repo"],
             wrapper_command + ["gh", "api", "--hostname", "example.invalid", "user"],
         )
         for command in forbidden:

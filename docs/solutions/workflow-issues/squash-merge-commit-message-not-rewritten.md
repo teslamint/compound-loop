@@ -43,7 +43,8 @@ Net reduction: 165,383 → 149,832 B (−9.4%). All gate/integrity
 clauses preserved; validate.sh + portability suite green.
 EOF
 
-gh pr merge <number> --squash --delete-branch --body-file "$BODY_FILE"
+# Branch deletion is a separate step (shipping Step 8); never add --delete-branch.
+gh pr merge <number> --squash --body-file "$BODY_FILE"
 ```
 
 Key points:

@@ -634,16 +634,19 @@ def new_history_repo(tmp: Path, conflict: bool = False, name: str = "repo") -> P
     return repo
 
 
-def git_show(source_root: Path, revision: str, path: str) -> str:
-    result = subprocess.run(
-        ("git", "show", f"{revision}:{path}"),
-        cwd=source_root,
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    return result.stdout
+SHIPPING_MERGE_COMMAND = "gh pr merge <number> --squash [--auto]"
+SHIPPING_MERGE_ORDERING = (
+    "Merge ordering invariant, never reordered: **merge -> verify tests on the merged result -> "
+    "run every eligible approved-plan pre-removal transition -> remove worktree -> "
+    "delete local branch -> delete remote branch.**"
+)
+SHIPPING_CLEANUP_COMMANDS = (
+    "gh pr view <number> --json state --jq '.state'",
+    "gh pr view <number> --json headRefName,headRefOid,isCrossRepository",
+    "git worktree list --porcelain",
+    "git update-ref -d refs/heads/<branch> <headRefOid>",
+    "git push --force-with-lease=<branch>:<headRefOid> origin --delete <branch>",
+)
 
 
 def shipping_command_blocks(text: str) -> dict[str, object]:
@@ -3154,21 +3157,21 @@ def run_case(name: str) -> None:
                 event = history.complete_review("standalone:branch:1", git(repo, "rev-parse", "HEAD"))
                 assert history.phase_gate(str(event["id"]))
             elif name in {"shipping_command_invariance", "shipping_command_changed_axis"}:
-                baseline = git_show(ROOT, "5f3036b767a5e951aa0ab711832daa24c64915d1", "skills/shipping/SKILL.md")
                 observed = PHASE_CONSUMERS["shipping"]
-                if name == "shipping_command_changed_axis":
-                    observed = observed.replace(
-                        "gh pr merge <number> --squash --delete-branch [--auto]",
-                        "gh pr merge <number> --merge --delete-branch [--auto]",
-                        1,
-                    )
-                baseline_commands = shipping_command_blocks(baseline)
-                observed_commands = shipping_command_blocks(observed)
+                blocks = shipping_command_blocks(observed)
                 if name == "shipping_command_invariance":
-                    assert observed_commands == baseline_commands
+                    assert blocks["merge"] == (SHIPPING_MERGE_COMMAND,), blocks["merge"]
+                    assert "--delete-branch" not in blocks["merge"][0]
+                    assert "--squash --delete-branch" not in observed
+                    assert blocks["cleanup"][0][0].startswith(SHIPPING_MERGE_ORDERING), blocks["cleanup"][0]
+                    missing = set(SHIPPING_CLEANUP_COMMANDS) - set(blocks["cleanup"][1])
+                    assert not missing, sorted(missing)
                 else:
-                    assert observed_commands != baseline_commands
-                    assert observed_commands["cleanup"] == baseline_commands["cleanup"]
+                    mutated = observed.replace(SHIPPING_MERGE_COMMAND, "gh pr merge <number> --merge [--auto]", 1)
+                    assert mutated != observed
+                    mutated_blocks = shipping_command_blocks(mutated)
+                    assert mutated_blocks["merge"] != blocks["merge"]
+                    assert mutated_blocks["cleanup"] == blocks["cleanup"]
             assert sent.read_bytes() == before
             write_history_evidence(name, repo, history, pre_observation, sent, before, command)
             write_matrix_observation(name, repo, matrix_pre_state, sent, before)

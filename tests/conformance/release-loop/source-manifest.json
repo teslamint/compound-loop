@@ -63,7 +63,7 @@
       "path": "skills/shipping/SKILL.md",
       "heading": "### Release-loop pending disposition",
       "text": "For an interactive final disposition invoked by `release-loop`, atomically set `phase_status: waiting-user` and issue `pending_gate.id: ship-approval` before asking.",
-      "sha256": "189186385075041cb9c38d76922867ea2443fc7f43f412ff4c6bce326df07405"
+      "sha256": "580810b95c384a4a074dbdcc251e16b45d7fddb1b88cab92619e9e4b85a0d499"
     },
     {
       "id": "legacy-handoff-persistent-siblings",
