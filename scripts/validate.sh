@@ -1313,7 +1313,7 @@ fi
 # The dogfood evaluator calls this script once with the guard set, proving the
 # repository gate without recursively creating disposable fixtures.
 if [ "${COMPOUND_LOOP_SKIP_TEST_INTEGRITY:-0}" != "1" ]; then
-  if ! bash "$ROOT/scripts/test-review-test-integrity.sh" dogfood; then
+  if ! COMPOUND_LOOP_IN_VALIDATE=1 bash "$ROOT/scripts/test-review-test-integrity.sh" dogfood; then
     fail "test-integrity dogfood failed"
   fi
 fi

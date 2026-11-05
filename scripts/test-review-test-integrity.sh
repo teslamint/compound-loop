@@ -40,6 +40,7 @@ text = Path(sys.argv[1]).read_text(encoding="utf-8")
 required = (
     "test-review-test-integrity.sh\" dogfood",
     "COMPOUND_LOOP_SKIP_TEST_INTEGRITY",
+    "COMPOUND_LOOP_IN_VALIDATE",
 )
 missing = [item for item in required if item not in text]
 if missing:
@@ -352,6 +353,22 @@ if mode == "clean":
     selected = [case for case in cases if case["kind"] == "clean"]
 
 first = run_cases(selected)
+if mode == "dogfood":
+    malformed = dict(next(iter(first.values()))["findings"][0])
+    malformed.pop("evidence")
+    try:
+        validate_envelope(
+            {
+                "reviewer": "test-integrity",
+                "findings": [malformed],
+                "residual_risks": [],
+                "testing_gaps": [],
+            }
+        )
+    except AssertionError:
+        print("schema-negative: malformed finding rejected")
+    else:
+        raise AssertionError("C2-TI malformed finding unexpectedly passed")
 if mode == "clean":
     repeated = []
     for _ in range(2):
@@ -451,7 +468,7 @@ print(
     f"false_negative={false_negatives} precision={precision:.1%} p0_p1_recall={high_recall:.1%} "
     "clean_p0_p1=0 repeated_runs=3 fingerprints=equal schema=valid network_calls=0 model_calls=0"
 )
-if mode == "dogfood":
+if mode == "dogfood" and os.environ.get("COMPOUND_LOOP_IN_VALIDATE") != "1":
     nested_env = os.environ.copy()
     nested_env["COMPOUND_LOOP_SKIP_TEST_INTEGRITY"] = "1"
     validation = subprocess.run(
@@ -468,4 +485,6 @@ if mode == "dogfood":
             "C2-TI nested compound-loop validation failed:\n" + validation.stdout
         )
     print("compound-loop-validation: pass (recursion_guard=1)")
+elif mode == "dogfood":
+    print("compound-loop-validation: pass (outer_validation=1)")
 PY
