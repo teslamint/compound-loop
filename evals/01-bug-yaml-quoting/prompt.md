@@ -1,7 +1,7 @@
 ---
 max_turns: 30
 timeout_seconds: 600
-allowed_tools: [Skill, Write, Edit, Read, Grep, Glob]
+allowed_tools: [Skill, Write, Edit, Read, Grep, Glob, Bash]
 runs: 3
 ---
 I just fixed a bug in our YAML frontmatter handling. When a `symptoms` array item starts with a backtick (`` ` ``), strict YAML parsers reject it as an unquoted scalar. The fix was to wrap such values in double quotes.

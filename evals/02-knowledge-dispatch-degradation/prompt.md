@@ -1,7 +1,7 @@
 ---
 max_turns: 30
 timeout_seconds: 600
-allowed_tools: [Skill, Write, Edit, Read, Grep, Glob]
+allowed_tools: [Skill, Write, Edit, Read, Grep, Glob, Bash]
 runs: 3
 ---
 We learned an important pattern about subagent dispatch. When dispatching 3 parallel research subagents, the native parallel tier works on Claude Code but fails silently on Codex because Codex doesn't support native parallel subagents. The system falls back to sequential passes, which is correct behavior but takes 3x longer.

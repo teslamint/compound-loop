@@ -1,7 +1,7 @@
 ---
 max_turns: 30
 timeout_seconds: 600
-allowed_tools: [Skill, Write, Edit, Read, Grep, Glob]
+allowed_tools: [Skill, Write, Edit, Read, Grep, Glob, Bash]
 runs: 3
 ---
 I fixed a Python compatibility bug. The `validate-frontmatter.py` script used a `match` statement (PEP 634, Python 3.10+), but our CI runs Python 3.9. The script crashed with `SyntaxError: invalid syntax` on the `match problem_type:` line.
