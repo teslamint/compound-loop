@@ -76,7 +76,7 @@ Run `bash scripts/test-review-test-integrity.sh seeded` to exercise seed and hol
 
 ## Model release gate
 
-The release gate scores the real model reviewer against three corpora: `tests/conformance/review/test-integrity-corpus.json`, `tests/conformance/review/test-integrity-blind-dev.json`, and `tests/conformance/review/test-integrity-blind-confirm.json`. The two blind corpora were authored blind to the detectors. Keep `scripts/test-review-test-integrity.sh` as an offline deterministic-regex regression check; its result is not the model release verdict.
+The release gate scores the real model reviewer against four corpora: `tests/conformance/review/test-integrity-corpus.json`, `tests/conformance/review/test-integrity-blind-dev.json`, `tests/conformance/review/test-integrity-blind-confirm.json`, and `tests/conformance/review/test-integrity-blind-final.json`. The blind corpora were authored without access to the detectors. The final corpus was written after the class boundaries were fixed and was not used to change the checklist, so it is the out-of-sample measurement; two independent judges agreed with all of its labels. Keep `scripts/test-review-test-integrity.sh` as an offline deterministic-regex regression check; its result is not the model release verdict.
 
 First create the exact request plan without invoking a model:
 
@@ -85,6 +85,7 @@ python3 scripts/eval-test-integrity-model.py plan \
   --corpus tests/conformance/review/test-integrity-corpus.json \
   --corpus tests/conformance/review/test-integrity-blind-dev.json \
   --corpus tests/conformance/review/test-integrity-blind-confirm.json \
+  --corpus tests/conformance/review/test-integrity-blind-final.json \
   --out /tmp/c2ti-model-plan
 shasum -a 256 /tmp/c2ti-model-plan/plan.json
 ```
@@ -101,4 +102,4 @@ python3 scripts/eval-test-integrity-model.py run \
   --approval <approved-plan-json-sha256>
 ```
 
-For one run, score with `--responses /tmp/c2ti-model-plan/responses`. For the required three-run determinism check, preserve each run in a separate response directory and use `--responses <run-1-dir> <run-2-dir> <run-3-dir> --repeat 3`. Supply all three `--corpus` arguments to `score` as in `plan`. The gate requires 100% P0/P1 recall, at least 90% precision, zero P0/P1 false positives on negative/clean cases, no malformed or missing responses, and identical predicted class-id sets in every repeat. The report also includes per-class results and severity agreement; disagreement is reported for review. Planning, scoring, and the fixture tests are offline; only the explicitly approved `run` subcommand makes model calls.
+For one run, score with `--responses /tmp/c2ti-model-plan/responses`. For the required three-run determinism check, preserve each run in a separate response directory and use `--responses <run-1-dir> <run-2-dir> <run-3-dir> --repeat 3`. Supply all four `--corpus` arguments to `score` as in `plan`. The gate requires 100% P0/P1 recall, at least 90% precision, zero P0/P1 false positives on negative/clean cases, no malformed or missing responses, and identical predicted class-id sets in every repeat. The report also includes per-class results and severity agreement; disagreement is reported for review. Planning, scoring, and the fixture tests are offline; only the explicitly approved `run` subcommand makes model calls.
