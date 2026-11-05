@@ -31,6 +31,24 @@ PY
   exit $?
 fi
 
+if [[ "$MODE" == "gate" ]]; then
+  python3 - "$ROOT/scripts/validate.sh" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+required = (
+    "test-review-test-integrity.sh\" dogfood",
+    "COMPOUND_LOOP_SKIP_TEST_INTEGRITY",
+)
+missing = [item for item in required if item not in text]
+if missing:
+    raise SystemExit("C2-TI validation gate missing: " + ", ".join(missing))
+print("C2-TI validation gate present")
+PY
+  exit $?
+fi
+
 python3 - "$ROOT" "$MODE" <<'PY'
 import hashlib
 import json
@@ -433,4 +451,21 @@ print(
     f"false_negative={false_negatives} precision={precision:.1%} p0_p1_recall={high_recall:.1%} "
     "clean_p0_p1=0 repeated_runs=3 fingerprints=equal schema=valid network_calls=0 model_calls=0"
 )
+if mode == "dogfood":
+    nested_env = os.environ.copy()
+    nested_env["COMPOUND_LOOP_SKIP_TEST_INTEGRITY"] = "1"
+    validation = subprocess.run(
+        ["bash", str(root / "scripts/validate.sh")],
+        cwd=root,
+        env=nested_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if validation.returncode != 0:
+        raise AssertionError(
+            "C2-TI nested compound-loop validation failed:\n" + validation.stdout
+        )
+    print("compound-loop-validation: pass (recursion_guard=1)")
 PY
