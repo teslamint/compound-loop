@@ -35,6 +35,8 @@ Mentally execute the diff -- trace inputs through branches, track state across c
 
 **Focus**: coverage gaps, weak assertions, brittle tests, missing edge-case tests for the scenarios the diff introduces. When a plan was provided (`plan:` token or discovered), also verify its Scenario coverage map: every `Covers S<n>` integration test the map names exists in the diff or the tree, and no user scenario (S-ID) is left without a walking test — file a finding per missing walk, citing the S-ID. `enforces: P3`
 
+**Named sub-check — `test-integrity`**: run the checklist in [references/test-integrity.md](test-integrity.md) for every test-bearing diff. Audit network isolation, shared temporary directories, verifier fail-open behavior, assertion specificity, hidden environment dependencies, and fixture Git signing/hooks. Emit only the existing [schemas/lane-findings.schema.json](../../schemas/lane-findings.schema.json) detail contract and pass findings through [references/merge-pipeline.md](merge-pipeline.md). The sub-check reports code-grounded evidence and routes only test-trust failures here; shell or credential vulnerabilities, operational performance, and unrelated API contract changes stay in their existing lanes.
+
 **Non-flags**: test code style; adding tests for trivial getters or pure boilerplate with no branching.
 
 ## architecture (always-on)
