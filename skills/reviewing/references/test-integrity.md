@@ -36,7 +36,7 @@ Evidence cites the assertion and the untested distinction. Do not flag a deliber
 
 ### Hidden environment dependencies
 
-Check whether tests read host `HOME`, `PATH`, `TMPDIR`, locale, timezone, credentials, Git configuration, network proxy variables, or tool-specific configuration without setting or clearing them in the fixture. Flag environment reads that change the verdict or target and are not represented in the fixture's declared inputs. Severity is P1 when host state can change authorization or target selection and P2 otherwise.
+Check whether tests read host `HOME`, `PATH`, `TMPDIR`, locale, timezone, credentials, Git configuration outside fixture repositories, network proxy variables, or tool-specific configuration without setting or clearing them in the fixture. Flag environment reads that change the verdict or target and are not represented in the fixture's declared inputs. Severity is P1 when host state can change authorization or target selection and P2 otherwise.
 
 Evidence names the environment key or implicit process state and the missing fixture declaration. Do not flag an explicitly supplied value that the fixture records and verifies.
 
@@ -50,7 +50,7 @@ Evidence cites the Git setup and the inherited state that remains possible. Do n
 
 Report each defect once, under the single class that owns it:
 
-- Git identity, signing, hooks, credential helpers, remotes, and inherited global or system Git configuration of a fixture repository belong to Fixture Git signing/hooks. Do not also report them as hidden environment dependencies or network isolation.
+- Git identity, signing, hooks, credential helpers, remote settings, and inherited global or system Git configuration of a fixture repository belong to Fixture Git signing/hooks. Do not also report that configuration as a hidden environment dependency. A Git command that actually contacts an external remote, such as `clone`, `fetch`, or `push`, is a separate Network isolation defect.
 - A configured remote, URL, or host name that the code never contacts is not a network defect. Network isolation needs a call or command that can reach an external host.
 - An ignored exit status, swallowed exception, or default-success value belongs to Verifier fail-open behavior. Report Assertion specificity only for a test assertion that can pass without the required behavior.
 - Hidden environment dependencies covers host state other than Git configuration that the snippet reads or that selects its target or verdict. Running a tool or `git` binary from `PATH` is not by itself an environment defect.
@@ -90,7 +90,7 @@ python3 scripts/eval-test-integrity-model.py plan \
 shasum -a 256 /tmp/c2ti-model-plan/plan.json
 ```
 
-Review the request payloads and explicitly approve the printed `plan.json` SHA-256 before any model call. Only then run the caller-selected model command, passing that exact digest as `--approval`; the command receives each request on stdin and raw responses are stored under `responses/`.
+Review the request payloads and explicitly approve the printed `plan.json` SHA-256 before any model call. Only then run the caller-selected model command, passing that exact digest as `--approval`. The command receives each request on stdin. `run` checks every request digest before the first call, writes raw responses to a fresh `--responses` directory, and publishes that directory only after every case succeeds, so responses from different runs never mix.
 
 The model command MUST be tool-free: the model may see only the planned messages. Agent CLIs such as `claude -p` or `codex exec` can read files, run shell commands, or call MCP servers, so the model could read the corpus answers in this repository; their results do not count. Use `scripts/model-chat-adapter.py`, which sends the planned messages to an OpenAI-compatible endpoint and prints the reply unchanged:
 
@@ -99,7 +99,8 @@ C2TI_MODEL_BASE_URL=<https://host/v1> C2TI_MODEL=<model> C2TI_MODEL_TOKEN=<token
 python3 scripts/eval-test-integrity-model.py run \
   --plan /tmp/c2ti-model-plan/plan.json \
   --command 'python3 scripts/model-chat-adapter.py' \
+  --responses /tmp/c2ti-run-1 \
   --approval <approved-plan-json-sha256>
 ```
 
-For one run, score with `--responses /tmp/c2ti-model-plan/responses`. For the required three-run determinism check, preserve each run in a separate response directory and use `--responses <run-1-dir> <run-2-dir> <run-3-dir> --repeat 3`. Supply all four `--corpus` arguments to `score` as in `plan`. The gate requires 100% P0/P1 recall, at least 90% precision, zero P0/P1 false positives on negative/clean cases, no malformed or missing responses, and identical predicted class-id sets in every repeat. The report also includes per-class results and severity agreement; disagreement is reported for review. Planning, scoring, and the fixture tests are offline; only the explicitly approved `run` subcommand makes model calls.
+For one run, score with `--responses /tmp/c2ti-run-1`. For the required three-run determinism check, run three times into three different directories and use `--responses <run-1-dir> <run-2-dir> <run-3-dir> --repeat 3`. Supply all four `--corpus` arguments to `score` as in `plan`. The gate requires 100% P0/P1 recall, at least 90% precision, zero P0/P1 false positives on negative/clean cases, no malformed or missing responses, and identical predicted class-id sets in every repeat. The report also includes per-class results and severity agreement; disagreement is reported for review. Planning, scoring, and the fixture tests are offline; only the explicitly approved `run` subcommand makes model calls.

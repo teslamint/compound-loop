@@ -15,7 +15,15 @@ Environment:
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Fail on any redirect: following one would resend the bearer token."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
 
 
 def main():
@@ -36,7 +44,8 @@ def main():
             "User-Agent": "c2ti-eval/1.0",
         },
     )
-    with urllib.request.urlopen(http, timeout=110) as response:
+    opener = urllib.request.build_opener(_NoRedirect)
+    with opener.open(http, timeout=110) as response:
         payload = json.load(response)
     sys.stdout.write(payload["choices"][0]["message"]["content"] or "")
     return 0

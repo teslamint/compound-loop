@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import sys
@@ -102,28 +103,40 @@ def run(args):
     if not argv:
         fail("command must not be empty")
     manifest = json.loads(plan_bytes.decode("utf-8"))
-    responses = plan_path.parent / "responses"
-    responses.mkdir(parents=True, exist_ok=True)
+    # Check every entry and request digest before the first model call.
+    requests = []
     for entry in manifest.get("requests", []):
         case_id = entry.get("case_id")
         if not isinstance(case_id, str) or not CASE_ID.fullmatch(case_id) or ".." in case_id or entry.get("request") != "requests/" + case_id + ".json":
             fail("invalid plan entry: " + repr(case_id))
-        request_path = plan_path.parent / entry["request"]
-        request_bytes = request_path.read_bytes()
+        request_bytes = (plan_path.parent / entry["request"]).read_bytes()
         if digest(request_bytes) != entry.get("sha256"):
-            fail("request digest mismatch: " + entry["case_id"])
-        try:
-            result = subprocess.run(argv, input=request_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=args.timeout, check=False)
-            raw = result.stdout
+            fail("request digest mismatch: " + case_id)
+        requests.append((case_id, request_bytes))
+    # One run owns one fresh directory, published only after every case succeeds,
+    # so responses from different runs can never mix.
+    responses = Path(args.responses).resolve()
+    partial = responses.with_name(responses.name + ".partial")
+    if responses.exists() or partial.exists():
+        fail("response directory already exists: " + str(responses))
+    partial.mkdir(parents=True)
+    try:
+        for case_id, request_bytes in requests:
+            try:
+                result = subprocess.run(argv, input=request_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=args.timeout, check=False)
+            except subprocess.TimeoutExpired:
+                fail("command timed out for case " + case_id)
             if result.returncode != 0:
-                fail("command failed for case %s (exit %d)" % (entry["case_id"], result.returncode))
-        except subprocess.TimeoutExpired:
-            fail("command timed out for case " + entry["case_id"])
-        (responses / (entry["case_id"] + ".json")).write_bytes(raw)
-    print("stored %d raw responses in %s" % (len(manifest.get("requests", [])), responses))
+                fail("command failed for case %s (exit %d)" % (case_id, result.returncode))
+            (partial / (case_id + ".json")).write_bytes(result.stdout)
+    except BaseException:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
+    partial.rename(responses)
+    print("stored %d raw responses in %s" % (len(requests), responses))
 
 
-def parse_findings(path):
+def parse_findings(path, known_classes):
     try:
         raw = path.read_text(encoding="utf-8")
         value = json.loads(raw)
@@ -138,6 +151,8 @@ def parse_findings(path):
             if not isinstance(finding, dict):
                 return None
             cls, severity = finding.get("integrity_class"), finding.get("severity")
+            if cls not in known_classes:
+                return None
             line, evidence = finding.get("line"), finding.get("evidence")
             if not isinstance(cls, str) or not isinstance(severity, str) or severity not in SEVERITIES:
                 return None
@@ -151,18 +166,29 @@ def parse_findings(path):
 
 def score(args):
     cases, classes = corpus_cases(args.corpus)
+    # The scored cases must be exactly the approved plan's cases.
+    plan_ids = sorted(entry.get("case_id") for entry in load_json(args.plan).get("requests", []))
+    if plan_ids != sorted(case["id"] for case in cases):
+        fail("corpus cases do not match the plan's cases")
     response_dirs = [Path(item) for item in args.responses]
     if len(response_dirs) != args.repeat:
         fail("--repeat %d requires exactly %d response directories" % (args.repeat, args.repeat))
     if args.repeat < 1:
         fail("--repeat must be at least 1")
+    if len({item.resolve() for item in response_dirs}) != len(response_dirs):
+        fail("each repeat needs its own response directory")
+    expected_files = {case["id"] + ".json" for case in cases}
+    for response_dir in response_dirs:
+        extra = sorted(item.name for item in response_dir.glob("*") if item.name not in expected_files) if response_dir.is_dir() else []
+        if extra:
+            fail("unexpected files in %s: %s" % (response_dir, ", ".join(extra)))
     predictions = []
     malformed = []
     details = []
     for response_dir in response_dirs:
         batch = {}
         for case in cases:
-            findings = parse_findings(response_dir / (case["id"] + ".json"))
+            findings = parse_findings(response_dir / (case["id"] + ".json"), classes)
             if findings is None:
                 malformed.append({"case_id": case["id"], "response_dir": str(response_dir)})
                 batch[case["id"]] = None
@@ -234,6 +260,7 @@ def main():
     run_parser.add_argument("--plan", required=True)
     run_parser.add_argument("--command", required=True)
     run_parser.add_argument("--approval", required=True)
+    run_parser.add_argument("--responses", required=True, help="fresh directory for this run's raw responses")
     run_parser.add_argument("--timeout", type=float, default=TIMEOUT_SECONDS)
     run_parser.set_defaults(func=run)
     score_parser = sub.add_parser("score")
