@@ -26,7 +26,7 @@ def main():
         sys.stderr.write("C2TI_MODEL_BASE_URL, C2TI_MODEL and C2TI_MODEL_TOKEN are required\n")
         return 2
     request = json.loads(sys.stdin.buffer.read())
-    body = json.dumps({"model": model, "messages": request["messages"]}).encode("utf-8")
+    body = json.dumps({"model": model, "messages": request["messages"], "temperature": 0}).encode("utf-8")
     http = urllib.request.Request(
         base + "/chat/completions",
         data=body,

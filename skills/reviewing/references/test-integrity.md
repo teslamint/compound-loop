@@ -46,6 +46,16 @@ Check every temporary Git repository for explicit identity, signing policy, hook
 
 Evidence cites the Git setup and the inherited state that remains possible. Do not flag a fixture that sets all required keys explicitly and proves its hooks directory is empty.
 
+### Class boundaries
+
+Report each defect once, under the single class that owns it:
+
+- Git identity, signing, hooks, credential helpers, remotes, and inherited global or system Git configuration of a fixture repository belong to Fixture Git signing/hooks. Do not also report them as hidden environment dependencies or network isolation.
+- A configured remote, URL, or host name that the code never contacts is not a network defect. Network isolation needs a call or command that can reach an external host.
+- An ignored exit status, swallowed exception, or default-success value belongs to Verifier fail-open behavior. Report Assertion specificity only for a test assertion that can pass without the required behavior.
+- Hidden environment dependencies covers host state other than Git configuration that the snippet reads or that selects its target or verdict. Running a tool or `git` binary from `PATH` is not by itself an environment defect.
+- Judge only the text shown. Do not report a class because unseen helper code might be unsafe.
+
 
 ## Per-run evidence record
 
