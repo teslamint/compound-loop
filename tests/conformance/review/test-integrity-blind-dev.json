@@ -189,7 +189,7 @@
       "class": "fixture-git-signing-hooks",
       "kind": "holdout",
       "file": "fixture_test.sh",
-      "source": "#!/bin/sh\nset -eu\n\nrepo=$(mktemp -d)\ntrap 'rm -rf \"$repo\"' EXIT\ngit -C \"$repo\" init\ngit -C \"$repo\" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false -c core.hooksPath= -c remote.origin.url=/var/empty.git config --local user.name Fixture\ngit -C \"$repo\" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false -c core.hooksPath= -c remote.origin.url=/var/empty.git commit --allow-empty -m fixture",
+      "source": "#!/bin/sh\nset -eu\n\nrepo=$(mktemp -d)\ntrap 'rm -rf \"$repo\"' EXIT\ngit -C \"$repo\" init\ngit -C \"$repo\" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit --allow-empty -m fixture\n",
       "expected_findings": [
         {
           "seed_id": "C2-TI-GIT-BLIND-P2",

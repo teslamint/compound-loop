@@ -127,7 +127,7 @@
       "class": "hidden-environment-dependencies",
       "kind": "holdout",
       "file": "fixture_test.py",
-      "source": "import os\n\ndef test_declared_mode():\n    mode = os.environ.get(\"FIXTURE_MODE\", \"test\")\n    assert mode == \"test\"\n",
+      "source": "def test_declared_mode(monkeypatch):\n    monkeypatch.setenv(\"FIXTURE_MODE\", \"test\")\n    assert load_mode() == \"test\"\n",
       "expected_findings": []
     },
     {
@@ -151,7 +151,7 @@
       "class": "fixture-git-signing-hooks",
       "kind": "holdout",
       "file": "fixture_test.py",
-      "source": "import subprocess\n\ndef configure_fixture():\n    subprocess.run([\"git\", \"config\", \"--local\", \"commit.gpgsign\", \"false\"])\n    subprocess.run([\"git\", \"config\", \"--local\", \"core.hooksPath\", \"/fixture/empty-hooks\"])\n",
+      "source": "import subprocess\n\ndef make_fixture_repo(tmp_path):\n    repo, hooks = tmp_path / \"repo\", tmp_path / \"hooks\"\n    hooks.mkdir()\n    subprocess.run([\"git\", \"init\", \"-q\", str(repo)], check=True)\n    for key, value in ((\"user.name\", \"Fixture\"), (\"user.email\", \"fixture@example.invalid\"),\n                       (\"commit.gpgsign\", \"false\"), (\"core.hooksPath\", str(hooks))):\n        subprocess.run([\"git\", \"-C\", str(repo), \"config\", \"--local\", key, value], check=True)\n    assert list(hooks.iterdir()) == []\n    return repo\n",
       "expected_findings": []
     },
     {

@@ -32,7 +32,7 @@
       "class": "network-isolation",
       "kind": "holdout",
       "file": "fixture_test.py",
-      "source": "from unittest.mock import patch\n\ndef test_health_stub():\n    with patch('urllib.request.urlopen') as open_url:\n        open_url.return_value.status = 204\n        assert open_url().status == 204",
+      "source": "from unittest.mock import patch\n\nfrom app import health_status\n\ndef test_health_status_uses_stub():\n    with patch('app.urlopen') as open_url:\n        open_url.return_value.status = 204\n        assert health_status() == 204\n        open_url.assert_called_once_with('https://status.internal/health', timeout=2)\n",
       "expected_findings": []
     },
     {
@@ -74,7 +74,7 @@
       "class": "verifier-fail-open",
       "kind": "holdout",
       "file": "fixture_test.py",
-      "source": "import subprocess\n\ndef test_lint_clean():\n    result = subprocess.run(['ruff', 'check', '.'], capture_output=True)\n    print(result.stderr)\n    assert 'error' not in result.stderr.decode().lower()",
+      "source": "import subprocess\n\ndef lint_gate():\n    result = subprocess.run(['ruff', 'check', '.'], capture_output=True)\n    return {'verdict': 'clean', 'log': result.stdout.decode()}\n",
       "expected_findings": [
         {
           "seed_id": "C2-TI-VER-CONF-P1",
@@ -121,7 +121,7 @@
       "class": "assertion-specificity",
       "kind": "holdout",
       "file": "fixture_test.py",
-      "source": "def test_rejects_bad_token(client):\n    response = client.post('/tokens', json={'token': 'bad'})\n    assert response.status_code == 400",
+      "source": "def test_rejects_bad_token_and_stores_nothing(client, db):\n    response = client.post('/tokens', json={'token': 'bad'})\n    assert response.status_code == 400\n",
       "expected_findings": [
         {
           "seed_id": "C2-TI-AST-CONF-P2",
@@ -168,7 +168,7 @@
       "class": "hidden-environment-dependencies",
       "kind": "holdout",
       "file": "fixture_test.py",
-      "source": "import os\nfrom pathlib import Path\n\ndef test_load_settings(tmp_path):\n    env = {'HOME': str(tmp_path)}\n    assert env['HOME'] == str(tmp_path)\n    assert Path(env['HOME']).is_dir()",
+      "source": "from pathlib import Path\n\nfrom app.settings import load_settings\n\ndef test_load_settings(tmp_path):\n    settings = load_settings(env={'HOME': str(tmp_path)})\n    assert settings.config_dir == Path(tmp_path) / '.app'\n",
       "expected_findings": []
     },
     {
