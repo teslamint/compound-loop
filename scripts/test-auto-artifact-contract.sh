@@ -95,6 +95,11 @@ require_literal "$DESIGNING" "mode: auto" "designing declares auto mode"
 require_literal "$DESIGNING" "Assumptions and Preconditions" "designing declares assumptions section"
 require_literal "$DESIGNING" "## Trade-offs" "designing declares trade-offs section"
 require_literal "$DESIGNING" "validate-auto-artifact.py" "designing invokes standalone validator"
+for skill in "$DESIGNING" "$PLANNING"; do
+  require_literal "$skill" '`## Non-goals` or `### Out`' "auto contract names accepted non-goals headings"
+  require_literal "$skill" '`## Residual Risks`, `## Risks`, or `## Risks and Mitigations`' "auto contract names accepted risk headings"
+  require_literal "$skill" "outside code fences" "auto contract states fenced text does not count"
+done
 require_order "$DESIGNING" "## Assumptions and Preconditions" "## Step 9" "designing places assumptions before spec writing"
 require_literal "$PLANNING" "mode: auto" "planning declares auto mode"
 require_literal "$PLANNING" "Assumptions and Preconditions" "planning declares assumptions section"
