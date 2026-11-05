@@ -101,12 +101,14 @@ def frontmatter_scalar(line: str) -> str:
 
 NEGATED_CONTROL = re.compile(
     # A negator or "optional" directly before the phrase ("no negative controls",
-    # "don't need negative controls"), or the phrase itself declared not required
-    # or optional afterwards. Other negation in the sentence ("must not pass",
+    # "don't need negative controls"), or the phrase itself declared not required,
+    # optional, or omittable afterwards ("should not be required", "can be
+    # omitted"). Other negation in the sentence ("must not pass", "not optional",
     # "cover optional integrations") still states a requirement.
-    r"\b(?:no|never|without|skip|omit|zero|optional|don't|doesn't)\s+(?:\w+\s+)?negative[- ]controls?\b"
-    r"|negative[- ]controls?\s+(?:are|is)\s+(?:\w+\s+)?(?:not\s+(?:required|needed|necessary)|optional|unnecessary|unneeded)\b"
-    r"|negative[- ]controls?\s+(?:aren't|isn't)\s+(?:\w+\s+)?(?:required|needed|necessary)\b"
+    r"(?<![\w-])(?:no|never|without|skip|omit|zero|optional|don't|doesn't)\s+(?:\w+\s+)?negative[- ]controls?\b"
+    r"|negative[- ]controls?(?:\s+\w+){0,2}?\s+(?:not|\w+n't)\s+(?:be\s+)?(?:required|needed|necessary|mandatory|need)\b"
+    r"|negative[- ]controls?\s+(?:\w+\s+)?(?:are|is|be)\s+(?:(?!not\b)\w+\s+)?(?:optional|unnecessary|unneeded)\b"
+    r"|negative[- ]controls?(?:\s+(?!not\b)\w+){0,2}?\s+be\s+(?:omitted|skipped|dropped)\b"
 )
 
 

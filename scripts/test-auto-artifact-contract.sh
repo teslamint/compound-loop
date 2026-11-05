@@ -255,11 +255,11 @@ for non_command in 'progress_path' 'mode: auto'; do
 done
 mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/unrelated-control.md" "negative controls" "source control"
 expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/unrelated-control.md" "unrelated control phrase is rejected"
-for negated in 'No negative controls are required.' 'Negative controls are not needed.' "We don't need negative controls." 'Negative controls are optional.' 'Optional negative controls only.'; do
+for negated in 'No negative controls are required.' 'Negative controls are not needed.' "We don't need negative controls." 'Negative controls are optional.' 'Optional negative controls only.' 'Negative controls should not be required.' 'Negative controls should be optional.' 'Negative controls do not need to run.' 'Negative controls can be omitted.' 'Negative controls are not mandatory.'; do
   mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/negated-control.md" "negative controls must fail" "$negated"
   expect_reject "$DESIGN_VALIDATOR" "$TMP_ROOT/negated-control.md" "negated negative-control statement is rejected: $negated"
 done
-for required in 'negative controls must not pass' 'never merge unless negative controls fail' 'negative controls must cover optional integrations'; do
+for required in 'negative controls must not pass' 'never merge unless negative controls fail' 'negative controls must cover optional integrations' 'include non-optional negative controls' 'negative controls are not optional' 'negative controls must not be skipped'; do
   mutate "$TMP_ROOT/auto-spec.md" "$TMP_ROOT/required-control.md" "negative controls must fail" "$required"
   expect_accept "$DESIGN_VALIDATOR" auto "$TMP_ROOT/required-control.md" "negative-control requirement with other negation is accepted: $required"
 done
