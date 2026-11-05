@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -12,6 +13,8 @@ from pathlib import Path
 
 CHECKS_PATH = Path(__file__).resolve().parents[1] / "skills/reviewing/references/test-integrity.md"
 SEVERITIES = ("P0", "P1", "P2", "P3")
+# Case ids become file names under the plan directory; allow no path syntax.
+CASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 TIMEOUT_SECONDS = 120
 
 
@@ -47,8 +50,8 @@ def corpus_cases(paths):
             if not isinstance(case, dict) or not all(key in case for key in ("id", "class", "kind", "file", "source", "expected_findings")):
                 fail("invalid case in corpus: " + str(path))
             case_id = case["id"]
-            if not isinstance(case_id, str) or not case_id or case_id in seen:
-                fail("missing or duplicate case id: " + str(case_id))
+            if not isinstance(case_id, str) or not CASE_ID.fullmatch(case_id) or ".." in case_id or case_id in seen:
+                fail("invalid or duplicate case id: " + repr(case_id))
             seen.add(case_id)
             cases.append(case)
     cases.sort(key=lambda case: case["id"])
@@ -102,6 +105,9 @@ def run(args):
     responses = plan_path.parent / "responses"
     responses.mkdir(parents=True, exist_ok=True)
     for entry in manifest.get("requests", []):
+        case_id = entry.get("case_id")
+        if not isinstance(case_id, str) or not CASE_ID.fullmatch(case_id) or ".." in case_id or entry.get("request") != "requests/" + case_id + ".json":
+            fail("invalid plan entry: " + repr(case_id))
         request_path = plan_path.parent / entry["request"]
         request_bytes = request_path.read_bytes()
         if digest(request_bytes) != entry.get("sha256"):

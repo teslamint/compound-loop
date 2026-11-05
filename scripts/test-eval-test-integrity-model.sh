@@ -90,5 +90,25 @@ with tempfile.TemporaryDirectory(prefix="c2ti-model-test-") as temporary:
     repeat_result = call(["score", "--plan", str(plan_path), "--responses", str(repeat_a), str(repeat_b), "--corpus", str(corpus), "--repeat", "2"], expected=1)
     assert "repeat_mismatches" in repeat_result.stdout
 
+    # Case ids and plan entries become file names; a traversal id must be
+    # rejected before anything is written outside the plan directory.
+    escape = base / "escape-target"
+    evil_corpus = base / "evil.json"
+    evil_case = dict(cases[0], id="../../escape-target")
+    evil_case["expected_findings"] = [{"seed_id": evil_case["id"], "severity": "P1"}]
+    evil_corpus.write_text(json.dumps({"schema": "c2-ti/v1", "classes": classes, "cases": [evil_case]}), encoding="utf-8")
+    call(["plan", "--corpus", str(evil_corpus), "--out", str(base / "evil-plan" / "x")], expected=1)
+    assert not escape.with_suffix(".json").exists(), "plan wrote outside its directory"
+
+    tampered_dir = base / "tampered"
+    call(["plan", "--corpus", str(corpus), "--out", str(tampered_dir)])
+    tampered_path = tampered_dir / "plan.json"
+    tampered = json.loads(tampered_path.read_text(encoding="utf-8"))
+    tampered["requests"][0]["case_id"] = "../../escape-target"
+    tampered_path.write_text(json.dumps(tampered), encoding="utf-8")
+    tampered_approval = hashlib.sha256(tampered_path.read_bytes()).hexdigest()
+    call(["run", "--plan", str(tampered_path), "--command", fake_command, "--approval", tampered_approval], expected=1)
+    assert not escape.with_suffix(".json").exists(), "run wrote outside its directory"
+
 print("ALL MODEL EVALUATOR FIXTURES PASSED")
 PY
