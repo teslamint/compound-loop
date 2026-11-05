@@ -115,6 +115,8 @@ For each unit, in dependency order:
 
 1. **Brief**: write the unit's full text to `<artifact_root>/.tmp/U<N>-brief.tmp`. Include exact values, signatures, Files, Interfaces, Test scenarios, and the Execution note. Publish it to `<artifact_root>/briefs/U<N>-brief.md`. A dispatch prompt describes one unit, not the session's history — never paste prior-unit summaries into a later dispatch.
 2. **Dispatch implementer**: one line on where the unit fits, the final brief path introduced as "read this first — your requirements," interfaces/decisions from earlier units the brief cannot know, your resolution of any ambiguity you noticed, and the temporary report path `<artifact_root>/.tmp/U<N>-report.tmp`. Code units follow `tdd`'s Execution note; non-code units write → self-review against spec → commit. After the worker returns, publish the temporary report to `<artifact_root>/reports/U<N>-report.md`.
+
+   **Signing pass-through**: when the base-before-unit commit is signed (its `git log -1 --format=%G?` is not `N`), a committing worker must sign with the orchestrator's key. Pass `SSH_AUTH_SOCK` (and `GNUPGHOME` when set) to the worker by variable reference, never as a copied literal path. After the worker returns, run `git log --format='%h %G? %GK' <base-before-unit>..HEAD`. Any commit whose signature status or signing key differs from the base commit's blocks the unit until that commit is re-signed; a status other than `G` or `U` always blocks.
 3. **Status protocol**:
 
 | Status | Orchestrator response |

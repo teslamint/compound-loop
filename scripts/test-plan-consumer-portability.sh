@@ -2655,6 +2655,8 @@ for fragment in (
     "<artifact_root>/briefs/U<N>-brief.md",
     "<artifact_root>/reports/U<N>-report.md",
     "<artifact_root>/reviews/U<N>-diff.txt",
+    "SSH_AUTH_SOCK",
+    "--format='%h %G? %GK'",
 ):
     assert fragment in implementing, fragment
 
