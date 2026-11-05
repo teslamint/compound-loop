@@ -99,12 +99,19 @@ def frontmatter_scalar(line: str) -> str:
     return value
 
 
+NEGATED_CONTROL = re.compile(
+    # A negator directly before the phrase ("no negative controls", "don't need
+    # negative controls"), or the phrase declared unnecessary afterwards. Other
+    # negation in the sentence ("must not pass") still states a requirement.
+    r"\b(?:no|never|without|skip|omit|zero|don't|doesn't)\s+(?:\w+\s+)?negative[- ]controls?\b"
+    r"|negative[- ]controls?\b.*?(?:\bnot|n't)\s+(?:be\s+)?(?:required|needed|necessary)\b"
+    r"|negative[- ]controls?\b.*?\b(?:unnecessary|unneeded|optional)\b"
+)
+
+
 def has_negative_control_requirement(text: str) -> bool:
     for sentence in re.split(r"[\n.!?]+", text.casefold()):
-        if re.search(r"\bnegative[- ]controls?\b", sentence) and not re.search(
-            r"\b(?:no|not|never|without|unnecessary|unneeded|aren't|isn't|doesn't|don't)\b",
-            sentence,
-        ):
+        if re.search(r"\bnegative[- ]controls?\b", sentence) and not NEGATED_CONTROL.search(sentence):
             return True
     return False
 
