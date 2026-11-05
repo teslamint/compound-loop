@@ -139,40 +139,57 @@ PROBES = {
     ),
 }
 
-ENVELOPE_REQUIRED = set(lane_schema["required"])
-FINDING_SCHEMA = lane_schema["properties"]["findings"]["items"]
-DETAIL_REQUIRED = set(FINDING_SCHEMA["required"])
-SEVERITIES = set(FINDING_SCHEMA["properties"]["severity"]["enum"])
-CONFIDENCE = set(FINDING_SCHEMA["properties"]["confidence"]["enum"])
-AUTOFIX = set(FINDING_SCHEMA["properties"]["autofix_class"]["enum"])
-OWNERS = set(FINDING_SCHEMA["properties"]["owner"]["enum"])
+def validate_json_schema(value, schema, path="root"):
+    expected_type = schema.get("type")
+    if expected_type:
+        types = {expected_type} if isinstance(expected_type, str) else set(expected_type)
+
+        def matches(type_name):
+            if type_name == "object":
+                return isinstance(value, dict)
+            if type_name == "array":
+                return isinstance(value, list)
+            if type_name == "string":
+                return isinstance(value, str)
+            if type_name == "integer":
+                return isinstance(value, int) and not isinstance(value, bool)
+            if type_name == "boolean":
+                return isinstance(value, bool)
+            if type_name == "null":
+                return value is None
+            return True
+
+        if not any(matches(type_name) for type_name in types):
+            raise AssertionError(f"C2-TI schema: {path} has an invalid type")
+    if "enum" in schema and value not in schema["enum"]:
+        raise AssertionError(f"C2-TI schema: {path} has an invalid enum value")
+    if isinstance(value, str) and "maxLength" in schema and len(value) > schema["maxLength"]:
+        raise AssertionError(f"C2-TI schema: {path} exceeds maxLength")
+    if isinstance(value, int) and "minimum" in schema and value < schema["minimum"]:
+        raise AssertionError(f"C2-TI schema: {path} is below minimum")
+    if isinstance(value, list):
+        if "minItems" in schema and len(value) < schema["minItems"]:
+            raise AssertionError(f"C2-TI schema: {path} has too few items")
+        item_schema = schema.get("items")
+        if item_schema:
+            for index, item in enumerate(value):
+                validate_json_schema(item, item_schema, f"{path}[{index}]")
+    if isinstance(value, dict):
+        for key in schema.get("required", []):
+            if key not in value:
+                raise AssertionError(f"C2-TI schema: {path} missing {key}")
+        for key, property_schema in schema.get("properties", {}).items():
+            if key in value:
+                validate_json_schema(value[key], property_schema, f"{path}.{key}")
 
 
 def validate_envelope(envelope):
-    if not ENVELOPE_REQUIRED.issubset(envelope) or envelope["reviewer"] != "test-integrity":
-        raise AssertionError("C2-TI schema: invalid top-level lane envelope")
-    if not isinstance(envelope["findings"], list):
-        raise AssertionError("C2-TI schema: findings is not an array")
+    validate_json_schema(envelope, lane_schema, "envelope")
+    if envelope["reviewer"] != "test-integrity":
+        raise AssertionError("C2-TI schema: invalid reviewer")
     for finding in envelope["findings"]:
-        missing = DETAIL_REQUIRED - set(finding)
-        if missing:
-            raise AssertionError("C2-TI schema: missing " + ", ".join(sorted(missing)))
-        if finding["severity"] not in SEVERITIES:
-            raise AssertionError("C2-TI schema: invalid severity")
-        if finding["confidence"] not in CONFIDENCE:
-            raise AssertionError("C2-TI schema: invalid confidence")
-        if finding["autofix_class"] not in AUTOFIX or finding["owner"] not in OWNERS:
-            raise AssertionError("C2-TI schema: invalid routing enum")
-        if not isinstance(finding["line"], int) or finding["line"] < 1:
-            raise AssertionError("C2-TI schema: invalid line")
-        if not isinstance(finding["evidence"], list) or not finding["evidence"]:
-            raise AssertionError("C2-TI schema: evidence is empty")
-        if not isinstance(finding["why_it_matters"], str) or not finding["why_it_matters"]:
-            raise AssertionError("C2-TI schema: why_it_matters is empty")
-        if not isinstance(finding["requires_verification"], bool) or not isinstance(
-            finding["pre_existing"], bool
-        ):
-            raise AssertionError("C2-TI schema: boolean field is invalid")
+        if not finding["evidence"] or not finding["why_it_matters"]:
+            raise AssertionError("C2-TI schema: detail field is empty")
 
 
 def finding_for(case, line_number, source_line):
