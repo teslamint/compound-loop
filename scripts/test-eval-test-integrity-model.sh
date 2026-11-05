@@ -21,14 +21,18 @@ cases = [
     {"id": "CASE-SECRET-CLEAN", "class": "network-isolation", "kind": "clean", "file": "clean.py", "source": "assert 1 == 1", "expected_findings": []},
 ]
 
+call_log = None
+
 def call(args, expected=0):
-    result = subprocess.run([sys.executable, str(script)] + args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    env = dict(os.environ, C2TI_FAKE_LOG=str(call_log)) if call_log else None
+    result = subprocess.run([sys.executable, str(script)] + args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     if (result.returncode == 0) != (expected == 0):
         raise AssertionError("unexpected exit %d: %s\n%s" % (result.returncode, result.stdout, result.stderr))
     return result
 
 with tempfile.TemporaryDirectory(prefix="c2ti-model-test-") as temporary:
     base = pathlib.Path(temporary)
+    call_log = base / "calls.log"
     corpus = base / "corpus.json"
     corpus.write_text(json.dumps({"schema": "c2-ti/v1", "classes": classes, "cases": cases}), encoding="utf-8")
     plan_dir = base / "plan"
@@ -47,8 +51,9 @@ with tempfile.TemporaryDirectory(prefix="c2ti-model-test-") as temporary:
     call(["run", "--plan", str(plan_path), "--command", "true", "--approval", "0" * 64], expected=1)
     fake = base / "fake_model.py"
     fake.write_text(
-        "import json, sys\n"
+        "import json, os, sys\n"
         "request = json.load(sys.stdin)\n"
+        "open(os.environ['C2TI_FAKE_LOG'], 'a').write('call\\n')\n"
         "source = request['messages'][1]['content']\n"
         "findings = [] if 'clean.py' in source else [{'integrity_class':'network-isolation','severity':'P1','line':1,'evidence':'network call'}]\n"
         "print(json.dumps({'findings': findings}))\n",
@@ -61,7 +66,10 @@ with tempfile.TemporaryDirectory(prefix="c2ti-model-test-") as temporary:
     # run's stored responses are the ones score evaluates, and they pass.
     call(["score", "--plan", str(plan_path), "--responses", str(responses_dir), "--corpus", str(corpus)])
     # A second run never mixes into an existing response directory.
-    call(["run", "--plan", str(plan_path), "--command", fake_command, "--approval", approval, "--responses", str(responses_dir)], expected=1)
+    calls_before = call_log.read_text().count("call")
+    rerun = call(["run", "--plan", str(plan_path), "--command", fake_command, "--approval", approval, "--responses", str(responses_dir)], expected=1)
+    assert "already exists" in rerun.stderr, rerun.stderr
+    assert call_log.read_text().count("call") == calls_before, "rerun called the model before refusing"
     # A run that fails part-way leaves no response directory to score.
     failing = base / "failing_model.py"
     failing.write_text(
@@ -75,14 +83,20 @@ with tempfile.TemporaryDirectory(prefix="c2ti-model-test-") as temporary:
     partial_dir = base / "run-partial"
     call(["run", "--plan", str(plan_path), "--command", shlex.quote(sys.executable) + " " + shlex.quote(str(failing)), "--approval", approval, "--responses", str(partial_dir)], expected=1)
     assert not partial_dir.exists(), "failed run left a scorable response directory"
+    assert not partial_dir.with_name(partial_dir.name + ".partial").exists(), "failed run left its partial directory"
 
     # A request file changed after approval is refused before any call.
     tamper_req_dir = base / "tamper-request"
     call(["plan", "--corpus", str(corpus), "--out", str(tamper_req_dir)])
     tamper_req_plan = tamper_req_dir / "plan.json"
     tamper_req_approval = hashlib.sha256(tamper_req_plan.read_bytes()).hexdigest()
-    (tamper_req_dir / "requests/CASE-SECRET-1.json").write_text('{"messages": []}\n', encoding="utf-8")
-    call(["run", "--plan", str(tamper_req_plan), "--command", fake_command, "--approval", tamper_req_approval, "--responses", str(base / "tamper-request-out")], expected=1)
+    tampered_request = json.loads((tamper_req_dir / "requests/CASE-SECRET-1.json").read_text(encoding="utf-8"))
+    tampered_request["messages"][1]["content"] += "\n# changed after approval"
+    (tamper_req_dir / "requests/CASE-SECRET-1.json").write_text(json.dumps(tampered_request), encoding="utf-8")
+    calls_before = call_log.read_text().count("call")
+    tamper_run = call(["run", "--plan", str(tamper_req_plan), "--command", fake_command, "--approval", tamper_req_approval, "--responses", str(base / "tamper-request-out")], expected=1)
+    assert "digest mismatch" in tamper_run.stderr, tamper_run.stderr
+    assert call_log.read_text().count("call") == calls_before, "tampered plan reached the model"
     assert not (base / "tamper-request-out").exists()
 
     good = base / "good"
@@ -101,19 +115,33 @@ with tempfile.TemporaryDirectory(prefix="c2ti-model-test-") as temporary:
     # Extra files and unknown classes are not silently accepted.
     extra = base / "extra"
     extra.mkdir()
-    for name, body in (("CASE-SECRET-1.json", '{"findings": []}'), ("CASE-SECRET-CLEAN.json", '{"findings": []}'), ("CASE-OTHER.json", '{"findings": []}')):
+    good_finding = json.dumps({"findings": [{"integrity_class": "network-isolation", "severity": "P1", "line": 1, "evidence": "network call"}]})
+    for name, body in (("CASE-SECRET-1.json", good_finding), ("CASE-SECRET-CLEAN.json", '{"findings": []}'), ("CASE-OTHER.json", '{"findings": []}')):
         (extra / name).write_text(body, encoding="utf-8")
-    call(["score", "--plan", str(plan_path), "--responses", str(extra), "--corpus", str(corpus)], expected=1)
+    extra_result = call(["score", "--plan", str(plan_path), "--responses", str(extra), "--corpus", str(corpus)], expected=1)
+    assert "unexpected files" in extra_result.stderr, extra_result.stderr
     unknown = base / "unknown-class"
     unknown.mkdir()
-    (unknown / "CASE-SECRET-1.json").write_text(json.dumps({"findings": [{"integrity_class": "made-up", "severity": "P1", "line": 1, "evidence": "x"}]}), encoding="utf-8")
+    (unknown / "CASE-SECRET-1.json").write_text(json.dumps({"findings": [{"integrity_class": "network-isolation", "severity": "P1", "line": 1, "evidence": "network call"}, {"integrity_class": "made-up", "severity": "P1", "line": 1, "evidence": "x"}]}), encoding="utf-8")
     (unknown / "CASE-SECRET-CLEAN.json").write_text('{"findings": []}', encoding="utf-8")
-    call(["score", "--plan", str(plan_path), "--responses", str(unknown), "--corpus", str(corpus)], expected=1)
+    unknown_result = call(["score", "--plan", str(plan_path), "--responses", str(unknown), "--corpus", str(corpus)], expected=1)
+    assert "malformed-or-missing" in unknown_result.stdout, unknown_result.stdout
+    # A non-string class is reported as malformed, not a crash.
+    odd = base / "odd-class"
+    odd.mkdir()
+    (odd / "CASE-SECRET-1.json").write_text(json.dumps({"findings": [{"integrity_class": ["x"], "severity": "P1", "line": 1, "evidence": "x"}]}), encoding="utf-8")
+    (odd / "CASE-SECRET-CLEAN.json").write_text('{"findings": []}', encoding="utf-8")
+    odd_result = call(["score", "--plan", str(plan_path), "--responses", str(odd), "--corpus", str(corpus)], expected=1)
+    assert "malformed-or-missing" in odd_result.stdout and "Traceback" not in odd_result.stderr
 
     # The scored corpus must be exactly the approved plan's cases.
     subset = base / "subset.json"
     subset.write_text(json.dumps({"schema": "c2-ti/v1", "classes": classes, "cases": [cases[0]]}), encoding="utf-8")
-    call(["score", "--plan", str(plan_path), "--responses", str(good), "--corpus", str(subset)], expected=1)
+    subset_dir = base / "subset-responses"
+    subset_dir.mkdir()
+    (subset_dir / "CASE-SECRET-1.json").write_text(good_finding, encoding="utf-8")
+    subset_result = call(["score", "--plan", str(plan_path), "--responses", str(subset_dir), "--corpus", str(subset)], expected=1)
+    assert "do not match the plan" in subset_result.stderr, subset_result.stderr
 
 
     cross = base / "cross"

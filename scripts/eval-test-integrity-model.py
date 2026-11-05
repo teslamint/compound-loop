@@ -151,10 +151,8 @@ def parse_findings(path, known_classes):
             if not isinstance(finding, dict):
                 return None
             cls, severity = finding.get("integrity_class"), finding.get("severity")
-            if cls not in known_classes:
-                return None
             line, evidence = finding.get("line"), finding.get("evidence")
-            if not isinstance(cls, str) or not isinstance(severity, str) or severity not in SEVERITIES:
+            if not isinstance(cls, str) or cls not in known_classes or not isinstance(severity, str) or severity not in SEVERITIES:
                 return None
             if not isinstance(line, int) or isinstance(line, bool) or line < 1 or not isinstance(evidence, str):
                 return None
