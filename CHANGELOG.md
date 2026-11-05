@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.11.0-dev.4] - 2026-09-20
+
+### Added
+- Governed recovery for eligible legacy `archived-incomplete` runs, with pinned backup, authority audit, verified restore, and completion artifacts.
+- Legacy `.release-loop/v1` evidence now transfers, resumes after partial directory copies, rejects unsafe ownership or destination state, and archives with the run.
+- `release-loop --auto` specs and plans now record explicit assumptions, trade-offs, measured costs, and closure evidence, with standalone validators and negative-control coverage.
+
+### Changed
+- Coverage checks bind their production population and mutation denominator to the authoritative release-loop ledger, then report validator, downstream, and stacked recall separately.
+- Legacy handoff and archive contracts now preserve symlink, collision, malformed-ownership, and fixture-identity rejection evidence.
+
+### Fixed
+- CI now rejects prohibited fixture author or committer identities before merge.
+
 ## [0.11.0] - 2026-08-22
 
 ### Added

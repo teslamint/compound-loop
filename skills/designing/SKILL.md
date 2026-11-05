@@ -105,6 +105,49 @@ Present in sections scaled to complexity (a few sentences when straightforward, 
 
 Design-for-isolation test per unit introduced: what does it do, how is it used, what does it depend on — can a reader understand it without internals, and change internals without breaking consumers?
 
+## Auto mode contract
+
+When `release-loop` supplies an exact `progress_path`, read that repo-relative
+ledger before drafting. Reject a missing, mismatched, symlinked, or out-of-root
+ledger before writing the spec. Select auto mode only when the ledger `flags`
+contains `--auto`; interactive calls keep the existing contract.
+
+For auto mode, write `mode: auto` in frontmatter. Place the following sections
+before the spec's Architecture or Success Criteria:
+
+## Assumptions and Preconditions
+
+Use the existing five-field table with these exact columns:
+`Claim`, `Command`, `Observed at`, `Observed result`, and `Evidence source`.
+Every live-assumption cell must be non-empty. If no live assumption exists,
+write one explicit non-empty `no-live-assumptions` statement.
+
+## Trade-offs
+
+Use the exact columns `Option`, `Metric it improves`, `Metric it degrades`,
+and `Measured cost`. Every data cell must be non-empty, every measured cost
+must contain an ASCII digit, and the rows must include `Selected:` plus either
+`Rejected:` or `No rejected alternative:`.
+
+Record non-goals under `## Non-goals` or `### Out` and residual risks under
+`## Residual Risks`, `## Risks`, or `## Risks and Mitigations`. In auto mode,
+`## Success Criteria` needs at least one backticked proving command with
+arguments or a path, and a `Negative controls:` line that names the controls
+that must fail; a value such as `none` or `N/A` fails, and a judgment rubric
+alone does not satisfy the validator. The validator reads only
+text outside code fences. State the selected option and why each
+rejected option loses on its named metric. Set `designing_skill_root` to the
+directory containing this loaded `SKILL.md`, then run the standalone validator
+before committing:
+
+```sh
+python3 "$designing_skill_root/scripts/validate-auto-artifact.py" --mode auto <spec-path>
+```
+
+If the exact ledger selection, explicit assumptions, trade-offs, non-goals,
+residual risks, or validator controls cannot be preserved, stop and return to
+the Design gate. Do not infer either section from arbitrary prose.
+
 ## Step 9: Write Spec Document
 
 Path: `docs/specs/YYYY-MM-DD-<topic>-design.md`. See `references/spec-template.md` for the section skeleton, Spec Quality Signals, and the required Success Criteria shape.

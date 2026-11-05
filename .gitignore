@@ -17,4 +17,7 @@
 # local state (machine-local, never commit)
 .entirecontext/
 .omc/
+
+# generated artifacts
+/evals/results/
 __pycache__/

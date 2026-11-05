@@ -1,7 +1,7 @@
 ---
 module: release-loop
 date: "2026-08-15"
-last_updated: "2026-08-25"
+last_updated: "2026-09-09"
 problem_type: workflow_issue
 component: loop-state-lifecycle
 severity: medium
@@ -92,7 +92,8 @@ For class 2, apply in order:
 Treat a compound command's effect boundaries independently. After any ambiguous
 merge result:
 
-1. Query the remote PR state and require a non-empty merged commit SHA.
+1. Query the remote PR state, require a non-empty merged commit SHA, and verify
+   that SHA at the base checkout before retrying the merge.
 2. Inspect worktrees and local/remote feature refs to identify skipped cleanup.
 3. Fast-forward the base checkout without rewriting local work and require
    base `HEAD` to equal the merged SHA.
@@ -115,10 +116,24 @@ first-hand USER approval, create a recovery branch at the verified merged SHA.
 Run Retro and archive before cleanup. The durable follow-up is an explicit,
 collision-safe legacy destination with an acceptance matrix.
 
+V1 evidence is not a generic allowlist exception. Issue #31 showed that Ship
+required `.release-loop/v1`, while legacy handoff rejected it before transfer.
+Admit V1 only after the accepted pre-merge verification proves its ownership,
+paths, and digests. Transfer it under the existing manifest. Archive it before
+the `progress.md` commit point. Keep unowned entries rejected. PR #32 also added
+the previously missing changed-source and complete-rerun selectors plus a
+file-level interruption hook. These controls prove retry safety without granting
+authority to unrelated files. See
+`docs/specs/2026-08-31-legacy-handoff-v1-evidence-design.md` and
+`docs/plans/2026-08-31-001-fix-legacy-handoff-v1-evidence-plan.md`.
+
 A ledger summary is not a verification transcript. Preserve bounded raw failure
 output, exact environment observations, and both RED and GREEN results before
 using them for an independent root-cause claim. When those artifacts do not
 exist, Retro may record the recovery outcome but must narrow the causal claim.
+A manual CodeRabbit review request and an `APPROVED` review prove that the review
+transition occurred. They do not prove an earlier skipped or failed cause unless
+the earlier raw status and output were persisted.
 
 ## Why This Matters
 
