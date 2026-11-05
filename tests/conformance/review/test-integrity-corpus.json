@@ -1,0 +1,166 @@
+{
+  "schema": "c2-ti/v1",
+  "description": "Deterministic test-integrity lane corpus",
+  "classes": [
+    {"id": "network-isolation", "severity": "P1"},
+    {"id": "shared-temporary-directories", "severity": "P1"},
+    {"id": "verifier-fail-open", "severity": "P1"},
+    {"id": "assertion-specificity", "severity": "P2"},
+    {"id": "hidden-environment-dependencies", "severity": "P1"},
+    {"id": "fixture-git-signing-hooks", "severity": "P1"}
+  ],
+  "cases": [
+    {
+      "id": "C2-TI-NET-01",
+      "class": "network-isolation",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "import requests\n\ndef test_fetch():\n    requests.get(\"https://example.invalid\")\n",
+      "expected_findings": [{"seed_id": "C2-TI-NET-01", "severity": "P1"}]
+    },
+    {
+      "id": "C2-TI-NET-02",
+      "class": "network-isolation",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "import socket\n\ndef test_socket():\n    socket.create_connection((\"example.invalid\", 443))\n",
+      "expected_findings": [{"seed_id": "C2-TI-NET-02", "severity": "P1"}]
+    },
+    {
+      "id": "C2-TI-NET-HOLDOUT",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "def test_stubbed_http():\n    response = fake_http.get(\"fixture://local\")\n    assert response.status == 200\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-TMP-01",
+      "class": "shared-temporary-directories",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "from pathlib import Path\n\ndef test_shared_path():\n    output = Path(\"/tmp/shared-fixture/output.json\")\n",
+      "expected_findings": [{"seed_id": "C2-TI-TMP-01", "severity": "P1"}]
+    },
+    {
+      "id": "C2-TI-TMP-02",
+      "class": "shared-temporary-directories",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "import tempfile\n\ndef test_process_temp():\n    output = tempfile.gettempdir() + \"/fixture-output\"\n",
+      "expected_findings": [{"seed_id": "C2-TI-TMP-02", "severity": "P1"}]
+    },
+    {
+      "id": "C2-TI-TMP-HOLDOUT",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import tempfile\n\ndef test_unique_temp():\n    with tempfile.TemporaryDirectory(prefix=\"c2-ti-\") as root:\n        assert root\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-VER-01",
+      "class": "verifier-fail-open",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "def verify(result):\n    try:\n        return result.is_valid()\n    except Exception: return True\n",
+      "expected_findings": [{"seed_id": "C2-TI-VER-01", "severity": "P1"}]
+    },
+    {
+      "id": "C2-TI-VER-02",
+      "class": "verifier-fail-open",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "def verify(result):\n    try:\n        return result.is_valid()\n    except Exception: pass\n",
+      "expected_findings": [{"seed_id": "C2-TI-VER-02", "severity": "P1"}]
+    },
+    {
+      "id": "C2-TI-VER-HOLDOUT",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "def verify(result):\n    try:\n        return result.is_valid()\n    except Exception:\n        raise VerificationError(\"invalid\")\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-AST-01",
+      "class": "assertion-specificity",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "def test_result():\n    result = run_fixture()\n    assert result\n",
+      "expected_findings": [{"seed_id": "C2-TI-AST-01", "severity": "P2"}]
+    },
+    {
+      "id": "C2-TI-AST-02",
+      "class": "assertion-specificity",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "def test_output():\n    output = run_fixture()\n    assert \"passed\" in output\n",
+      "expected_findings": [{"seed_id": "C2-TI-AST-02", "severity": "P2"}]
+    },
+    {
+      "id": "C2-TI-AST-HOLDOUT",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "def test_result():\n    result = run_fixture()\n    assert result.exit_code == 0\n    assert result.stdout == \"passed\"\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-ENV-01",
+      "class": "hidden-environment-dependencies",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "import os\n\ndef test_home():\n    config_root = os.environ[\"HOME\"]\n",
+      "expected_findings": [{"seed_id": "C2-TI-ENV-01", "severity": "P1"}]
+    },
+    {
+      "id": "C2-TI-ENV-02",
+      "class": "hidden-environment-dependencies",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "import os\n\ndef test_path():\n    tool_path = os.getenv(\"PATH\")\n",
+      "expected_findings": [{"seed_id": "C2-TI-ENV-02", "severity": "P1"}]
+    },
+    {
+      "id": "C2-TI-ENV-HOLDOUT",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import os\n\ndef test_declared_mode():\n    mode = os.environ.get(\"FIXTURE_MODE\", \"test\")\n    assert mode == \"test\"\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-GIT-01",
+      "class": "fixture-git-signing-hooks",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "import subprocess\n\ndef configure_fixture():\n    subprocess.run([\"git\", \"config\", \"--global\", \"core.hooksPath\", \"/host/hooks\"])\n",
+      "expected_findings": [{"seed_id": "C2-TI-GIT-01", "severity": "P1"}]
+    },
+    {
+      "id": "C2-TI-GIT-02",
+      "class": "fixture-git-signing-hooks",
+      "kind": "seed",
+      "file": "fixture_test.py",
+      "source": "import subprocess\n\ndef configure_fixture():\n    subprocess.run([\"git\", \"config\", \"--global\", \"commit.gpgsign\", \"true\"])\n",
+      "expected_findings": [{"seed_id": "C2-TI-GIT-02", "severity": "P1"}]
+    },
+    {
+      "id": "C2-TI-GIT-HOLDOUT",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import subprocess\n\ndef configure_fixture():\n    subprocess.run([\"git\", \"config\", \"--local\", \"commit.gpgsign\", \"false\"])\n    subprocess.run([\"git\", \"config\", \"--local\", \"core.hooksPath\", \"/fixture/empty-hooks\"])\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-CLEAN",
+      "class": "clean-fixture",
+      "kind": "clean",
+      "file": "fixture_test.py",
+      "source": "import tempfile\n\ndef test_clean_fixture():\n    with tempfile.TemporaryDirectory(prefix=\"c2-ti-\") as root:\n        assert root.startswith(\"/\")\n",
+      "expected_findings": []
+    }
+  ]
+}
