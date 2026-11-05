@@ -58,11 +58,12 @@ must contain an ASCII digit, and rows must include `Selected:` plus either
 
 Retain the separate `Assumption Recheck` section as the fresh-evidence
 authority. Record non-goals and residual risks. State the selected option and
-why each rejected option loses on its named metric. Run the standalone
+why each rejected option loses on its named metric. Set `planning_skill_root`
+to the directory containing this loaded `SKILL.md`, then run the standalone
 validator before committing:
 
 ```sh
-python3 skills/planning/scripts/validate-auto-artifact.py --mode auto <plan-path>
+python3 "$planning_skill_root/scripts/validate-auto-artifact.py" --mode auto <plan-path>
 ```
 
 If exact ledger selection, the explicit assumption and trade-off sections,

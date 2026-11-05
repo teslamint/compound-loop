@@ -130,11 +130,12 @@ must contain an ASCII digit, and the rows must include `Selected:` plus either
 `Rejected:` or `No rejected alternative:`.
 
 Record non-goals and residual risks. State the selected option and why each
-rejected option loses on its named metric. Run the standalone validator before
-committing:
+rejected option loses on its named metric. Set `designing_skill_root` to the
+directory containing this loaded `SKILL.md`, then run the standalone validator
+before committing:
 
 ```sh
-python3 skills/designing/scripts/validate-auto-artifact.py --mode auto <spec-path>
+python3 "$designing_skill_root/scripts/validate-auto-artifact.py" --mode auto <spec-path>
 ```
 
 If the exact ledger selection, explicit assumptions, trade-offs, non-goals,
