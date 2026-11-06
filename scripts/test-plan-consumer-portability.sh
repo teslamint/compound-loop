@@ -2659,6 +2659,7 @@ for fragment in (
     "--format='%h %G? %GK'",
     "including step 9 fix subagents",
     "blocks the unit until that commit is re-signed",
+    "the orchestrator's own signing key",
 ):
     assert fragment in implementing, fragment
 
