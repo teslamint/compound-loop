@@ -218,7 +218,7 @@
       "was": "C2-TI-GIT-FINAL-N1",
       "prior_label": "clean",
       "corrected_label": "verifier-fail-open",
-      "evidence": "[ -z \"$(ls -A dir)\" ] returns exit 0 when ls is missing, reproduced"
+      "evidence": "[ -z \"$(ls -A dir)\" ] exits 0 when ls is missing from PATH, so the check reports an empty hooks directory without inspecting it"
     }
   ]
 }

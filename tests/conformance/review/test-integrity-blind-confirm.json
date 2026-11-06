@@ -218,7 +218,7 @@
       "was": "C2-TI-GIT-CONF-N1",
       "prior_label": "clean",
       "corrected_label": "verifier-fail-open",
-      "evidence": "reproduced with executed commands, see commit message"
+      "evidence": "/bin/sh without set -e; test -z \"$(find dir -mindepth 1 -print -quit)\" exits 0 when find is missing from PATH, and the script ignores that result"
     }
   ]
 }

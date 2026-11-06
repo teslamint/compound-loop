@@ -202,7 +202,7 @@
       "id": "C2-TI-G3-VER-N2",
       "class": "verifier-fail-open",
       "kind": "holdout",
-      "file": "tests/test_invoice_schema_strict.py",
+      "file": "tests/test_invoice_schema_check.py",
       "source": "import json\nimport subprocess\nimport sys\n\n\ndef run_schema_check(payload_path):\n    proc = subprocess.run(\n        [sys.executable, \"-m\", \"schemacheck\", \"--json\", payload_path],\n        capture_output=True,\n        text=True,\n    )\n    if proc.returncode not in (0, 1):\n        raise RuntimeError(f\"schemacheck crashed: {proc.stderr.strip()}\")\n    report = json.loads(proc.stdout)\n    verdict = report[\"verdict\"]\n    if verdict not in (\"pass\", \"fail\"):\n        raise RuntimeError(f\"unknown verdict {verdict!r}\")\n    return verdict == \"pass\", report[\"errors\"]\n\n\ndef test_invoice_payload_matches_schema():\n    ok, errors = run_schema_check(\"tests/fixtures/invoice_v3.json\")\n    assert (ok, errors) == (True, [])\n",
       "expected_findings": []
     },
@@ -262,7 +262,7 @@
       "id": "C2-TI-G3-AST-N1",
       "class": "assertion-specificity",
       "kind": "holdout",
-      "file": "tests/test_media_probe_exact.py",
+      "file": "tests/test_media_probe_fields.py",
       "source": "from media.probe import probe_file\n\n\ndef test_probe_reports_video_stream_metadata():\n    info = probe_file(\"tests/media/clip_1080p_30fps.mp4\")\n    video = [s for s in info.streams if s.kind == \"video\"]\n    assert len(video) == 1\n    assert (video[0].width, video[0].height) == (1920, 1080)\n    assert video[0].frame_rate == 30\n    assert video[0].codec == \"h264\"\n",
       "expected_findings": []
     },
@@ -330,7 +330,7 @@
       "id": "C2-TI-G3-ENV-N1",
       "class": "hidden-environment-dependencies",
       "kind": "holdout",
-      "file": "tests/test_invoice_due_line_utc.py",
+      "file": "tests/test_invoice_due_line.py",
       "source": "import time\nfrom datetime import datetime\n\nimport pytest\n\nfrom billing.invoice import render_due_line\n\n\n@pytest.fixture\ndef utc_clock(monkeypatch):\n    monkeypatch.setenv(\"TZ\", \"UTC\")\n    time.tzset()\n    yield\n    monkeypatch.undo()\n    time.tzset()\n\n\ndef test_due_line_uses_local_calendar_day(utc_clock):\n    issued = datetime.fromtimestamp(1717200000)\n    line = render_due_line(issued, net_days=30)\n    assert line == \"Payment due: 2024-07-01\"\n",
       "expected_findings": []
     },
@@ -338,7 +338,7 @@
       "id": "C2-TI-G3-ENV-N2",
       "class": "hidden-environment-dependencies",
       "kind": "holdout",
-      "file": "tests/wordindex_order_c_locale.sh",
+      "file": "tests/wordindex_order.sh",
       "source": "#!/bin/sh\nset -eu\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\nmkdir -p \"$work/home\"\nprintf 'banana\\nApple\\ncherry\\napple\\n' > \"$work/words.txt\"\nLC_ALL=C HOME=\"$work/home\" ./bin/wordindex \"$work/words.txt\" > \"$work/index.txt\"\nprintf 'Apple\\napple\\nbanana\\ncherry\\n' > \"$work/expected.txt\"\ndiff -u \"$work/expected.txt\" \"$work/index.txt\"\n",
       "expected_findings": []
     },
@@ -398,7 +398,7 @@
       "id": "C2-TI-G3-GIT-N1",
       "class": "fixture-git-signing-hooks",
       "kind": "holdout",
-      "file": "tests/test_publish_release_isolated.py",
+      "file": "tests/test_publish_release.py",
       "source": "import subprocess\n\nfrom shipit.publish import publish_release\n\n\ndef git(*args, cwd):\n    return subprocess.run([\"git\", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout\n\n\ndef init_repo(path, bare=False):\n    git(\"init\", \"-q\", *([\"--bare\"] if bare else []), str(path), cwd=path.parent)\n    for key, value in [(\"user.name\", \"CI\"), (\"user.email\", \"ci@example.invalid\"),\n                       (\"commit.gpgsign\", \"false\"), (\"core.hooksPath\", \"\")]:\n        git(\"config\", key, value, cwd=path)\n\n\ndef test_publish_pushes_release_branch(tmp_path):\n    remote, work = tmp_path / \"origin.git\", tmp_path / \"work\"\n    init_repo(remote, bare=True)\n    init_repo(work)\n    (work / \"VERSION\").write_text(\"2.1.0\\n\")\n    git(\"add\", \"VERSION\", cwd=work)\n    git(\"commit\", \"-q\", \"-m\", \"2.1.0\", cwd=work)\n    git(\"remote\", \"add\", \"origin\", str(remote), cwd=work)\n    publish_release(str(work), branch=\"release/2.1\")\n    assert git(\"rev-parse\", \"release/2.1\", cwd=remote) == git(\"rev-parse\", \"HEAD\", cwd=work)\n",
       "expected_findings": []
     },
@@ -406,7 +406,7 @@
       "id": "C2-TI-G3-GIT-N2",
       "class": "fixture-git-signing-hooks",
       "kind": "holdout",
-      "file": "tests/diffscope_names_isolated.sh",
+      "file": "tests/diffscope_names.sh",
       "source": "#!/bin/sh\nset -eu\nfixture=$(mktemp -d)\nout=$(mktemp)\ntrap 'rm -rf \"$fixture\" \"$out\"' EXIT\ngit init -q \"$fixture\"\ngit -C \"$fixture\" config user.name \"Fixture Bot\"\ngit -C \"$fixture\" config user.email \"fixture@example.invalid\"\ngit -C \"$fixture\" config commit.gpgsign false\ngit -C \"$fixture\" config core.hooksPath \"\"\nmkdir -p \"$fixture/src\"\nprintf 'def handler(event):\\n    return 200\\n' > \"$fixture/src/app.py\"\ngit -C \"$fixture\" add src/app.py\ngit -C \"$fixture\" commit -q -m \"initial handler\"\nprintf 'def handler(event):\\n    return 204\\n' > \"$fixture/src/app.py\"\n./bin/diffscope --repo \"$fixture\" --format names > \"$out\"\n[ \"$(cat \"$out\")\" = \"src/app.py\" ]\n",
       "expected_findings": []
     }
@@ -426,5 +426,6 @@
         "resolution": "author label kept; 2 of 3 readings agree"
       }
     ]
-  }
+  },
+  "file_name_audit": "Case file names avoid safety-bearing words (strict, exact, utc, locale, isolated, loopback, configured) so the payload never hints at the expected verdict."
 }

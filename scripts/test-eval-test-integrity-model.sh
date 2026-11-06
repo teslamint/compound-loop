@@ -172,12 +172,16 @@ with tempfile.TemporaryDirectory(prefix="c2ti-model-test-") as temporary:
     extra_report = json.loads(extra_class.stdout)
     assert extra_report["repeat_mismatches"] == [], extra_class.stdout
     assert [item["precision"] for item in extra_report["repeats"]] == [1.0, 0.5], extra_class.stdout
+    # The headline describes the same repeat as the headline precision.
+    assert extra_report["headline_repeat"] == 2, extra_class.stdout
+    assert extra_report["false_positive_count"] == 1 and extra_report["true_positive_count"] == 1, extra_class.stdout
     # A clean-case P0/P1 false positive in a later repeat fails the gate.
     late_fp = call(["score", "--plan", str(plan_path), "--responses", str(write_repeat("late-a", [hit], [])), str(write_repeat("late-b", [hit], [clean_fp])), "--corpus", str(corpus), "--repeat", "2"], expected=1)
     late_report = json.loads(late_fp.stdout)
     assert late_report["repeat_mismatches"] == [], late_fp.stdout
     assert [item["clean_negative_p0_p1_false_positives"] for item in late_report["repeats"]] == [0, 1], late_fp.stdout
     assert late_report["clean_negative_p0_p1_false_positives"] == 1, late_fp.stdout
+    assert late_report["headline_repeat"] == 2, late_fp.stdout
     # Identical passing repeats pass.
     call(["score", "--plan", str(plan_path), "--responses", str(write_repeat("same-a", [hit], [])), str(write_repeat("same-b", [hit], [])), "--corpus", str(corpus), "--repeat", "2"])
     # The same directory cannot stand in for several repeats.

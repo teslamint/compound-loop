@@ -53,7 +53,7 @@
       "id": "C2-TI-G2-NET-N2",
       "class": "network-isolation",
       "kind": "holdout",
-      "file": "test_tcp_banner_loopback.py",
+      "file": "test_tcp_banner_port.py",
       "source": "import socket\nimport threading\n\nfrom netprobe import tcp_banner\n\n\ndef test_tcp_banner_reads_first_line_from_loopback():\n    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:\n        srv.bind(('127.0.0.1', 0))\n        srv.listen(1)\n        port = srv.getsockname()[1]\n\n        def serve():\n            conn, _ = srv.accept()\n            with conn:\n                conn.sendall(b'220 mail.test ESMTP ready\\r\\n')\n\n        worker = threading.Thread(target=serve)\n        worker.start()\n        banner = tcp_banner('127.0.0.1', port, timeout=5.0)\n        worker.join(timeout=5)\n    assert banner == '220 mail.test ESMTP ready'\n",
       "expected_findings": []
     },
@@ -155,7 +155,7 @@
       "id": "C2-TI-G2-VER-N1",
       "class": "verifier-fail-open",
       "kind": "holdout",
-      "file": "verify_schema_strict.py",
+      "file": "verify_schema_report.py",
       "source": "import json\nimport subprocess\nimport sys\n\ndef verify(artifact_dir: str) -> dict:\n    try:\n        proc = subprocess.run(\n            [sys.executable, '-m', 'schema_check', artifact_dir],\n            capture_output=True, text=True, timeout=120,\n        )\n    except subprocess.TimeoutExpired:\n        return {'verdict': 'error', 'reason': 'timeout'}\n    if proc.returncode not in (0, 1):\n        return {'verdict': 'error', 'reason': f'exit {proc.returncode}'}\n    try:\n        violations = json.loads(proc.stdout)['violations']\n    except (json.JSONDecodeError, KeyError, TypeError):\n        return {'verdict': 'error', 'reason': 'unparseable report'}\n    verdict = 'pass' if violations == [] and proc.returncode == 0 else 'fail'\n    return {'verdict': verdict, 'violations': violations}\n\nif __name__ == '__main__':\n    result = verify(sys.argv[1])\n    print(json.dumps(result))\n    sys.exit(0 if result['verdict'] == 'pass' else 1)\n",
       "expected_findings": []
     },
@@ -163,7 +163,7 @@
       "id": "C2-TI-G2-VER-N2",
       "class": "verifier-fail-open",
       "kind": "holdout",
-      "file": "grader_outcome.py",
+      "file": "grader_outcome_adapter.py",
       "source": "from dataclasses import dataclass\n\n\n@dataclass\nclass Outcome:\n    passed: bool\n    detail: str\n\n\ndef adapt(raw: dict) -> Outcome:\n    status = raw.get('status')\n    if status == 'pass':\n        return Outcome(True, raw.get('message', 'pass'))\n    if status in ('fail', 'error'):\n        return Outcome(False, raw.get('message', status))\n    raise ValueError(f'unrecognized grader status: {status!r}')\n\n\ndef assert_grader_passed(raw: dict) -> None:\n    outcome = adapt(raw)\n    assert outcome.passed, outcome.detail\n",
       "expected_findings": []
     },
@@ -265,7 +265,7 @@
       "id": "C2-TI-G2-ENV-N1",
       "class": "hidden-environment-dependencies",
       "kind": "holdout",
-      "file": "test_report_header_utc.py",
+      "file": "test_report_header_rendering.py",
       "source": "from datetime import datetime, timezone\n\nfrom reports.header import render_header\n\n\ndef test_render_header_includes_generation_time():\n    generated = datetime.fromtimestamp(1700000000, tz=timezone.utc)\n    header = render_header(title='Weekly', generated_at=generated)\n    assert header == 'Weekly \u2014 generated 2023-11-14 22:13 UTC'\n",
       "expected_findings": []
     },
@@ -333,25 +333,19 @@
       "id": "C2-TI-G2-GIT-N2",
       "class": "fixture-git-signing-hooks",
       "kind": "holdout",
-      "file": "release_notes_configured.sh",
+      "file": "release_notes_existing.sh",
       "source": "#!/bin/sh\nset -eu\nrepo=$(mktemp -d)\ntrap 'rm -rf \"$repo\"' EXIT\ngit init -q \"$repo\"\ngit -C \"$repo\" config user.name 'Fixture'\ngit -C \"$repo\" config user.email 'fixture@test.local'\ngit -C \"$repo\" config commit.gpgsign false\ngit -C \"$repo\" config core.hooksPath /dev/null\nprintf 'one\\n' > \"$repo/f\"\ngit -C \"$repo\" add f\ngit -C \"$repo\" commit -q -m 'feat: one'\nprintf 'two\\n' >> \"$repo/f\"\ngit -C \"$repo\" commit -q -am 'fix: two'\nexpected=$(printf '%s\\n' '- fix: two' '- feat: one')\nactual=$(./bin/release-notes \"$repo\")\n[ \"$actual\" = \"$expected\" ] || { printf 'got:\\n%s\\n' \"$actual\" >&2; exit 1; }\necho ok\n",
       "expected_findings": []
     }
   ],
   "label_corrections": [
     {
-      "case_id": "C2-TI-GIT-CONF-P3",
-      "was": "C2-TI-GIT-CONF-N1",
-      "prior_label": "clean",
-      "corrected_label": "verifier-fail-open",
-      "evidence": "reproduced with executed commands, see commit message"
-    },
-    {
       "case_id": "C2-TI-G2-GIT-P4",
       "was": "C2-TI-G2-GIT-N1",
       "prior_label": "clean",
       "corrected_label": "fixture-git-signing-hooks",
-      "evidence": "reproduced with executed commands, see commit message"
+      "evidence": "global init.templateDir with an executable hooks/post-receive, then git init --bare origin, then push: the hook file is installed in origin.git/hooks and runs on push"
     }
-  ]
+  ],
+  "file_name_audit": "Case file names avoid safety-bearing words (strict, exact, utc, locale, isolated, loopback, configured) so the payload never hints at the expected verdict."
 }

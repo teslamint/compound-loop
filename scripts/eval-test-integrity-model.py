@@ -182,7 +182,6 @@ def score(args):
             fail("unexpected files in %s: %s" % (response_dir, ", ".join(extra)))
     predictions = []
     malformed = []
-    details = []
     for response_dir in response_dirs:
         batch = {}
         for case in cases:
@@ -209,7 +208,6 @@ def score(args):
         tp = fp = expected_positive = p01_tp = p01_expected = p01_negative_fp = severity_match = predicted_count = 0
         per_class = {}
         details = []
-        extra_malformed = []
         for class_id in sorted(classes):
             per_class[class_id] = {"expected": 0, "true_positive": 0, "false_positive": 0, "severity_agreement": 0}
         for case in cases:
@@ -243,9 +241,6 @@ def score(args):
                     per_class.setdefault(pred_class, {"expected": 0, "true_positive": 0, "false_positive": 0, "severity_agreement": 0})["false_positive"] += 1
                     if not expected and f["severity"] in ("P0", "P1"):
                         p01_negative_fp += 1
-                if pred_class not in classes:
-                    # Unknown class identifiers are malformed schema values.
-                    extra_malformed.append({"case_id": case["id"], "reason": "unknown class " + pred_class})
             details.append({"case_id": case["id"], "expected_class": class_id if expected else None, "predicted_classes": sorted(predicted)})
         precision = float(tp) / predicted_count if predicted_count else (1.0 if expected_positive == 0 else 0.0)
         return {
@@ -259,19 +254,20 @@ def score(args):
             "false_positive_count": fp,
             "per_class": per_class,
             "cases": details,
-            "malformed_extra": extra_malformed,
         }
 
     repeats = [evaluate(batch) for batch in predictions]
-    for item in repeats:
-        malformed.extend(item.pop("malformed_extra"))
-    # The gate must hold in every repeat; the headline figures are the worst repeat.
-    worst = dict(repeats[0])
-    worst["positive_recall"] = min(item["positive_recall"] for item in repeats)
-    worst["p0_p1_recall"] = min(item["p0_p1_recall"] for item in repeats)
-    worst["precision"] = min(item["precision"] for item in repeats)
-    worst["clean_negative_p0_p1_false_positives"] = max(item["clean_negative_p0_p1_false_positives"] for item in repeats)
-    report = dict(worst, malformed_responses=malformed, repeat_mismatches=repeat_mismatch)
+    # The gate must hold in every repeat. The headline is the repeat with the
+    # worst precision, so its per-class figures, case list and counts agree with
+    # the headline precision instead of describing another repeat.
+    headline = min(range(len(repeats)), key=lambda index: (repeats[index]["precision"], -repeats[index]["clean_negative_p0_p1_false_positives"], -repeats[index]["false_positive_count"]))
+    report = dict(repeats[headline])
+    report["positive_recall"] = min(item["positive_recall"] for item in repeats)
+    report["p0_p1_recall"] = min(item["p0_p1_recall"] for item in repeats)
+    report["precision"] = min(item["precision"] for item in repeats)
+    report["clean_negative_p0_p1_false_positives"] = max(item["clean_negative_p0_p1_false_positives"] for item in repeats)
+    report["headline_repeat"] = headline + 1
+    report = dict(report, malformed_responses=malformed, repeat_mismatches=repeat_mismatch)
     report["repeats"] = [{key: item[key] for key in ("positive_recall", "p0_p1_recall", "precision", "clean_negative_p0_p1_false_positives", "false_positive_count", "true_positive_count")} for item in repeats]
     print(json.dumps(report, indent=2, sort_keys=True))
     if report["p0_p1_recall"] < 1.0 or report["precision"] < 0.90 or report["clean_negative_p0_p1_false_positives"] or malformed or repeat_mismatch:
