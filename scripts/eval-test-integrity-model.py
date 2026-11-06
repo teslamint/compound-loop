@@ -262,15 +262,20 @@ def score(args):
     # the headline precision instead of describing another repeat.
     headline = min(range(len(repeats)), key=lambda index: (repeats[index]["precision"], -repeats[index]["clean_negative_p0_p1_false_positives"], -repeats[index]["false_positive_count"]))
     report = dict(repeats[headline])
-    report["positive_recall"] = min(item["positive_recall"] for item in repeats)
-    report["p0_p1_recall"] = min(item["p0_p1_recall"] for item in repeats)
-    report["precision"] = min(item["precision"] for item in repeats)
-    report["clean_negative_p0_p1_false_positives"] = max(item["clean_negative_p0_p1_false_positives"] for item in repeats)
     report["headline_repeat"] = headline + 1
+    # Worst figures are reported separately so every headline count keeps
+    # describing the headline repeat.
+    report["worst"] = {
+        "positive_recall": min(item["positive_recall"] for item in repeats),
+        "p0_p1_recall": min(item["p0_p1_recall"] for item in repeats),
+        "precision": min(item["precision"] for item in repeats),
+        "clean_negative_p0_p1_false_positives": max(item["clean_negative_p0_p1_false_positives"] for item in repeats),
+    }
     report = dict(report, malformed_responses=malformed, repeat_mismatches=repeat_mismatch)
     report["repeats"] = [{key: item[key] for key in ("positive_recall", "p0_p1_recall", "precision", "clean_negative_p0_p1_false_positives", "false_positive_count", "true_positive_count")} for item in repeats]
     print(json.dumps(report, indent=2, sort_keys=True))
-    if report["p0_p1_recall"] < 1.0 or report["precision"] < 0.90 or report["clean_negative_p0_p1_false_positives"] or malformed or repeat_mismatch:
+    worst = report["worst"]
+    if worst["p0_p1_recall"] < 1.0 or worst["precision"] < 0.90 or worst["clean_negative_p0_p1_false_positives"] or malformed or repeat_mismatch:
         raise SystemExit(1)
 
 

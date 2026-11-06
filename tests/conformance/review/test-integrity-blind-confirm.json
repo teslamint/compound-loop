@@ -1,5 +1,32 @@
 {
   "schema": "c2-ti/v1",
+  "description": "Authored blind to the detectors.",
+  "classes": [
+    {
+      "id": "network-isolation",
+      "severity": "P1"
+    },
+    {
+      "id": "shared-temporary-directories",
+      "severity": "P1"
+    },
+    {
+      "id": "verifier-fail-open",
+      "severity": "P1"
+    },
+    {
+      "id": "assertion-specificity",
+      "severity": "P2"
+    },
+    {
+      "id": "hidden-environment-dependencies",
+      "severity": "P1"
+    },
+    {
+      "id": "fixture-git-signing-hooks",
+      "severity": "P1"
+    }
+  ],
   "cases": [
     {
       "id": "C2-TI-NET-CONF-P1",
@@ -211,7 +238,6 @@
       ]
     }
   ],
-  "description": "Authored blind to the detectors.",
   "label_corrections": [
     {
       "case_id": "C2-TI-GIT-CONF-P3",
