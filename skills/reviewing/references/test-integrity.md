@@ -24,7 +24,7 @@ Evidence includes the path expression and the isolation boundary it bypasses. Do
 
 ### Verifier fail-open behavior
 
-Check every verifier and assertion adapter for ignored exit status, swallowed exceptions, default-success fallbacks, unchecked `check=False` results, and missing or unknown verdict handling. A malformed, missing, or infrastructure-error result must fail closed rather than become `clean`, `pass`, or an empty finding list. Severity is P0 when the path authorizes a release or mutation and P1 otherwise.
+Check every verifier and assertion adapter for ignored exit status, swallowed exceptions, default-success fallbacks, unchecked `check=False` results, and missing or unknown verdict handling. A command substitution whose failure becomes empty output is one of these: `test -z "$(find ...)"`, `[ -z "$(tool ...)" ]`, or a pipeline whose exit status is not checked reports success when the command itself is missing, fails, or errors. A malformed, missing, or infrastructure-error result must fail closed rather than become `clean`, `pass`, or an empty finding list. Severity is P0 when the path authorizes a release or mutation and P1 otherwise.
 
 Evidence traces the failure input to the success path. Do not flag a deliberately handled expected rejection whose result is asserted and whose unknown or infrastructure states remain distinct.
 
@@ -38,13 +38,13 @@ Evidence cites the assertion and the untested distinction. Do not flag a deliber
 
 Check whether tests read host `HOME`, `PATH`, `TMPDIR`, locale, timezone, credentials, Git configuration outside fixture repositories, network proxy variables, or tool-specific configuration without setting or clearing them in the fixture. Flag environment reads that change the verdict or target and are not represented in the fixture's declared inputs. Severity is P1 when host state can change authorization or target selection and P2 otherwise.
 
-Evidence names the environment key or implicit process state and the missing fixture declaration. Do not flag an explicitly supplied value that the fixture records and verifies.
+Evidence names the environment key or implicit process state and the missing fixture declaration. A read of host `HOME` or `PATH` that the snippet does not first set or clear is a finding even when the snippet shown only stores or prints the value, because the fixture has not declared the input. The temporary root is an exception: `mktemp`, `tempfile.gettempdir()`, `tempfile.TemporaryDirectory()`, and the process temporary directory are judged only under Shared temporary directories, and the host `TMPDIR`, `TEMP`, or `TMP` they consult is not a separate Hidden environment dependency unless the snippet uses the value for something else. Do not flag an explicitly supplied value that the fixture records and verifies.
 
 ### Fixture Git signing/hooks
 
 Check every temporary Git repository for explicit identity, signing policy, hooks path, and remote configuration. A fixture must not inherit host signing keys, global hooks, credential helpers, or remotes. Flag missing `commit.gpgsign=false` when the fixture must commit without host keys, missing empty `core.hooksPath`, and use of an inherited global configuration. Severity is P1 when host code can execute or a commit cannot be reproduced; otherwise P2.
 
-Evidence cites the Git setup and the inherited state that remains possible. Do not flag a fixture that sets all required keys explicitly and proves its hooks directory is empty.
+Evidence cites the Git setup and the inherited state that remains possible. Do not flag a fixture that sets identity and `commit.gpgsign=false` locally and takes one of these hook-isolation forms: an empty `core.hooksPath`, a `core.hooksPath` directory the fixture created and does not populate, or `core.hooksPath=/dev/null`. Those keys isolate signing and hooks only. Other inherited Git configuration can still execute host code, so do not describe local keys as complete isolation: a global `core.fsmonitor`, `core.attributesFile` with a `filter.<name>.clean` command, or a global `init.templateDir` remains reachable. Flag that residual only when host code can execute through it, and treat a fixture that must exclude host Git configuration entirely as requiring `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM`.
 
 ### Class boundaries
 
@@ -53,8 +53,9 @@ Report each defect once, under the single class that owns it:
 - Git identity, signing, hooks, credential helpers, remote settings, and inherited global or system Git configuration of a fixture repository belong to Fixture Git signing/hooks. Do not also report that configuration as a hidden environment dependency. A Git command that actually contacts an external remote, such as `clone`, `fetch`, or `push`, is a separate Network isolation defect.
 - A configured remote, URL, or host name that the code never contacts is not a network defect. Network isolation needs a call or command that can reach an external host.
 - An ignored exit status, swallowed exception, or default-success value belongs to Verifier fail-open behavior. Report Assertion specificity only for a test assertion that can pass without the required behavior.
-- Hidden environment dependencies covers host state other than Git configuration that the snippet reads or that selects its target or verdict. Running a tool or `git` binary from `PATH` is not by itself an environment defect.
+- Hidden environment dependencies covers host state other than Git configuration that the snippet reads or that selects its target or verdict. Running a tool or `git` binary from `PATH` is not by itself an environment defect. Package-source settings such as `PIP_INDEX_URL` or `PIP_CONFIG_FILE` inherited by an install command belong to Network isolation when that command can reach an external index, not to this class.
 - Judge only the text shown. Do not report a class because unseen helper code might be unsafe.
+- Report a missing check in a complete test when the contract needs one: a test whose body never asserts or verifies the behavior it names is an Assertion specificity finding, and so is a test that inspects a result it never checks. A snippet is often a fragment written to show a different defect; when another class owns that defect, do not also report Assertion specificity merely because the fragment has no assertion.
 
 
 ## Per-run evidence record
@@ -76,7 +77,7 @@ Run `bash scripts/test-review-test-integrity.sh seeded` to exercise seed and hol
 
 ## Model release gate
 
-The release gate scores the real model reviewer against four corpora: `tests/conformance/review/test-integrity-corpus.json`, `tests/conformance/review/test-integrity-blind-dev.json`, `tests/conformance/review/test-integrity-blind-confirm.json`, and `tests/conformance/review/test-integrity-blind-final.json`. The blind corpora were authored without access to the detectors. The final corpus was written after the class boundaries were fixed and was not used to change the checklist, so it is the out-of-sample measurement; two independent judges agreed with all of its labels. Keep `scripts/test-review-test-integrity.sh` as an offline deterministic-regex regression check; its result is not the model release verdict.
+The release gate scores the real model reviewer against six corpora: `tests/conformance/review/test-integrity-corpus.json`, `tests/conformance/review/test-integrity-blind-dev.json`, `tests/conformance/review/test-integrity-blind-confirm.json`, `tests/conformance/review/test-integrity-blind-final.json`, `tests/conformance/review/test-integrity-blind-gate2.json`, and `tests/conformance/review/test-integrity-blind-gate3.json`. The blind corpora were authored without access to the detectors. The first five were used to tune or correct the checklist, so they are regression data, not out-of-sample evidence. `test-integrity-blind-gate3.json` is the out-of-sample corpus: it was written after the checklist was fixed, by an author who had only the class descriptions. Two independent judges labeled its sources without seeing the labels and agreed with 35 of its 36; the one dispute is recorded under `label_audit`. Report its figures separately with a plan and score run containing only that corpus; every corpus declares the six class severities, so a single-corpus run scores correctly. `score` itself has no per-corpus breakdown. Keep `scripts/test-review-test-integrity.sh` as an offline deterministic-regex regression check; its result is not the model release verdict.
 
 First create the exact request plan without invoking a model:
 
@@ -86,6 +87,8 @@ python3 scripts/eval-test-integrity-model.py plan \
   --corpus tests/conformance/review/test-integrity-blind-dev.json \
   --corpus tests/conformance/review/test-integrity-blind-confirm.json \
   --corpus tests/conformance/review/test-integrity-blind-final.json \
+  --corpus tests/conformance/review/test-integrity-blind-gate2.json \
+  --corpus tests/conformance/review/test-integrity-blind-gate3.json \
   --out /tmp/c2ti-model-plan
 shasum -a 256 /tmp/c2ti-model-plan/plan.json
 ```
@@ -103,4 +106,4 @@ python3 scripts/eval-test-integrity-model.py run \
   --approval <approved-plan-json-sha256>
 ```
 
-For one run, score with `--responses /tmp/c2ti-run-1`. For the required three-run determinism check, run three times into three different directories and use `--responses <run-1-dir> <run-2-dir> <run-3-dir> --repeat 3`. Supply all four `--corpus` arguments to `score` as in `plan`. The gate requires 100% P0/P1 recall, at least 90% precision, zero P0/P1 false positives on negative/clean cases, no malformed or missing responses, and identical predicted class-id sets in every repeat. The report also includes per-class results and severity agreement; disagreement is reported for review. Planning, scoring, and the fixture tests are offline; only the explicitly approved `run` subcommand makes model calls.
+For one run, score with `--responses /tmp/c2ti-run-1`. For the required three-run determinism check, run three times into three different directories and use `--responses <run-1-dir> <run-2-dir> <run-3-dir> --repeat 3`. Supply all six `--corpus` arguments to `score` as in `plan`. The gate requires, in every repeat, 100% P0/P1 recall, at least 90% precision, zero P0/P1 false positives on negative/clean cases, and no malformed or missing responses. Determinism requires the same set of detected seed ids in every repeat; free-text wording and extra findings do not count toward it, but extra findings still lower each repeat's precision. The report shows the worst repeat as its headline figures, lists each repeat under `repeats`, and also includes per-class results and severity agreement; disagreement is reported for review. Planning, scoring, and the fixture tests are offline; only the explicitly approved `run` subcommand makes model calls.

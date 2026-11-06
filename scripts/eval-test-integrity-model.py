@@ -182,7 +182,6 @@ def score(args):
             fail("unexpected files in %s: %s" % (response_dir, ", ".join(extra)))
     predictions = []
     malformed = []
-    details = []
     for response_dir in response_dirs:
         batch = {}
         for case in cases:
@@ -193,57 +192,90 @@ def score(args):
             else:
                 batch[case["id"]] = findings
         predictions.append(batch)
+    # Determinism is judged on detected seed ids (issue #28): wording and extra
+    # findings do not count here. Extra findings still lower each repeat's own
+    # precision and false-positive counts below.
     repeat_mismatch = []
     if args.repeat > 1:
         for case in cases:
-            sets = [None if batch[case["id"]] is None else sorted(set(f["integrity_class"] for f in batch[case["id"]])) for batch in predictions]
-            if any(item != sets[0] for item in sets[1:]):
+            if not case["expected_findings"]:
+                continue
+            detected = [None if batch[case["id"]] is None else any(f["integrity_class"] == case["class"] for f in batch[case["id"]]) for batch in predictions]
+            if any(item != detected[0] for item in detected[1:]):
                 repeat_mismatch.append(case["id"])
-    tp = fp = expected_positive = p01_tp = p01_expected = p01_negative_fp = severity_match = predicted_count = 0
-    per_class = {}
-    for class_id, class_severity in sorted(classes.items()):
-        per_class[class_id] = {"expected": 0, "true_positive": 0, "false_positive": 0, "severity_agreement": 0}
-    for case in cases:
-        expected = bool(case["expected_findings"])
-        class_id = case["class"]
-        class_severity = classes.get(class_id)
-        if expected:
-            expected_positive += 1
-            per_class.setdefault(class_id, {"expected": 0, "true_positive": 0, "false_positive": 0, "severity_agreement": 0})["expected"] += 1
-            if class_severity in ("P0", "P1"):
-                p01_expected += 1
-        findings = predictions[0][case["id"]]
-        if findings is None:
-            details.append({"case_id": case["id"], "status": "malformed-or-missing"})
-            continue
-        predicted = set(f["integrity_class"] for f in findings)
-        predicted_count += len(findings)
-        if expected and class_id in predicted:
-            tp += 1
-            per_class[class_id]["true_positive"] += 1
-            if class_severity in ("P0", "P1"):
-                p01_tp += 1
-            if any(f["integrity_class"] == class_id and f["severity"] == class_severity for f in findings):
-                severity_match += 1
-                per_class[class_id]["severity_agreement"] += 1
-        for f in findings:
-            pred_class = f["integrity_class"]
-            correct = expected and pred_class == class_id
-            if not correct:
-                fp += 1
-                per_class.setdefault(pred_class, {"expected": 0, "true_positive": 0, "false_positive": 0, "severity_agreement": 0})["false_positive"] += 1
-                if not expected and f["severity"] in ("P0", "P1"):
-                    p01_negative_fp += 1
-            if pred_class not in classes:
-                # Unknown class identifiers are malformed schema values.
-                malformed.append({"case_id": case["id"], "reason": "unknown class " + pred_class})
-        details.append({"case_id": case["id"], "expected_class": class_id if expected else None, "predicted_classes": sorted(predicted)})
-    precision = float(tp) / predicted_count if predicted_count else (1.0 if expected_positive == 0 else 0.0)
-    recall = float(tp) / expected_positive if expected_positive else 1.0
-    p01_recall = float(p01_tp) / p01_expected if p01_expected else 1.0
-    report = {"positive_recall": recall, "p0_p1_recall": p01_recall, "precision": precision, "clean_negative_p0_p1_false_positives": p01_negative_fp, "malformed_responses": malformed, "repeat_mismatches": repeat_mismatch, "severity_agreement_count": severity_match, "predicted_finding_count": predicted_count, "true_positive_count": tp, "false_positive_count": fp, "per_class": per_class, "cases": details}
+
+    def evaluate(batch):
+        tp = fp = expected_positive = p01_tp = p01_expected = p01_negative_fp = severity_match = predicted_count = 0
+        per_class = {}
+        details = []
+        for class_id in sorted(classes):
+            per_class[class_id] = {"expected": 0, "true_positive": 0, "false_positive": 0, "severity_agreement": 0}
+        for case in cases:
+            expected = bool(case["expected_findings"])
+            class_id = case["class"]
+            class_severity = classes.get(class_id)
+            if expected:
+                expected_positive += 1
+                per_class.setdefault(class_id, {"expected": 0, "true_positive": 0, "false_positive": 0, "severity_agreement": 0})["expected"] += 1
+                if class_severity in ("P0", "P1"):
+                    p01_expected += 1
+            findings = batch[case["id"]]
+            if findings is None:
+                details.append({"case_id": case["id"], "status": "malformed-or-missing"})
+                continue
+            predicted = set(f["integrity_class"] for f in findings)
+            predicted_count += len(findings)
+            if expected and class_id in predicted:
+                tp += 1
+                per_class[class_id]["true_positive"] += 1
+                if class_severity in ("P0", "P1"):
+                    p01_tp += 1
+                if any(f["integrity_class"] == class_id and f["severity"] == class_severity for f in findings):
+                    severity_match += 1
+                    per_class[class_id]["severity_agreement"] += 1
+            for f in findings:
+                pred_class = f["integrity_class"]
+                correct = expected and pred_class == class_id
+                if not correct:
+                    fp += 1
+                    per_class.setdefault(pred_class, {"expected": 0, "true_positive": 0, "false_positive": 0, "severity_agreement": 0})["false_positive"] += 1
+                    if not expected and f["severity"] in ("P0", "P1"):
+                        p01_negative_fp += 1
+            details.append({"case_id": case["id"], "expected_class": class_id if expected else None, "predicted_classes": sorted(predicted)})
+        precision = float(tp) / predicted_count if predicted_count else (1.0 if expected_positive == 0 else 0.0)
+        return {
+            "positive_recall": float(tp) / expected_positive if expected_positive else 1.0,
+            "p0_p1_recall": float(p01_tp) / p01_expected if p01_expected else 1.0,
+            "precision": precision,
+            "clean_negative_p0_p1_false_positives": p01_negative_fp,
+            "severity_agreement_count": severity_match,
+            "predicted_finding_count": predicted_count,
+            "true_positive_count": tp,
+            "false_positive_count": fp,
+            "per_class": per_class,
+            "cases": details,
+        }
+
+    repeats = [evaluate(batch) for batch in predictions]
+    # The gate must hold in every repeat. The headline is the repeat with the
+    # worst precision, so its per-class figures, case list and counts agree with
+    # the headline precision instead of describing another repeat.
+    headline = min(range(len(repeats)), key=lambda index: (repeats[index]["precision"], -repeats[index]["clean_negative_p0_p1_false_positives"], -repeats[index]["false_positive_count"]))
+    report = dict(repeats[headline])
+    report["headline_repeat"] = headline + 1
+    # Worst figures are reported separately so every headline count keeps
+    # describing the headline repeat.
+    report["worst"] = {
+        "positive_recall": min(item["positive_recall"] for item in repeats),
+        "p0_p1_recall": min(item["p0_p1_recall"] for item in repeats),
+        "precision": min(item["precision"] for item in repeats),
+        "clean_negative_p0_p1_false_positives": max(item["clean_negative_p0_p1_false_positives"] for item in repeats),
+    }
+    report = dict(report, malformed_responses=malformed, repeat_mismatches=repeat_mismatch)
+    report["repeats"] = [{key: item[key] for key in ("positive_recall", "p0_p1_recall", "precision", "clean_negative_p0_p1_false_positives", "false_positive_count", "true_positive_count")} for item in repeats]
     print(json.dumps(report, indent=2, sort_keys=True))
-    if p01_recall < 1.0 or precision < 0.90 or p01_negative_fp or malformed or repeat_mismatch:
+    worst = report["worst"]
+    if worst["p0_p1_recall"] < 1.0 or worst["precision"] < 0.90 or worst["clean_negative_p0_p1_false_positives"] or malformed or repeat_mismatch:
         raise SystemExit(1)
 
 

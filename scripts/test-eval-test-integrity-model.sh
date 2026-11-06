@@ -152,15 +152,42 @@ with tempfile.TemporaryDirectory(prefix="c2ti-model-test-") as temporary:
     cross_report = json.loads(cross_result.stdout)
     assert cross_report["false_positive_count"] == 1
 
-    repeat_a = base / "repeat-a"
-    repeat_b = base / "repeat-b"
-    repeat_a.mkdir(); repeat_b.mkdir()
-    for directory in (repeat_a, repeat_b):
-        (directory / "CASE-SECRET-CLEAN.json").write_text('{"findings": []}', encoding="utf-8")
-    (repeat_a / "CASE-SECRET-1.json").write_text('{"findings": []}', encoding="utf-8")
-    (repeat_b / "CASE-SECRET-1.json").write_text(json.dumps({"findings": [{"integrity_class": "network-isolation", "severity": "P1", "line": 1, "evidence": "network call"}]}), encoding="utf-8")
-    repeat_result = call(["score", "--plan", str(plan_path), "--responses", str(repeat_a), str(repeat_b), "--corpus", str(corpus), "--repeat", "2"], expected=1)
-    assert "repeat_mismatches" in repeat_result.stdout
+    # Determinism compares detected seed ids, as issue #28 requires; every
+    # repeat is also scored on its own.
+    def write_repeat(name, seed_findings, clean_findings):
+        directory = base / name
+        directory.mkdir()
+        (directory / "CASE-SECRET-1.json").write_text(json.dumps({"findings": seed_findings}), encoding="utf-8")
+        (directory / "CASE-SECRET-CLEAN.json").write_text(json.dumps({"findings": clean_findings}), encoding="utf-8")
+        return directory
+    hit = {"integrity_class": "network-isolation", "severity": "P1", "line": 1, "evidence": "network call"}
+    noise = {"integrity_class": "assertion-specificity", "severity": "P2", "line": 1, "evidence": "noise"}
+    clean_fp = {"integrity_class": "network-isolation", "severity": "P1", "line": 1, "evidence": "false alarm"}
+    # A seed detected in one repeat and missed in another is a mismatch.
+    flip = call(["score", "--plan", str(plan_path), "--responses", str(write_repeat("flip-a", [hit], [])), str(write_repeat("flip-b", [], [])), "--corpus", str(corpus), "--repeat", "2"], expected=1)
+    assert json.loads(flip.stdout)["repeat_mismatches"] == ["CASE-SECRET-1"], flip.stdout
+    # An extra non-seed class varying across repeats is not a seed mismatch;
+    # it is counted against that repeat's precision instead.
+    extra_class = call(["score", "--plan", str(plan_path), "--responses", str(write_repeat("noise-a", [hit], [])), str(write_repeat("noise-b", [hit, noise], [])), "--corpus", str(corpus), "--repeat", "2"], expected=1)
+    extra_report = json.loads(extra_class.stdout)
+    assert extra_report["repeat_mismatches"] == [], extra_class.stdout
+    assert [item["precision"] for item in extra_report["repeats"]] == [1.0, 0.5], extra_class.stdout
+    # The headline describes the same repeat as the headline precision.
+    assert extra_report["headline_repeat"] == 2, extra_class.stdout
+    assert extra_report["false_positive_count"] == 1 and extra_report["true_positive_count"] == 1, extra_class.stdout
+    # Every headline figure describes the headline repeat; worst figures are separate.
+    assert extra_report["positive_recall"] == extra_report["repeats"][1]["positive_recall"], extra_class.stdout
+    assert extra_report["worst"]["precision"] == 0.5, extra_class.stdout
+    # A clean-case P0/P1 false positive in a later repeat fails the gate.
+    late_fp = call(["score", "--plan", str(plan_path), "--responses", str(write_repeat("late-a", [hit], [])), str(write_repeat("late-b", [hit], [clean_fp])), "--corpus", str(corpus), "--repeat", "2"], expected=1)
+    late_report = json.loads(late_fp.stdout)
+    assert late_report["repeat_mismatches"] == [], late_fp.stdout
+    assert [item["clean_negative_p0_p1_false_positives"] for item in late_report["repeats"]] == [0, 1], late_fp.stdout
+    assert late_report["worst"]["clean_negative_p0_p1_false_positives"] == 1, late_fp.stdout
+    assert late_report["headline_repeat"] == 2, late_fp.stdout
+    assert late_report["clean_negative_p0_p1_false_positives"] == 1, late_fp.stdout
+    # Identical passing repeats pass.
+    call(["score", "--plan", str(plan_path), "--responses", str(write_repeat("same-a", [hit], [])), str(write_repeat("same-b", [hit], [])), "--corpus", str(corpus), "--repeat", "2"])
     # The same directory cannot stand in for several repeats.
     call(["score", "--plan", str(plan_path), "--responses", str(good), str(good), "--corpus", str(corpus), "--repeat", "2"], expected=1)
 

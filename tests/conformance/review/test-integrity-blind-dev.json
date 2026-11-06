@@ -1,5 +1,32 @@
 {
   "schema": "c2-ti/v1",
+  "description": "Authored blind to the detectors.",
+  "classes": [
+    {
+      "id": "network-isolation",
+      "severity": "P1"
+    },
+    {
+      "id": "shared-temporary-directories",
+      "severity": "P1"
+    },
+    {
+      "id": "verifier-fail-open",
+      "severity": "P1"
+    },
+    {
+      "id": "assertion-specificity",
+      "severity": "P2"
+    },
+    {
+      "id": "hidden-environment-dependencies",
+      "severity": "P1"
+    },
+    {
+      "id": "fixture-git-signing-hooks",
+      "severity": "P1"
+    }
+  ],
   "cases": [
     {
       "id": "C2-TI-NET-BLIND-P1",
@@ -205,6 +232,5 @@
       "source": "import subprocess\nimport tempfile\nfrom pathlib import Path\n\nwith tempfile.TemporaryDirectory(prefix=\"repo-\") as directory:\n    repo = Path(directory)\n    hooks = repo / \"empty-hooks\"\n    hooks.mkdir()\n    subprocess.run([\"git\", \"init\", str(repo)], check=True, capture_output=True)\n    for key, value in [(\"user.name\", \"Fixture\"), (\"user.email\", \"fixture@example.invalid\"), (\"commit.gpgsign\", \"false\"), (\"core.hooksPath\", str(hooks)), (\"remote.origin.url\", \"/var/empty-fixture-remote.git\")]:\n        subprocess.run([\"git\", \"-C\", str(repo), \"config\", \"--local\", key, value], check=True, capture_output=True)\n    assert list(hooks.iterdir()) == []",
       "expected_findings": []
     }
-  ],
-  "description": "Authored blind to the detectors."
+  ]
 }

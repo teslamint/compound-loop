@@ -1,0 +1,457 @@
+{
+  "schema": "c2-ti/v1",
+  "description": "Gate-3 blind out-of-sample cases, authored without the checklist or any corpus",
+  "classes": [
+    {
+      "id": "network-isolation",
+      "severity": "P1"
+    },
+    {
+      "id": "shared-temporary-directories",
+      "severity": "P1"
+    },
+    {
+      "id": "verifier-fail-open",
+      "severity": "P1"
+    },
+    {
+      "id": "assertion-specificity",
+      "severity": "P2"
+    },
+    {
+      "id": "hidden-environment-dependencies",
+      "severity": "P1"
+    },
+    {
+      "id": "fixture-git-signing-hooks",
+      "severity": "P1"
+    }
+  ],
+  "cases": [
+    {
+      "id": "C2-TI-G3-NET-P1",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "tests/test_fx_convert.py",
+      "source": "import requests\n\nfrom fxrates.convert import convert_amount\n\n\ndef test_convert_uses_live_rate():\n    resp = requests.get(\"https://api.exchangerate.host/latest?base=USD&symbols=EUR\", timeout=10)\n    resp.raise_for_status()\n    rate = resp.json()[\"rates\"][\"EUR\"]\n    result = convert_amount(100, \"USD\", \"EUR\", rate=rate)\n    assert result == round(100 * rate, 2)\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-NET-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-NET-P2",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "ci/check_wheel_contents.sh",
+      "source": "#!/bin/sh\nset -eu\nworkdir=$(mktemp -d)\ntrap 'rm -rf \"$workdir\"' EXIT\npython3 -m venv \"$workdir/venv\"\n\"$workdir/venv/bin/pip\" install --quiet build==1.2.1\n\"$workdir/venv/bin/python\" -m build --wheel --outdir \"$workdir/dist\" .\nwheel=$(ls \"$workdir\"/dist/*.whl)\nunzip -l \"$wheel\" > \"$workdir/listing.txt\"\ngrep -q 'mediakit/__init__.py' \"$workdir/listing.txt\"\ngrep -q 'mediakit/codecs/opus.py' \"$workdir/listing.txt\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-NET-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-NET-P3",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "tests/test_digest_mailer.py",
+      "source": "import smtplib\n\nfrom notifier.mailer import build_message\n\n\ndef test_digest_message_is_accepted_by_relay():\n    msg = build_message(to=\"ops@example.org\", subject=\"Daily digest\", body=\"3 jobs failed\")\n    with smtplib.SMTP(\"smtp.mailgun.org\", 587, timeout=15) as relay:\n        relay.ehlo()\n        refused = relay.send_message(msg, from_addr=\"noreply@example.org\")\n    assert refused == {}\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-NET-P3",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-NET-P4",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "tests/transcode_opus.sh",
+      "source": "#!/bin/sh\nset -eu\nscratch=$(mktemp -d)\ntrap 'rm -rf \"$scratch\"' EXIT\ncurl -fsSL -o \"$scratch/sample.flac\" https://samples.example-media.net/audio/sine-440hz.flac\n./bin/transcode --to opus --bitrate 96k \"$scratch/sample.flac\" \"$scratch/out.opus\"\n./bin/probe --field codec \"$scratch/out.opus\" > \"$scratch/codec.txt\"\n./bin/probe --field bitrate \"$scratch/out.opus\" > \"$scratch/bitrate.txt\"\n[ \"$(cat \"$scratch/codec.txt\")\" = \"opus\" ]\n[ \"$(cat \"$scratch/bitrate.txt\")\" = \"96000\" ]\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-NET-P4",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-NET-N1",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "tests/test_fx_client.py",
+      "source": "from fxrates import client\n\n\nclass FakeResponse:\n    def __init__(self, payload):\n        self._payload = payload\n        self.status_code = 200\n\n    def json(self):\n        return self._payload\n\n\ndef test_fetch_rate_parses_payload(monkeypatch):\n    calls = []\n\n    def fake_get(url, timeout):\n        calls.append(url)\n        return FakeResponse({\"rates\": {\"EUR\": 0.9137}})\n\n    monkeypatch.setattr(client.requests, \"get\", fake_get)\n    assert client.fetch_rate(\"USD\", \"EUR\") == 0.9137\n    assert calls == [\"https://api.exchangerate.host/latest?base=USD&symbols=EUR\"]\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-NET-N2",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "ci/install_from_wheelhouse.sh",
+      "source": "#!/bin/sh\nset -eu\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\npython3 -m venv \"$work/venv\"\n\"$work/venv/bin/pip\" --isolated install --no-index --find-links ./tests/wheelhouse --quiet ledgerkit==2.4.0\n\"$work/venv/bin/python\" -c 'import ledgerkit; print(ledgerkit.__version__)' > \"$work/version.txt\"\n[ \"$(cat \"$work/version.txt\")\" = \"2.4.0\" ]\n\"$work/venv/bin/ledgerkit\" balance --input ./tests/data/journal.csv > \"$work/balance.txt\"\ndiff -u ./tests/data/expected_balance.txt \"$work/balance.txt\"\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-TMP-P1",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "tests/test_quarterly_export.py",
+      "source": "import csv\nimport os\n\nfrom reports.export import export_quarterly\n\n\ndef test_export_writes_header_and_rows():\n    out_path = \"/tmp/quarterly_export.csv\"\n    export_quarterly(year=2024, quarter=2, destination=out_path)\n    with open(out_path, newline=\"\") as fh:\n        rows = list(csv.reader(fh))\n    os.remove(out_path)\n    assert rows[0] == [\"region\", \"revenue\", \"currency\"]\n    assert rows[1:] == [[\"EMEA\", \"125000.00\", \"EUR\"], [\"APAC\", \"98000.50\", \"USD\"]]\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-TMP-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-TMP-P2",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "tests/lintcheck_bad_config.sh",
+      "source": "#!/bin/sh\nset -eu\nout=/tmp/lintcheck-output\nrm -rf \"$out\"\nmkdir -p \"$out\"\n./bin/lintcheck --format json --output \"$out/report.json\" tests/fixtures/bad_config.yaml || status=$?\n[ \"${status:-0}\" -eq 3 ]\npython3 - \"$out/report.json\" <<'EOF'\nimport json, sys\nreport = json.load(open(sys.argv[1]))\nassert [f[\"rule\"] for f in report[\"findings\"]] == [\"duplicate-key\", \"unknown-field\"], report\nEOF\nrm -rf \"$out\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-TMP-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-TMP-P3",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "tests/test_dedupe_partitions.py",
+      "source": "import os\nimport shutil\nimport tempfile\n\nfrom pipeline.stages import dedupe_partitions\n\n\ndef test_dedupe_removes_duplicate_partitions():\n    root = os.path.join(tempfile.gettempdir(), \"dedupe-partitions\")\n    shutil.rmtree(root, ignore_errors=True)\n    os.makedirs(os.path.join(root, \"day=2024-01-01\"))\n    os.makedirs(os.path.join(root, \"day=2024-01-01.copy\"))\n    os.makedirs(os.path.join(root, \"day=2024-01-02\"))\n    removed = dedupe_partitions(root)\n    assert removed == [\"day=2024-01-01.copy\"]\n    assert sorted(os.listdir(root)) == [\"day=2024-01-01\", \"day=2024-01-02\"]\n    shutil.rmtree(root)\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-TMP-P3",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-TMP-P4",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "tests/thumbnail_resize.sh",
+      "source": "#!/bin/sh\nset -eu\ndir=$(mktemp -d /tmp/thumbs-XXXXXX)\ncleanup() { rm -rf /tmp/thumbs-*; }\ntrap cleanup EXIT\ncp tests/media/landscape.jpg \"$dir/in.jpg\"\n./bin/thumbnail --width 320 \"$dir/in.jpg\" \"$dir/out.jpg\"\n./bin/imginfo --format '%wx%h' \"$dir/out.jpg\" > \"$dir/size.txt\"\n[ \"$(cat \"$dir/size.txt\")\" = \"320x180\" ]\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-TMP-P4",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-TMP-N1",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "tests/test_layered_config.py",
+      "source": "import os\nimport tempfile\nimport unittest\n\nfrom configparse.loader import load_layered\n\n\nclass LayeredLoadTest(unittest.TestCase):\n    def test_override_file_wins(self):\n        with tempfile.TemporaryDirectory(prefix=\"layered-\") as root:\n            base = os.path.join(root, \"base.toml\")\n            override = os.path.join(root, \"override.toml\")\n            with open(base, \"w\") as fh:\n                fh.write(\"[server]\\nport = 8080\\nworkers = 2\\n\")\n            with open(override, \"w\") as fh:\n                fh.write(\"[server]\\nworkers = 8\\n\")\n            cfg = load_layered([base, override])\n        self.assertEqual(cfg[\"server\"], {\"port\": 8080, \"workers\": 8})\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-TMP-N2",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "tests/logsift_level_filter.sh",
+      "source": "#!/bin/sh\nset -eu\nscratch=$(mktemp -d)\ntrap 'rm -rf \"$scratch\"' EXIT\nmkdir -p \"$scratch/logs\"\nprintf '2024-03-01T10:00:00Z ERROR disk full\\n2024-03-01T10:00:05Z INFO retry\\n' > \"$scratch/logs/app.log\"\n./bin/logsift --level ERROR \"$scratch/logs\" > \"$scratch/out.txt\"\nprintf '2024-03-01T10:00:00Z ERROR disk full\\n' > \"$scratch/expected.txt\"\ncmp \"$scratch/expected.txt\" \"$scratch/out.txt\"\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-VER-P1",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "ci/verify_integration.sh",
+      "source": "#!/bin/sh\nset -u\nresults_dir=$1\nmkdir -p \"$results_dir\"\npython3 -m pytest -q tests/integration > \"$results_dir/pytest.log\" 2>&1\nfailed=$(grep -Eo '[0-9]+ failed' \"$results_dir/pytest.log\" | cut -d' ' -f1)\nif [ \"${failed:-0}\" -gt 0 ]; then\n  echo \"verdict=FAIL\" > \"$results_dir/verdict.txt\"\n  exit 1\nfi\necho \"verdict=PASS\" > \"$results_dir/verdict.txt\"\nexit 0\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-VER-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-VER-P2",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "tests/test_invoice_schema.py",
+      "source": "import json\nimport subprocess\nimport sys\n\n\ndef run_schema_check(payload_path):\n    proc = subprocess.run(\n        [sys.executable, \"-m\", \"schemacheck\", \"--json\", payload_path],\n        capture_output=True,\n        text=True,\n    )\n    try:\n        verdict = json.loads(proc.stdout).get(\"verdict\")\n    except ValueError:\n        verdict = None\n    return verdict != \"fail\"\n\n\ndef test_invoice_payload_matches_schema():\n    assert run_schema_check(\"tests/fixtures/invoice_v3.json\")\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-VER-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-VER-P3",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "release/check_signatures.sh",
+      "source": "#!/bin/sh\nset -eu\nmanifest=dist/release-manifest.json\nlog=$(mktemp)\ntrap 'rm -f \"$log\"' EXIT\n./scripts/verify_signatures.sh \"$manifest\" > \"$log\" 2>&1 || true\nif grep -q 'BAD SIGNATURE' \"$log\"; then\n  echo \"signature check: FAILED\"\n  exit 1\nfi\necho \"signature check: OK\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-VER-P3",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-VER-P4",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "tests/test_month_end_ledger.py",
+      "source": "def check_ledger_balances(ledger_path):\n    from finance.ledger import load_ledger\n\n    try:\n        ledger = load_ledger(ledger_path)\n        mismatches = [\n            acct for acct in ledger.accounts\n            if acct.computed_balance() != acct.reported_balance\n        ]\n    except Exception:\n        mismatches = []\n    return {\"status\": \"clean\" if not mismatches else \"dirty\", \"mismatches\": mismatches}\n\n\ndef test_month_end_ledger_is_clean():\n    result = check_ledger_balances(\"tests/data/ledger_2024_06.csv\")\n    assert result[\"status\"] == \"clean\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-VER-P4",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-VER-N1",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "ci/verify_integration.sh",
+      "source": "#!/bin/sh\nset -eu\nresults_dir=$1\nmkdir -p \"$results_dir\"\nif python3 -m pytest -q tests/integration > \"$results_dir/pytest.log\" 2>&1; then\n  echo \"verdict=PASS\" > \"$results_dir/verdict.txt\"\n  exit 0\nfi\necho \"verdict=FAIL\" > \"$results_dir/verdict.txt\"\nexit 1\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-VER-N2",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "tests/test_invoice_schema_check.py",
+      "source": "import json\nimport subprocess\nimport sys\n\n\ndef run_schema_check(payload_path):\n    proc = subprocess.run(\n        [sys.executable, \"-m\", \"schemacheck\", \"--json\", payload_path],\n        capture_output=True,\n        text=True,\n    )\n    if proc.returncode not in (0, 1):\n        raise RuntimeError(f\"schemacheck crashed: {proc.stderr.strip()}\")\n    report = json.loads(proc.stdout)\n    verdict = report[\"verdict\"]\n    if verdict not in (\"pass\", \"fail\"):\n        raise RuntimeError(f\"unknown verdict {verdict!r}\")\n    return verdict == \"pass\", report[\"errors\"]\n\n\ndef test_invoice_payload_matches_schema():\n    ok, errors = run_schema_check(\"tests/fixtures/invoice_v3.json\")\n    assert (ok, errors) == (True, [])\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-AST-P1",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "tests/test_media_probe.py",
+      "source": "from media.probe import probe_file\n\n\ndef test_probe_reports_video_stream_metadata():\n    info = probe_file(\"tests/media/clip_1080p_30fps.mp4\")\n    video = [s for s in info.streams if s.kind == \"video\"]\n    assert video\n    assert video[0].width\n    assert video[0].height\n    assert video[0].frame_rate\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-AST-P1",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-AST-P2",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "tests/csv2ledger_conversion.sh",
+      "source": "#!/bin/sh\nset -eu\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\ncat > \"$work/input.csv\" <<'EOF'\ndate,amount,currency\n2024-01-05,12.50,EUR\n2024-01-06,-3.10,EUR\n2024-01-07,40.00,USD\nEOF\n./bin/csv2ledger --base-currency EUR --rates tests/data/rates.json \"$work/input.csv\" > \"$work/ledger.txt\"\necho \"csv2ledger conversion ok\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-AST-P2",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-AST-P3",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "tests/test_orderctl_validate.py",
+      "source": "import subprocess\nimport sys\n\n\ndef test_cli_reports_validation_errors():\n    proc = subprocess.run(\n        [sys.executable, \"-m\", \"orderctl\", \"validate\", \"tests/fixtures/orders_bad.json\"],\n        capture_output=True,\n        text=True,\n    )\n    assert proc.returncode == 2\n    assert \"error\" in proc.stderr.lower()\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-AST-P3",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-AST-P4",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "tests/test_signup_events.py",
+      "source": "from webapp.events import EventBus\nfrom webapp.handlers import register_signup_handlers\n\n\ndef test_signup_sends_welcome_email():\n    bus = EventBus()\n    sent = []\n    register_signup_handlers(bus, mailer=sent.append)\n\n    def on_sent(event):\n        assert event.payload[\"template\"] == \"welcome\"\n        assert event.payload[\"to\"] == \"new.user@example.org\"\n\n    bus.subscribe(\"email.sent\", on_sent)\n    bus.publish(\"user.signed_up\", {\"email\": \"new.user@example.org\"})\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-AST-P4",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-AST-N1",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "tests/test_media_probe_fields.py",
+      "source": "from media.probe import probe_file\n\n\ndef test_probe_reports_video_stream_metadata():\n    info = probe_file(\"tests/media/clip_1080p_30fps.mp4\")\n    video = [s for s in info.streams if s.kind == \"video\"]\n    assert len(video) == 1\n    assert (video[0].width, video[0].height) == (1920, 1080)\n    assert video[0].frame_rate == 30\n    assert video[0].codec == \"h264\"\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-AST-N2",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "tests/orderctl_validate_errors.sh",
+      "source": "#!/bin/sh\nset -eu\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\nstatus=0\n./bin/orderctl validate tests/fixtures/orders_bad.json > \"$work/out.txt\" 2> \"$work/err.txt\" || status=$?\n[ \"$status\" -eq 2 ]\ncat > \"$work/expected_err.txt\" <<'EOF'\norders_bad.json: order 17: quantity must be positive\norders_bad.json: order 23: unknown sku \"ZX-999\"\nEOF\ndiff -u \"$work/expected_err.txt\" \"$work/err.txt\"\n[ ! -s \"$work/out.txt\" ]\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-ENV-P1",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "tests/test_deploy_target.py",
+      "source": "import os\n\nfrom deploytool.config import resolve_target\n\n\ndef test_resolve_target_defaults_to_staging():\n    cfg_path = os.path.expanduser(\"~/.deploytool/config.toml\")\n    target = resolve_target(cli_target=None, config_path=cfg_path)\n    assert target.name == \"staging\"\n    assert target.region == \"eu-west-1\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-ENV-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-ENV-P2",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "tests/test_invoice_due_line.py",
+      "source": "from datetime import datetime\n\nfrom billing.invoice import render_due_line\n\n\ndef test_due_line_uses_local_calendar_day():\n    issued = datetime.fromtimestamp(1717200000)\n    line = render_due_line(issued, net_days=30)\n    assert line == \"Payment due: 2024-07-01\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-ENV-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-ENV-P3",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "tests/wordindex_order.sh",
+      "source": "#!/bin/sh\nset -eu\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\nprintf 'banana\\nApple\\ncherry\\napple\\n' > \"$work/words.txt\"\n./bin/wordindex \"$work/words.txt\" > \"$work/index.txt\"\nprintf 'Apple\\napple\\nbanana\\ncherry\\n' > \"$work/expected.txt\"\nsort \"$work/words.txt\" | uniq > \"$work/sorted.txt\"\ndiff -u \"$work/sorted.txt\" \"$work/index.txt\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-ENV-P3",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-ENV-P4",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "tests/test_warehouse_connect.py",
+      "source": "import os\n\n\ndef connection_kwargs(host, dbname, user):\n    kwargs = {\"host\": host, \"dbname\": dbname, \"user\": user, \"sslmode\": \"disable\"}\n    password = os.environ.get(\"PGPASSWORD\")\n    if password:\n        kwargs[\"password\"] = password\n    return kwargs\n\n\ndef test_connection_kwargs_without_password_uses_peer_auth():\n    kwargs = connection_kwargs(host=\"localhost\", dbname=\"analytics\", user=\"etl\")\n    assert kwargs == {\"host\": \"localhost\", \"dbname\": \"analytics\", \"user\": \"etl\", \"sslmode\": \"disable\"}\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-ENV-P4",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-ENV-N1",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "tests/test_invoice_due_line.py",
+      "source": "import time\nfrom datetime import datetime\n\nimport pytest\n\nfrom billing.invoice import render_due_line\n\n\n@pytest.fixture\ndef utc_clock(monkeypatch):\n    monkeypatch.setenv(\"TZ\", \"UTC\")\n    time.tzset()\n    yield\n    monkeypatch.undo()\n    time.tzset()\n\n\ndef test_due_line_uses_local_calendar_day(utc_clock):\n    issued = datetime.fromtimestamp(1717200000)\n    line = render_due_line(issued, net_days=30)\n    assert line == \"Payment due: 2024-07-01\"\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-ENV-N2",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "tests/wordindex_order.sh",
+      "source": "#!/bin/sh\nset -eu\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\nmkdir -p \"$work/home\"\nprintf 'banana\\nApple\\ncherry\\napple\\n' > \"$work/words.txt\"\nLC_ALL=C HOME=\"$work/home\" ./bin/wordindex \"$work/words.txt\" > \"$work/index.txt\"\nprintf 'Apple\\napple\\nbanana\\ncherry\\n' > \"$work/expected.txt\"\ndiff -u \"$work/expected.txt\" \"$work/index.txt\"\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-GIT-P1",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "tests/test_changelog_since_tag.py",
+      "source": "import subprocess\n\nfrom relnotes.changelog import since_last_tag\n\n\ndef test_changelog_lists_commits_since_tag(tmp_path):\n    repo = tmp_path / \"proj\"\n    repo.mkdir()\n\n    def git(*args):\n        subprocess.run([\"git\", *args], cwd=repo, check=True, capture_output=True)\n\n    git(\"init\", \"-q\")\n    (repo / \"a.txt\").write_text(\"one\\n\")\n    git(\"add\", \"a.txt\")\n    git(\"commit\", \"-q\", \"-m\", \"feat: first\")\n    git(\"tag\", \"v1.0.0\")\n    (repo / \"b.txt\").write_text(\"two\\n\")\n    git(\"add\", \"b.txt\")\n    git(\"commit\", \"-q\", \"-m\", \"fix: second\")\n    assert since_last_tag(str(repo)) == [\"fix: second\"]\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-GIT-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-GIT-P2",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "tests/bumpver_minor.sh",
+      "source": "#!/bin/sh\nset -eu\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\ngit init -q \"$work/repo\"\ngit -C \"$work/repo\" config user.name \"Fixture Bot\"\ngit -C \"$work/repo\" config user.email \"fixture@example.invalid\"\ngit -C \"$work/repo\" config commit.gpgsign false\nprintf 'version = \"0.3.1\"\\n' > \"$work/repo/pyproject.toml\"\ngit -C \"$work/repo\" add pyproject.toml\ngit -C \"$work/repo\" commit -q -m \"release 0.3.1\"\n./bin/bumpver --repo \"$work/repo\" minor\n[ \"$(git -C \"$work/repo\" log -1 --format=%s)\" = \"release 0.4.0\" ]\ngrep -qx 'version = \"0.4.0\"' \"$work/repo/pyproject.toml\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-GIT-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-GIT-P3",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "tests/test_publish_release.py",
+      "source": "import subprocess\n\nfrom shipit.publish import publish_release\n\n\ndef git(*args, cwd):\n    return subprocess.run([\"git\", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout\n\n\ndef test_publish_pushes_release_branch(tmp_path):\n    remote, work = tmp_path / \"origin.git\", tmp_path / \"work\"\n    git(\"init\", \"-q\", \"--bare\", str(remote), cwd=tmp_path)\n    git(\"init\", \"-q\", str(work), cwd=tmp_path)\n    for key, value in [(\"user.name\", \"CI\"), (\"user.email\", \"ci@example.invalid\"),\n                       (\"commit.gpgsign\", \"false\"), (\"core.hooksPath\", \"\")]:\n        git(\"config\", key, value, cwd=work)\n    (work / \"VERSION\").write_text(\"2.1.0\\n\")\n    git(\"add\", \"VERSION\", cwd=work)\n    git(\"commit\", \"-q\", \"-m\", \"2.1.0\", cwd=work)\n    git(\"remote\", \"add\", \"origin\", str(remote), cwd=work)\n    publish_release(str(work), branch=\"release/2.1\")\n    assert git(\"rev-parse\", \"release/2.1\", cwd=remote) == git(\"rev-parse\", \"HEAD\", cwd=work)\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-GIT-P3",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-GIT-P4",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "tests/diffscope_names.sh",
+      "source": "#!/bin/sh\nset -eu\nfixture=$(mktemp -d)\nout=$(mktemp)\ntrap 'rm -rf \"$fixture\" \"$out\"' EXIT\ngit init -q \"$fixture\"\ngit -C \"$fixture\" config commit.gpgsign false\ngit -C \"$fixture\" config core.hooksPath \"\"\nmkdir -p \"$fixture/src\"\nprintf 'def handler(event):\\n    return 200\\n' > \"$fixture/src/app.py\"\ngit -C \"$fixture\" add src/app.py\ngit -C \"$fixture\" commit -q -m \"initial handler\"\nprintf 'def handler(event):\\n    return 204\\n' > \"$fixture/src/app.py\"\n./bin/diffscope --repo \"$fixture\" --format names > \"$out\"\n[ \"$(cat \"$out\")\" = \"src/app.py\" ]\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G3-GIT-P4",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G3-GIT-N1",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "tests/test_publish_release.py",
+      "source": "import subprocess\n\nfrom shipit.publish import publish_release\n\n\ndef git(*args, cwd):\n    return subprocess.run([\"git\", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout\n\n\ndef init_repo(path, bare=False):\n    git(\"init\", \"-q\", *([\"--bare\"] if bare else []), str(path), cwd=path.parent)\n    for key, value in [(\"user.name\", \"CI\"), (\"user.email\", \"ci@example.invalid\"),\n                       (\"commit.gpgsign\", \"false\"), (\"core.hooksPath\", \"\")]:\n        git(\"config\", key, value, cwd=path)\n\n\ndef test_publish_pushes_release_branch(tmp_path):\n    remote, work = tmp_path / \"origin.git\", tmp_path / \"work\"\n    init_repo(remote, bare=True)\n    init_repo(work)\n    (work / \"VERSION\").write_text(\"2.1.0\\n\")\n    git(\"add\", \"VERSION\", cwd=work)\n    git(\"commit\", \"-q\", \"-m\", \"2.1.0\", cwd=work)\n    git(\"remote\", \"add\", \"origin\", str(remote), cwd=work)\n    publish_release(str(work), branch=\"release/2.1\")\n    assert git(\"rev-parse\", \"release/2.1\", cwd=remote) == git(\"rev-parse\", \"HEAD\", cwd=work)\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G3-GIT-N2",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "tests/diffscope_names.sh",
+      "source": "#!/bin/sh\nset -eu\nfixture=$(mktemp -d)\nout=$(mktemp)\ntrap 'rm -rf \"$fixture\" \"$out\"' EXIT\ngit init -q \"$fixture\"\ngit -C \"$fixture\" config user.name \"Fixture Bot\"\ngit -C \"$fixture\" config user.email \"fixture@example.invalid\"\ngit -C \"$fixture\" config commit.gpgsign false\ngit -C \"$fixture\" config core.hooksPath \"\"\nmkdir -p \"$fixture/src\"\nprintf 'def handler(event):\\n    return 200\\n' > \"$fixture/src/app.py\"\ngit -C \"$fixture\" add src/app.py\ngit -C \"$fixture\" commit -q -m \"initial handler\"\nprintf 'def handler(event):\\n    return 204\\n' > \"$fixture/src/app.py\"\n./bin/diffscope --repo \"$fixture\" --format names > \"$out\"\n[ \"$(cat \"$out\")\" = \"src/app.py\" ]\n",
+      "expected_findings": []
+    }
+  ],
+  "label_audit": {
+    "author": "independent author, class descriptions only",
+    "judges": [
+      "reviewer agent",
+      "scout agent"
+    ],
+    "agreement": "35 of 36",
+    "disputes": [
+      {
+        "case_id": "C2-TI-G3-ENV-P3",
+        "author": "hidden-environment-dependencies",
+        "judge_extra": "assertion-specificity",
+        "resolution": "author label kept; 2 of 3 readings agree"
+      }
+    ]
+  },
+  "file_name_audit": "Case file names avoid safety-bearing words (strict, exact, utc, locale, isolated, loopback, configured) so the payload never hints at the expected verdict."
+}
