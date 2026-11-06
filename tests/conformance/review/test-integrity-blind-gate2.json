@@ -1,0 +1,336 @@
+{
+  "schema": "c2-ti/v1",
+  "description": "Gate-2 blind out-of-sample cases, authored without the checklist",
+  "cases": [
+    {
+      "id": "C2-TI-G2-NET-P1",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "test_forecast_parse.py",
+      "source": "import requests\n\nfrom weather.client import parse_forecast\n\n\ndef test_parse_forecast_from_service_response():\n    resp = requests.get(\n        'https://api.open-meteo.com/v1/forecast',\n        params={'latitude': 52.52, 'longitude': 13.41, 'hourly': 'temperature_2m'},\n        timeout=10,\n    )\n    resp.raise_for_status()\n    payload = resp.json()\n    forecast = parse_forecast(payload)\n    assert forecast.latitude == payload['latitude']\n    assert [t for t, _ in forecast.hourly] == payload['hourly']['time']\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-NET-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-NET-P2",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "test_depcheck_version.py",
+      "source": "import subprocess\nimport sys\n\nfrom depcheck import installed_version\n\n\ndef test_installed_version_reads_dist_metadata(tmp_path):\n    target = tmp_path / 'site'\n    subprocess.run(\n        [sys.executable, '-m', 'pip', 'install', '--quiet', '--target', str(target), 'tomli==2.0.1'],\n        check=True,\n    )\n    assert installed_version('tomli', search_path=[str(target)]) == '2.0.1'\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-NET-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-NET-P3",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "test_tcp_banner.py",
+      "source": "import re\n\nfrom netprobe import tcp_banner\n\n\ndef test_tcp_banner_reads_smtp_greeting():\n    banner = tcp_banner('smtp.gmail.com', 587, timeout=5.0)\n    assert re.match(r'^220 \\S+ ESMTP', banner)\n    assert not banner.endswith('\\r\\n')\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-NET-P3",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-NET-N1",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "test_weather_client.py",
+      "source": "import httpx\n\nfrom weather.client import WeatherClient\n\n\ndef test_client_parses_hourly_series():\n    def handler(request: httpx.Request) -> httpx.Response:\n        assert request.url.path == '/v1/forecast'\n        return httpx.Response(\n            200,\n            json={'latitude': 52.5, 'hourly': {'time': ['t0', 't1'], 'temperature_2m': [3.0, 4.5]}},\n        )\n\n    transport = httpx.MockTransport(handler)\n    with httpx.Client(transport=transport, base_url='https://api.open-meteo.com') as http:\n        forecast = WeatherClient(http).forecast(52.5, 13.4)\n    assert forecast.latitude == 52.5\n    assert forecast.hourly == [('t0', 3.0), ('t1', 4.5)]\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-NET-N2",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "test_tcp_banner_loopback.py",
+      "source": "import socket\nimport threading\n\nfrom netprobe import tcp_banner\n\n\ndef test_tcp_banner_reads_first_line_from_loopback():\n    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:\n        srv.bind(('127.0.0.1', 0))\n        srv.listen(1)\n        port = srv.getsockname()[1]\n\n        def serve():\n            conn, _ = srv.accept()\n            with conn:\n                conn.sendall(b'220 mail.test ESMTP ready\\r\\n')\n\n        worker = threading.Thread(target=serve)\n        worker.start()\n        banner = tcp_banner('127.0.0.1', port, timeout=5.0)\n        worker.join(timeout=5)\n    assert banner == '220 mail.test ESMTP ready'\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-TMP-P1",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "test_export_report.py",
+      "source": "import json\nimport os\n\nfrom exporter import export_report\n\n\ndef test_export_report_writes_json():\n    out = '/tmp/report-export.json'\n    if os.path.exists(out):\n        os.remove(out)\n    export_report({'total': 3, 'failed': 1}, out)\n    with open(out) as fh:\n        data = json.load(fh)\n    assert data == {'total': 3, 'failed': 1}\n    os.remove(out)\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-TMP-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-TMP-P2",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "test_thumbnails.py",
+      "source": "import shutil\nimport tempfile\nfrom pathlib import Path\n\nfrom thumbs import render_thumbnails\n\n\ndef test_render_thumbnails_creates_one_file_per_image(sample_images):\n    outdir = Path(tempfile.gettempdir()) / 'thumbs-out'\n    shutil.rmtree(outdir, ignore_errors=True)\n    outdir.mkdir()\n    render_thumbnails(sample_images, outdir, size=(64, 64))\n    produced = sorted(p.name for p in outdir.iterdir())\n    assert produced == sorted(f'{img.stem}.png' for img in sample_images)\n    shutil.rmtree(outdir)\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-TMP-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-TMP-P3",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "csvsplit_test.sh",
+      "source": "#!/bin/sh\nset -eu\nwork=$(mktemp -d /tmp/csvsplit.XXXXXX)\ntrap 'rm -rf /tmp/csvsplit.*' EXIT\nprintf 'id,name\\n1,a\\n2,b\\n3,c\\n' > \"$work/in.csv\"\n./bin/csvsplit --rows 2 --out \"$work\" \"$work/in.csv\"\n[ \"$(cat \"$work/part-1.csv\")\" = \"$(printf 'id,name\\n1,a\\n2,b')\" ] || { echo \"part-1 mismatch\" >&2; exit 1; }\n[ \"$(cat \"$work/part-2.csv\")\" = \"$(printf 'id,name\\n3,c')\" ] || { echo \"part-2 mismatch\" >&2; exit 1; }\necho ok\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-TMP-P3",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-TMP-N1",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "test_export_roundtrip.py",
+      "source": "import json\nimport tempfile\nfrom pathlib import Path\n\nfrom exporter import export_report\n\n\ndef test_export_report_round_trips():\n    with tempfile.TemporaryDirectory(prefix='report-') as d:\n        out = Path(d) / 'report.json'\n        export_report({'total': 3, 'failed': 1}, str(out))\n        assert json.loads(out.read_text()) == {'total': 3, 'failed': 1}\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-TMP-N2",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "csvsplit_parts.sh",
+      "source": "#!/bin/sh\nset -eu\nwork=$(mktemp -d)\ncleanup() { rm -rf \"$work\"; }\ntrap cleanup EXIT INT TERM\nprintf 'id,name\\n1,a\\n2,b\\n3,c\\n' > \"$work/in.csv\"\n./bin/csvsplit --rows 2 --out \"$work/parts\" \"$work/in.csv\"\n[ \"$(cat \"$work/parts/part-1.csv\")\" = \"$(printf 'id,name\\n1,a\\n2,b')\" ] || { echo \"part-1 mismatch\" >&2; exit 1; }\n[ \"$(cat \"$work/parts/part-2.csv\")\" = \"$(printf 'id,name\\n3,c')\" ] || { echo \"part-2 mismatch\" >&2; exit 1; }\n[ ! -e \"$work/parts/part-3.csv\" ] || { echo \"unexpected part-3\" >&2; exit 1; }\necho ok\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-VER-P1",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "verify_schema.py",
+      "source": "import json\nimport subprocess\nimport sys\n\n\ndef verify(artifact_dir: str) -> dict:\n    try:\n        proc = subprocess.run(\n            [sys.executable, '-m', 'schema_check', artifact_dir],\n            capture_output=True, text=True, timeout=120,\n        )\n        report = json.loads(proc.stdout)\n    except Exception:\n        return {'verdict': 'pass', 'violations': []}\n    violations = report.get('violations', [])\n    return {'verdict': 'fail' if violations else 'pass', 'violations': violations}\n\n\nif __name__ == '__main__':\n    result = verify(sys.argv[1])\n    print(json.dumps(result))\n    sys.exit(0 if result['verdict'] == 'pass' else 1)\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-VER-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-VER-P2",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "check_lint.sh",
+      "source": "#!/bin/sh\nreport=$(mktemp)\ntrap 'rm -f \"$report\"' EXIT\n./node_modules/.bin/eslint --format json src > \"$report\" 2>/dev/null\nerrors=$(python3 -c 'import json, sys; print(sum(f[\"errorCount\"] for f in json.load(open(sys.argv[1]))))' \"$report\" 2>/dev/null)\nif [ \"${errors:-0}\" -gt 0 ]; then\n  echo \"lint: $errors error(s)\"\n  exit 1\nfi\necho \"lint: clean\"\nexit 0\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-VER-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-VER-P3",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "grader_adapter.py",
+      "source": "from dataclasses import dataclass\n\n\n@dataclass\nclass Outcome:\n    passed: bool\n    detail: str\n\n\n_FAILING = {'fail', 'error'}\n\n\ndef adapt(raw: dict) -> Outcome:\n    status = str(raw.get('status', '')).lower()\n    if status in _FAILING:\n        return Outcome(False, raw.get('message', status))\n    return Outcome(True, raw.get('message', 'ok'))\n\n\ndef assert_grader_passed(raw: dict) -> None:\n    outcome = adapt(raw)\n    assert outcome.passed, outcome.detail\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-VER-P3",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-VER-N1",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "verify_schema_strict.py",
+      "source": "import json\nimport subprocess\nimport sys\n\ndef verify(artifact_dir: str) -> dict:\n    try:\n        proc = subprocess.run(\n            [sys.executable, '-m', 'schema_check', artifact_dir],\n            capture_output=True, text=True, timeout=120,\n        )\n    except subprocess.TimeoutExpired:\n        return {'verdict': 'error', 'reason': 'timeout'}\n    if proc.returncode not in (0, 1):\n        return {'verdict': 'error', 'reason': f'exit {proc.returncode}'}\n    try:\n        violations = json.loads(proc.stdout)['violations']\n    except (json.JSONDecodeError, KeyError, TypeError):\n        return {'verdict': 'error', 'reason': 'unparseable report'}\n    verdict = 'pass' if violations == [] and proc.returncode == 0 else 'fail'\n    return {'verdict': verdict, 'violations': violations}\n\nif __name__ == '__main__':\n    result = verify(sys.argv[1])\n    print(json.dumps(result))\n    sys.exit(0 if result['verdict'] == 'pass' else 1)\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-VER-N2",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "grader_outcome.py",
+      "source": "from dataclasses import dataclass\n\n\n@dataclass\nclass Outcome:\n    passed: bool\n    detail: str\n\n\ndef adapt(raw: dict) -> Outcome:\n    status = raw.get('status')\n    if status == 'pass':\n        return Outcome(True, raw.get('message', 'pass'))\n    if status in ('fail', 'error'):\n        return Outcome(False, raw.get('message', status))\n    raise ValueError(f'unrecognized grader status: {status!r}')\n\n\ndef assert_grader_passed(raw: dict) -> None:\n    outcome = adapt(raw)\n    assert outcome.passed, outcome.detail\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-AST-P1",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "test_invoice_discount.py",
+      "source": "from invoicing import build_invoice\n\n\ndef test_build_invoice_applies_discount():\n    invoice = build_invoice(\n        items=[('widget', 2, 1000), ('gadget', 1, 2500)],\n        discount_pct=10,\n    )\n    assert invoice\n    assert invoice.total\n    assert invoice.lines\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-AST-P1",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-AST-P2",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "uniqsort_test.sh",
+      "source": "#!/bin/sh\nset -eu\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\nprintf 'b\\na\\nc\\na\\n' > \"$work/in.txt\"\n./bin/uniqsort \"$work/in.txt\" > \"$work/out.txt\"\n[ -f \"$work/out.txt\" ]\necho \"uniqsort ok\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-AST-P2",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-AST-P3",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "test_cli_version.py",
+      "source": "import subprocess\nimport sys\n\n\ndef test_cli_reports_version():\n    proc = subprocess.run(\n        [sys.executable, '-m', 'pkgtool', '--version'],\n        capture_output=True,\n        text=True,\n    )\n    assert proc.returncode == 0\n    assert '.' in proc.stdout\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-AST-P3",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-AST-N1",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "test_cli_errors.py",
+      "source": "import subprocess\nimport sys\n\n\ndef test_cli_rejects_unknown_flag():\n    proc = subprocess.run(\n        [sys.executable, '-m', 'pkgtool', '--frobnicate'],\n        capture_output=True,\n        text=True,\n    )\n    assert proc.returncode == 2\n    assert proc.stdout == ''\n    assert proc.stderr.splitlines()[-1] == 'pkgtool: error: unrecognized arguments: --frobnicate'\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-AST-N2",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "test_invoice_totals.py",
+      "source": "from decimal import Decimal\n\nfrom invoicing import build_invoice\n\n\ndef test_build_invoice_applies_discount():\n    invoice = build_invoice(items=[('widget', 2, Decimal('10.00'))], discount_pct=10)\n    assert invoice.subtotal == Decimal('20.00')\n    assert invoice.discount == Decimal('2.00')\n    assert invoice.total == Decimal('18.00')\n    assert [line.sku for line in invoice.lines] == ['widget']\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-ENV-P1",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "test_report_header.py",
+      "source": "from datetime import datetime\n\nfrom reports.header import render_header\n\n\ndef test_render_header_includes_generation_time():\n    generated = datetime.fromtimestamp(1700000000)\n    header = render_header(title='Weekly', generated_at=generated)\n    assert header == 'Weekly \u2014 generated 2023-11-14 22:13'\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-ENV-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-ENV-P2",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "test_registry_token.py",
+      "source": "from pathlib import Path\n\nfrom uploader.auth import token_for\n\n\ndef test_token_for_registry_reads_netrc():\n    netrc = Path.home() / '.netrc'\n    line = next(\n        entry for entry in netrc.read_text().splitlines() if 'registry.internal' in entry\n    )\n    expected = line.split('password', 1)[1].strip()\n    assert token_for('registry.internal') == expected\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-ENV-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-ENV-P3",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "test_title_sorting.py",
+      "source": "import locale\n\nfrom catalog.sorting import sort_titles\n\n\ndef test_sort_titles_uses_collation():\n    locale.setlocale(locale.LC_COLLATE, '')\n    titles = ['zebra', '\u00c4pfel', 'apple', 'Birne']\n    assert sort_titles(titles) == ['apple', '\u00c4pfel', 'Birne', 'zebra']\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-ENV-P3",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-ENV-N1",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "test_report_header_utc.py",
+      "source": "from datetime import datetime, timezone\n\nfrom reports.header import render_header\n\n\ndef test_render_header_includes_generation_time():\n    generated = datetime.fromtimestamp(1700000000, tz=timezone.utc)\n    header = render_header(title='Weekly', generated_at=generated)\n    assert header == 'Weekly \u2014 generated 2023-11-14 22:13 UTC'\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-ENV-N2",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "test_registry_token_fixture.py",
+      "source": "from uploader.auth import token_for\n\n\ndef test_token_for_registry_reads_netrc(tmp_path, monkeypatch):\n    monkeypatch.setenv('HOME', str(tmp_path))\n    monkeypatch.delenv('NETRC', raising=False)\n    netrc = tmp_path / '.netrc'\n    netrc.write_text('machine registry.internal login ci password s3cr3t-token\\n')\n    netrc.chmod(0o600)\n    assert token_for('registry.internal') == 's3cr3t-token'\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-GIT-P1",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "test_changelog_entries.py",
+      "source": "import subprocess\n\nfrom changelog import collect_entries\n\n\ndef _git(repo, *args):\n    subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)\n\n\ndef test_collect_entries_reads_commit_subjects(tmp_path):\n    repo = tmp_path / 'repo'\n    repo.mkdir()\n    _git(repo, 'init', '-q')\n    _git(repo, 'config', 'user.name', 'Fixture')\n    _git(repo, 'config', 'user.email', 'fixture@test.local')\n    (repo / 'a.txt').write_text('a\\n')\n    _git(repo, 'add', 'a.txt')\n    _git(repo, 'commit', '-q', '-m', 'feat: add a')\n    assert collect_entries(repo) == ['feat: add a']\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-GIT-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-GIT-P2",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "release_notes_test.sh",
+      "source": "#!/bin/sh\nset -eu\nrepo=$(mktemp -d)\ntrap 'rm -rf \"$repo\"' EXIT\ngit init -q \"$repo\"\nprintf 'one\\n' > \"$repo/f\"\ngit -C \"$repo\" add f\ngit -C \"$repo\" -c user.name=Fixture -c user.email=fixture@test.local commit -q -m 'feat: one'\nprintf 'two\\n' >> \"$repo/f\"\ngit -C \"$repo\" -c user.name=Fixture -c user.email=fixture@test.local commit -q -am 'fix: two'\nexpected=$(printf '%s\\n' '- fix: two' '- feat: one')\nactual=$(./bin/release-notes \"$repo\")\n[ \"$actual\" = \"$expected\" ] || { printf 'got:\\n%s\\n' \"$actual\" >&2; exit 1; }\necho ok\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-GIT-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-GIT-P3",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "test_tag_release.py",
+      "source": "import subprocess\n\nfrom releaser import tag_release\n\n\ndef test_tag_release_creates_annotated_tag(tmp_path):\n    repo = tmp_path / 'r'\n    repo.mkdir()\n\n    def run(*args):\n        return subprocess.run(['git', *args], cwd=repo, check=True, capture_output=True, text=True)\n\n    run('init', '-q')\n    run('config', 'user.name', 'CI Fixture')\n    run('config', 'user.email', 'ci@fixture.test')\n    run('config', 'commit.gpgsign', 'false')\n    (repo / 'VERSION').write_text('1.4.0\\n')\n    run('add', 'VERSION')\n    run('commit', '-q', '-m', 'release 1.4.0')\n    tag_release(repo, '1.4.0')\n    out = run('for-each-ref', '--format=%(objecttype) %(refname:short)', 'refs/tags')\n    assert out.stdout.strip() == 'tag v1.4.0'\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-GIT-P3",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-G2-GIT-N1",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "test_mirror_branch.py",
+      "source": "import subprocess\n\nfrom sync.mirror import mirror_branch\n\n\ndef _git(cwd, *args):\n    return subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True, text=True).stdout\n\n\ndef test_mirror_branch_pushes_to_local_remote(tmp_path):\n    hooks = tmp_path / 'no-hooks'\n    hooks.mkdir()\n    origin = tmp_path / 'origin.git'\n    _git(tmp_path, 'init', '-q', '--bare', str(origin))\n    work = tmp_path / 'work'\n    _git(tmp_path, 'init', '-q', '-b', 'main', str(work))\n    for key, value in [('user.name', 'Fixture'), ('user.email', 'fixture@test.local'), ('commit.gpgsign', 'false'), ('tag.gpgsign', 'false'), ('core.hooksPath', str(hooks))]:\n        _git(work, 'config', key, value)\n    _git(work, 'remote', 'add', 'origin', str(origin))\n    (work / 'x.txt').write_text('x\\n')\n    _git(work, 'add', 'x.txt')\n    _git(work, 'commit', '-q', '-m', 'add x')\n    mirror_branch(work, 'origin', 'main')\n    head = _git(work, 'rev-parse', 'HEAD').strip()\n    assert _git(origin, 'rev-parse', 'refs/heads/main').strip() == head\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-G2-GIT-N2",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "release_notes_configured.sh",
+      "source": "#!/bin/sh\nset -eu\nrepo=$(mktemp -d)\ntrap 'rm -rf \"$repo\"' EXIT\ngit init -q \"$repo\"\ngit -C \"$repo\" config user.name 'Fixture'\ngit -C \"$repo\" config user.email 'fixture@test.local'\ngit -C \"$repo\" config commit.gpgsign false\ngit -C \"$repo\" config core.hooksPath /dev/null\nprintf 'one\\n' > \"$repo/f\"\ngit -C \"$repo\" add f\ngit -C \"$repo\" commit -q -m 'feat: one'\nprintf 'two\\n' >> \"$repo/f\"\ngit -C \"$repo\" commit -q -am 'fix: two'\nexpected=$(printf '%s\\n' '- fix: two' '- feat: one')\nactual=$(./bin/release-notes \"$repo\")\n[ \"$actual\" = \"$expected\" ] || { printf 'got:\\n%s\\n' \"$actual\" >&2; exit 1; }\necho ok\n",
+      "expected_findings": []
+    }
+  ]
+}
