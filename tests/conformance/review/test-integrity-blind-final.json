@@ -1,0 +1,210 @@
+{
+  "schema": "c2-ti/v1",
+  "description": "Final out-of-sample blind holdouts",
+  "cases": [
+    {
+      "id": "C2-TI-NET-FINAL-P1",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import json\nimport urllib.request\n\ndef test_pyproject_schema_is_draft7(tmp_path):\n    out = tmp_path / \"schema.json\"\n    with urllib.request.urlopen(\"https://json.schemastore.org/pyproject.json\", timeout=5) as resp:\n        out.write_bytes(resp.read())\n    data = json.loads(out.read_text())\n    assert data[\"$schema\"] == \"http://json-schema.org/draft-07/schema#\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-NET-FINAL-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-NET-FINAL-P2",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/usr/bin/env bash\nset -euo pipefail\nroot=$(mktemp -d)\ntrap 'rm -rf \"$root\"' EXIT\npython3 -m venv \"$root/venv\"\nPIP_CONFIG_FILE=/dev/null \"$root/venv/bin/pip\" install --quiet \"tomli==2.0.1\"\n\"$root/venv/bin/python\" -c 'import tomli; assert tomli.loads(\"a = 1\") == {\"a\": 1}'\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-NET-FINAL-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-NET-FINAL-N1",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import httpx\n\ndef test_fetch_latest_tag_uses_stub_transport():\n    def handler(request):\n        assert request.url.path == \"/repos/acme/tool/releases/latest\"\n        return httpx.Response(200, json={\"tag_name\": \"v1.4.0\"})\n    client = httpx.Client(transport=httpx.MockTransport(handler), base_url=\"https://api.github.com\")\n    assert fetch_latest_tag(client, \"acme/tool\") == \"v1.4.0\"\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-TMP-FINAL-P1",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "from pathlib import Path\n\ndef test_render_summary_writes_markdown():\n    out = Path(\"/tmp/ai-orch-summary\")\n    out.mkdir(exist_ok=True)\n    render_summary({\"passed\": 3, \"failed\": 0}, out / \"summary.md\")\n    assert (out / \"summary.md\").read_text() == \"# Summary\\n\\npassed: 3\\nfailed: 0\\n\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-TMP-FINAL-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-TMP-FINAL-P2",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/usr/bin/env bash\nset -euo pipefail\nroot=$(mktemp -d /tmp/lintfx.XXXXXX)\ntrap 'rm -rf /tmp/lintfx.*' EXIT\nprintf 'x = 1\\n' > \"$root/a.py\"\nout=$(ruff check --no-cache --isolated \"$root/a.py\")\n[ \"$out\" = \"All checks passed!\" ]\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-TMP-FINAL-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-TMP-FINAL-N1",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import pathlib\nimport subprocess\nimport tempfile\n\ndef test_archive_roundtrip_lists_single_member():\n    with tempfile.TemporaryDirectory(prefix=\"arch-\") as d:\n        root = pathlib.Path(d)\n        (root / \"in.txt\").write_text(\"payload\\n\")\n        subprocess.run([\"tar\", \"-cf\", str(root / \"a.tar\"), \"-C\", str(root), \"in.txt\"], check=True)\n        listing = subprocess.run([\"tar\", \"-tf\", str(root / \"a.tar\")], check=True, capture_output=True, text=True)\n        assert listing.stdout.splitlines() == [\"in.txt\"]\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-VER-FINAL-P1",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import json\nimport subprocess\nimport sys\n\ndef run_lint_adapter(path):\n    proc = subprocess.run([sys.executable, \"-m\", \"fixture_lint\", \"--json\", str(path)], capture_output=True, text=True)\n    try:\n        return json.loads(proc.stdout)[\"results\"]\n    except (json.JSONDecodeError, KeyError):\n        return []\n\ndef test_clean_file_has_no_results(tmp_path):\n    (tmp_path / \"ok.py\").write_text(\"x = 1\\n\")\n    assert run_lint_adapter(tmp_path / \"ok.py\") == []\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-VER-FINAL-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-VER-FINAL-P2",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/usr/bin/env bash\nset -euo pipefail\nroot=$(mktemp -d)\ntrap 'rm -rf \"$root\"' EXIT\nprintf '{\"findings\": []}\\n' > \"$root/report.json\"\nverdict=$(python3 tools/verify_report.py \"$root/report.json\" 2>/dev/null || echo clean)\n[ \"$verdict\" = \"clean\" ]\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-VER-FINAL-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-VER-FINAL-N1",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import subprocess\nimport sys\n\ndef test_verifier_rejects_malformed_report(tmp_path):\n    bad = tmp_path / \"report.json\"\n    bad.write_text(\"{not json\")\n    proc = subprocess.run([sys.executable, \"tools/verify_report.py\", str(bad)], capture_output=True, text=True, check=False)\n    assert proc.returncode == 2\n    assert proc.stdout == \"\"\n    assert proc.stderr.strip() == f\"error: malformed report: {bad}\"\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-AST-FINAL-P1",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "def test_slugify_strips_punctuation():\n    result = slugify(\"Hello, World! 2024\")\n    assert result\n    assert isinstance(result, str)\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-AST-FINAL-P1",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-AST-FINAL-P2",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/usr/bin/env bash\nset -euo pipefail\nroot=$(mktemp -d)\ntrap 'rm -rf \"$root\"' EXIT\nprintf 'b\\na\\nb\\n' > \"$root/in.txt\"\nout=$(python3 tools/dedupe_sort.py \"$root/in.txt\")\ncase \"$out\" in\n  *a*) echo ok ;;\n  *) exit 1 ;;\nesac\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-AST-FINAL-P2",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-AST-FINAL-N1",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import pytest\n\ndef test_parse_duration_rejects_unknown_unit():\n    with pytest.raises(ValueError, match=r\"^unknown unit 'w' in '3w'$\"):\n        parse_duration(\"3w\")\n    assert parse_duration(\"90s\") == 90\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-ENV-FINAL-P1",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import os\nimport pathlib\n\ndef test_default_profile_selects_executor():\n    cfg_path = pathlib.Path(os.path.expanduser(\"~/.config/orch/profile.toml\"))\n    profile = load_profile(cfg_path)\n    assert profile.executor == \"codex\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-ENV-FINAL-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-ENV-FINAL-P2",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/usr/bin/env bash\nset -euo pipefail\nroot=$(mktemp -d)\ntrap 'rm -rf \"$root\"' EXIT\nprintf 'beta\\nAlpha\\nalpha\\nBeta\\n' > \"$root/names.txt\"\nsort \"$root/names.txt\" > \"$root/sorted.txt\"\nprintf 'alpha\\nAlpha\\nbeta\\nBeta\\n' > \"$root/expected.txt\"\ncmp \"$root/sorted.txt\" \"$root/expected.txt\"\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-ENV-FINAL-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-ENV-FINAL-N1",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import subprocess\nimport sys\n\ndef test_epoch_renders_in_utc(tmp_path):\n    env = {\"PATH\": \"/usr/bin:/bin\", \"HOME\": str(tmp_path), \"TZ\": \"UTC\", \"LC_ALL\": \"C\"}\n    code = \"import time; print(time.strftime('%H:%M', time.localtime(0)))\"\n    proc = subprocess.run([sys.executable, \"-c\", code], env=env, capture_output=True, text=True, check=True)\n    assert proc.stdout == \"00:00\\n\"\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-GIT-FINAL-P1",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/usr/bin/env bash\nset -euo pipefail\nroot=$(mktemp -d)\ntrap 'rm -rf \"$root\"' EXIT\ngit init -q \"$root/repo\"\ngit -C \"$root/repo\" config user.name Fixture\ngit -C \"$root/repo\" config user.email fixture@example.invalid\nprintf 'v1\\n' > \"$root/repo/VERSION\"\ngit -C \"$root/repo\" add VERSION\ngit -C \"$root/repo\" commit -q -m init\n[ \"$(git -C \"$root/repo\" log --format=%s)\" = \"init\" ]\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-GIT-FINAL-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-GIT-FINAL-P2",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import subprocess\n\ndef test_tag_points_at_head(tmp_path):\n    def git(*args):\n        cmd = [\"git\", \"-C\", str(tmp_path), \"-c\", \"commit.gpgsign=false\", \"-c\", \"tag.gpgsign=false\", \"-c\", \"core.hooksPath=\", *args]\n        return subprocess.run(cmd, check=True, capture_output=True, text=True)\n    git(\"init\", \"-q\")\n    (tmp_path / \"a.txt\").write_text(\"a\\n\")\n    git(\"add\", \"a.txt\")\n    git(\"commit\", \"-q\", \"-m\", \"a\")\n    git(\"tag\", \"v0.1.0\")\n    assert git(\"rev-parse\", \"v0.1.0^{commit}\").stdout == git(\"rev-parse\", \"HEAD\").stdout\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-GIT-FINAL-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-GIT-FINAL-N1",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/usr/bin/env bash\nset -euo pipefail\nroot=$(mktemp -d)\ntrap 'rm -rf \"$root\"' EXIT\nmkdir \"$root/hooks\"\nexport GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1\ngit init -q \"$root/repo\"\ng() { git -C \"$root/repo\" -c user.name=Fixture -c user.email=fx@example.invalid -c commit.gpgsign=false -c core.hooksPath=\"$root/hooks\" \"$@\"; }\nprintf 'x\\n' > \"$root/repo/f\"\ng add f\ng commit -q -m seed\n[ -z \"$(ls -A \"$root/hooks\")\" ] && [ \"$(g log --format=%an:%s)\" = \"Fixture:seed\" ]\n",
+      "expected_findings": []
+    }
+  ]
+}

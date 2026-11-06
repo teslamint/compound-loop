@@ -1,0 +1,210 @@
+{
+  "schema": "c2-ti/v1",
+  "cases": [
+    {
+      "id": "C2-TI-NET-CONF-P1",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import urllib.request\n\ndef test_status():\n    with urllib.request.urlopen('https://example.com/health', timeout=2) as response:\n        assert response.status == 200",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-NET-CONF-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-NET-CONF-P2",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import socket\n\ndef test_lookup():\n    client = socket.create_connection(('api.example.net', 443), timeout=1)\n    client.close()",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-NET-CONF-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-NET-CONF-N1",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "from unittest.mock import patch\n\nfrom app import health_status\n\ndef test_health_status_uses_stub():\n    with patch('app.urlopen') as open_url:\n        open_url.return_value.status = 204\n        assert health_status() == 204\n        open_url.assert_called_once_with('https://status.internal/health', timeout=2)\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-TMP-CONF-P1",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "from pathlib import Path\n\nROOT = Path('/tmp/widget-test')\n\ndef test_generated_config():\n    (ROOT / 'settings.json').write_text('{}')",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-TMP-CONF-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-TMP-CONF-P2",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import os\n\ndef test_socket_path():\n    path = '/tmp/service-test.sock'\n    if os.path.exists(path):\n        os.unlink(path)\n    open(path, 'w').close()",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-TMP-CONF-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-TMP-CONF-N1",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "from pathlib import Path\nfrom tempfile import TemporaryDirectory\n\ndef test_config_file():\n    with TemporaryDirectory() as root:\n        path = Path(root) / 'settings.json'\n        path.write_text('{}')",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-VER-CONF-P1",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import subprocess\n\ndef lint_gate():\n    result = subprocess.run(['ruff', 'check', '.'], capture_output=True)\n    return {'verdict': 'clean', 'log': result.stdout.decode()}\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-VER-CONF-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-VER-CONF-P2",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import json\n\ndef test_policy_report():\n    report = json.load(open('policy-result.json'))\n    assert report.get('verdict', 'pass') == 'pass'",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-VER-CONF-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-VER-CONF-N1",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import subprocess\n\ndef test_lint_clean():\n    result = subprocess.run(['ruff', 'check', '.'], capture_output=True)\n    assert result.returncode == 0, result.stderr.decode()",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-AST-CONF-P1",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "def test_creates_report(cli):\n    result = cli.run(['report'])\n    assert result.exit_code == 0",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-AST-CONF-P1",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-AST-CONF-P2",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "def test_rejects_bad_token_and_stores_nothing(client, db):\n    response = client.post('/tokens', json={'token': 'bad'})\n    assert response.status_code == 400\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-AST-CONF-P2",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-AST-CONF-N1",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "def test_rejects_bad_token(client):\n    response = client.post('/tokens', json={'token': 'bad'})\n    assert response.status_code == 400\n    assert response.json == {'error': 'invalid token'}",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-ENV-CONF-P1",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "from pathlib import Path\nimport os\n\ndef test_load_user_settings():\n    config = Path(os.environ['HOME']) / '.widgetrc'\n    assert config.exists()",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-ENV-CONF-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-ENV-CONF-P2",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/bin/sh\n\nprintf 'using home: %s\\n' \"$HOME\"\npython -m pytest tests/test_settings.py",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-ENV-CONF-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-ENV-CONF-N1",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "from pathlib import Path\n\nfrom app.settings import load_settings\n\ndef test_load_settings(tmp_path):\n    settings = load_settings(env={'HOME': str(tmp_path)})\n    assert settings.config_dir == Path(tmp_path) / '.app'\n",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-GIT-CONF-P1",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import subprocess\nfrom tempfile import TemporaryDirectory\n\ndef test_commit():\n    with TemporaryDirectory() as repo:\n        subprocess.run(['git', 'init', repo], check=True)\n        subprocess.run(['git', '-C', repo, 'commit', '--allow-empty', '-m', 'fixture'], check=True)",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-GIT-CONF-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-GIT-CONF-P2",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/bin/sh\nrepo=$(mktemp -d)\ngit -C \"$repo\" init\ngit -C \"$repo\" config user.name Tester\ngit -C \"$repo\" config user.email tester@example.invalid\ngit -C \"$repo\" commit --allow-empty -m fixture",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-GIT-CONF-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-GIT-CONF-N1",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/bin/sh\nrepo=$(mktemp -d)\nmkdir \"$repo/hooks\"\ngit -C \"$repo\" init\ngit -C \"$repo\" config user.name Tester; git -C \"$repo\" config user.email tester@example.invalid\ngit -C \"$repo\" config commit.gpgsign false; git -C \"$repo\" config core.hooksPath \"$repo/hooks\"\ntest -z \"$(find \"$repo/hooks\" -mindepth 1 -print -quit)\"\ngit -C \"$repo\" config remote.origin.url /dev/null\ngit -C \"$repo\" commit --allow-empty -m fixture",
+      "expected_findings": []
+    }
+  ],
+  "description": "Authored blind to the detectors."
+}

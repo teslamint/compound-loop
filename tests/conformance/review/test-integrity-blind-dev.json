@@ -1,0 +1,210 @@
+{
+  "schema": "c2-ti/v1",
+  "cases": [
+    {
+      "id": "C2-TI-NET-BLIND-P1",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import httpx\n\ndef fetch_status():\n    response = httpx.get(\"https://status.example.net/health\", timeout=2)\n    response.raise_for_status()\n    return response.status_code",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-NET-BLIND-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-NET-BLIND-P2",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/bin/sh\nset -eu\n\ncurl --fail --silent https://packages.example.net/index.json -o index.json\nprintf '%s\\n' \"downloaded package index\"",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-NET-BLIND-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-NET-BLIND-N1",
+      "class": "network-isolation",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import httpx\n\ntransport = httpx.MockTransport(lambda request: httpx.Response(200, json={\"ready\": True}))\nwith httpx.Client(transport=transport) as client:\n    response = client.get(\"https://service.invalid/health\")\nassert response.json() == {\"ready\": True}",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-TMP-BLIND-P1",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "from pathlib import Path\nimport tempfile\n\ncache = Path(tempfile.gettempdir()) / \"integration-cache\"\ncache.mkdir(exist_ok=True)\n(cache / \"result.json\").write_text(\"{}\", encoding=\"utf-8\")",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-TMP-BLIND-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-TMP-BLIND-P2",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/bin/sh\nset -eu\n\nmkdir -p /var/tmp/project-test-artifacts\nprintf '%s\\n' \"run output\" > /var/tmp/project-test-artifacts/output.log\ncat /var/tmp/project-test-artifacts/output.log",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-TMP-BLIND-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-TMP-BLIND-N1",
+      "class": "shared-temporary-directories",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/bin/sh\nset -eu\n\nwork=$(mktemp -d)\ntrap 'rm -rf \"$work\"' EXIT\nprintf '%s\\n' \"isolated\" > \"$work/output.log\"\ntest \"$(cat \"$work/output.log\")\" = isolated",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-VER-BLIND-P1",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "def release_check(run_verifier):\n    try:\n        return run_verifier()\n    except Exception:\n        return True\n\nif release_check(check_artifact):\n    publish_release()",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-VER-BLIND-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-VER-BLIND-P2",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/bin/sh\nset -eu\n\nverify-artifact package.tar || true\nprintf '%s\\n' \"artifact accepted\"\nrelease-package package.tar",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-VER-BLIND-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-VER-BLIND-N1",
+      "class": "verifier-fail-open",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "try:\n    parse_rejection(response)\nexcept ExpectedRejection as exc:\n    verdict = \"rejected\"\nelse:\n    verdict = \"accepted\"\nassert verdict == \"rejected\"",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-AST-BLIND-P1",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "completed = run_import_job(sample_archive)\nassert len(completed.output) > 0",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-AST-BLIND-P1",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-AST-BLIND-P2",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/bin/sh\nset -eu\n\noutput=$(run_migration sample.db)\nprintf '%s' \"$output\" | grep -q 'ok'",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-AST-BLIND-P2",
+          "severity": "P2"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-AST-BLIND-N1",
+      "class": "assertion-specificity",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "result = run_import_job(sample_archive)\nassert result.status == \"complete\"\nassert result.imported_paths == [\"docs/guide.txt\"]\nassert result.destination.read_text(encoding=\"utf-8\") == \"guide text\"",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-ENV-BLIND-P1",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "from pathlib import Path\n\ndef locate_user_config():\n    config = Path.home() / \".toolrc\"\n    return config if config.exists() else Path(\"defaults/toolrc\")",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-ENV-BLIND-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-ENV-BLIND-P2",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/bin/sh\nset -eu\n\nif command -v fast-compiler >/dev/null 2>&1; then\n    fast-compiler --strict source.c\nelse\n    basic-compiler source.c\nfi",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-ENV-BLIND-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-ENV-BLIND-N1",
+      "class": "hidden-environment-dependencies",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "from pathlib import Path\n\ndef test_config_location(fixture_inputs):\n    home = Path(fixture_inputs[\"home\"])\n    assert fixture_inputs[\"home\"] == fixture_inputs[\"declared_home\"]\n    assert locate_config(home) == home / \".toolrc\"",
+      "expected_findings": []
+    },
+    {
+      "id": "C2-TI-GIT-BLIND-P1",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import subprocess\nimport tempfile\nfrom pathlib import Path\n\nwith tempfile.TemporaryDirectory(prefix=\"repo-\") as directory:\n    repo = Path(directory)\n    subprocess.run([\"git\", \"init\", str(repo)], check=True, capture_output=True)\n    subprocess.run([\"git\", \"-C\", str(repo), \"-c\", \"user.name=Fixture\", \"-c\", \"user.email=fixture@example.invalid\", \"-c\", \"commit.gpgsign=false\", \"config\", \"--local\", \"remote.origin.url\", \"/var/empty-fixture-remote.git\"], check=True, capture_output=True)",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-GIT-BLIND-P1",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-GIT-BLIND-P2",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "fixture_test.sh",
+      "source": "#!/bin/sh\nset -eu\n\nrepo=$(mktemp -d)\ntrap 'rm -rf \"$repo\"' EXIT\ngit -C \"$repo\" init\ngit -C \"$repo\" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit --allow-empty -m fixture\n",
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-GIT-BLIND-P2",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "C2-TI-GIT-BLIND-N1",
+      "class": "fixture-git-signing-hooks",
+      "kind": "holdout",
+      "file": "fixture_test.py",
+      "source": "import subprocess\nimport tempfile\nfrom pathlib import Path\n\nwith tempfile.TemporaryDirectory(prefix=\"repo-\") as directory:\n    repo = Path(directory)\n    hooks = repo / \"empty-hooks\"\n    hooks.mkdir()\n    subprocess.run([\"git\", \"init\", str(repo)], check=True, capture_output=True)\n    for key, value in [(\"user.name\", \"Fixture\"), (\"user.email\", \"fixture@example.invalid\"), (\"commit.gpgsign\", \"false\"), (\"core.hooksPath\", str(hooks)), (\"remote.origin.url\", \"/var/empty-fixture-remote.git\")]:\n        subprocess.run([\"git\", \"-C\", str(repo), \"config\", \"--local\", key, value], check=True, capture_output=True)\n    assert list(hooks.iterdir()) == []",
+      "expected_findings": []
+    }
+  ],
+  "description": "Authored blind to the detectors."
+}

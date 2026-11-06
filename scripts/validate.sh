@@ -1309,6 +1309,19 @@ fi
 if ! git_identity_unchanged "$ROOT" "$IDENTITY_BEFORE"; then
   FAIL=1
 fi
+# Offline model-gate planner/scorer fixtures; no model or network calls.
+if ! bash "$ROOT/scripts/test-eval-test-integrity-model.sh"; then
+  fail "test-integrity model evaluator fixtures failed"
+fi
+
+
+# The dogfood evaluator calls this script once with the guard set, proving the
+# repository gate without recursively creating disposable fixtures.
+if [ "${COMPOUND_LOOP_SKIP_TEST_INTEGRITY:-0}" != "1" ]; then
+  if ! COMPOUND_LOOP_IN_VALIDATE=1 bash "$ROOT/scripts/test-review-test-integrity.sh" dogfood; then
+    fail "test-integrity dogfood failed"
+  fi
+fi
 
 echo
 if [ "$FAIL" -eq 0 ]; then
