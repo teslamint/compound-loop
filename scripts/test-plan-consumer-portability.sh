@@ -2657,6 +2657,8 @@ for fragment in (
     "<artifact_root>/reviews/U<N>-diff.txt",
     "SSH_AUTH_SOCK",
     "--format='%h %G? %GK'",
+    "including step 9 fix subagents",
+    "blocks the unit until that commit is re-signed",
 ):
     assert fragment in implementing, fragment
 
