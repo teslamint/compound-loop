@@ -198,13 +198,27 @@
       ]
     },
     {
-      "id": "C2-TI-GIT-CONF-N1",
-      "class": "fixture-git-signing-hooks",
+      "id": "C2-TI-GIT-CONF-P3",
+      "class": "verifier-fail-open",
       "kind": "holdout",
       "file": "fixture_test.sh",
       "source": "#!/bin/sh\nrepo=$(mktemp -d)\nmkdir \"$repo/hooks\"\ngit -C \"$repo\" init\ngit -C \"$repo\" config user.name Tester; git -C \"$repo\" config user.email tester@example.invalid\ngit -C \"$repo\" config commit.gpgsign false; git -C \"$repo\" config core.hooksPath \"$repo/hooks\"\ntest -z \"$(find \"$repo/hooks\" -mindepth 1 -print -quit)\"\ngit -C \"$repo\" config remote.origin.url /dev/null\ngit -C \"$repo\" commit --allow-empty -m fixture",
-      "expected_findings": []
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-GIT-CONF-P3",
+          "severity": "P1"
+        }
+      ]
     }
   ],
-  "description": "Authored blind to the detectors."
+  "description": "Authored blind to the detectors.",
+  "label_corrections": [
+    {
+      "case_id": "C2-TI-GIT-CONF-P3",
+      "was": "C2-TI-GIT-CONF-N1",
+      "prior_label": "clean",
+      "corrected_label": "verifier-fail-open",
+      "evidence": "reproduced with executed commands, see commit message"
+    }
+  ]
 }

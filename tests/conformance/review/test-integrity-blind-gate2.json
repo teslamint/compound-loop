@@ -317,12 +317,17 @@
       ]
     },
     {
-      "id": "C2-TI-G2-GIT-N1",
+      "id": "C2-TI-G2-GIT-P4",
       "class": "fixture-git-signing-hooks",
       "kind": "holdout",
       "file": "test_mirror_branch.py",
       "source": "import subprocess\n\nfrom sync.mirror import mirror_branch\n\n\ndef _git(cwd, *args):\n    return subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True, text=True).stdout\n\n\ndef test_mirror_branch_pushes_to_local_remote(tmp_path):\n    hooks = tmp_path / 'no-hooks'\n    hooks.mkdir()\n    origin = tmp_path / 'origin.git'\n    _git(tmp_path, 'init', '-q', '--bare', str(origin))\n    work = tmp_path / 'work'\n    _git(tmp_path, 'init', '-q', '-b', 'main', str(work))\n    for key, value in [('user.name', 'Fixture'), ('user.email', 'fixture@test.local'), ('commit.gpgsign', 'false'), ('tag.gpgsign', 'false'), ('core.hooksPath', str(hooks))]:\n        _git(work, 'config', key, value)\n    _git(work, 'remote', 'add', 'origin', str(origin))\n    (work / 'x.txt').write_text('x\\n')\n    _git(work, 'add', 'x.txt')\n    _git(work, 'commit', '-q', '-m', 'add x')\n    mirror_branch(work, 'origin', 'main')\n    head = _git(work, 'rev-parse', 'HEAD').strip()\n    assert _git(origin, 'rev-parse', 'refs/heads/main').strip() == head\n",
-      "expected_findings": []
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-G2-GIT-P4",
+          "severity": "P1"
+        }
+      ]
     },
     {
       "id": "C2-TI-G2-GIT-N2",
@@ -331,6 +336,22 @@
       "file": "release_notes_configured.sh",
       "source": "#!/bin/sh\nset -eu\nrepo=$(mktemp -d)\ntrap 'rm -rf \"$repo\"' EXIT\ngit init -q \"$repo\"\ngit -C \"$repo\" config user.name 'Fixture'\ngit -C \"$repo\" config user.email 'fixture@test.local'\ngit -C \"$repo\" config commit.gpgsign false\ngit -C \"$repo\" config core.hooksPath /dev/null\nprintf 'one\\n' > \"$repo/f\"\ngit -C \"$repo\" add f\ngit -C \"$repo\" commit -q -m 'feat: one'\nprintf 'two\\n' >> \"$repo/f\"\ngit -C \"$repo\" commit -q -am 'fix: two'\nexpected=$(printf '%s\\n' '- fix: two' '- feat: one')\nactual=$(./bin/release-notes \"$repo\")\n[ \"$actual\" = \"$expected\" ] || { printf 'got:\\n%s\\n' \"$actual\" >&2; exit 1; }\necho ok\n",
       "expected_findings": []
+    }
+  ],
+  "label_corrections": [
+    {
+      "case_id": "C2-TI-GIT-CONF-P3",
+      "was": "C2-TI-GIT-CONF-N1",
+      "prior_label": "clean",
+      "corrected_label": "verifier-fail-open",
+      "evidence": "reproduced with executed commands, see commit message"
+    },
+    {
+      "case_id": "C2-TI-G2-GIT-P4",
+      "was": "C2-TI-G2-GIT-N1",
+      "prior_label": "clean",
+      "corrected_label": "fixture-git-signing-hooks",
+      "evidence": "reproduced with executed commands, see commit message"
     }
   ]
 }

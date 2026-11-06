@@ -24,7 +24,7 @@ Evidence includes the path expression and the isolation boundary it bypasses. Do
 
 ### Verifier fail-open behavior
 
-Check every verifier and assertion adapter for ignored exit status, swallowed exceptions, default-success fallbacks, unchecked `check=False` results, and missing or unknown verdict handling. A malformed, missing, or infrastructure-error result must fail closed rather than become `clean`, `pass`, or an empty finding list. Severity is P0 when the path authorizes a release or mutation and P1 otherwise.
+Check every verifier and assertion adapter for ignored exit status, swallowed exceptions, default-success fallbacks, unchecked `check=False` results, and missing or unknown verdict handling. A command substitution whose failure becomes empty output is one of these: `test -z "$(find ...)"`, `[ -z "$(tool ...)" ]`, or a pipeline whose exit status is not checked reports success when the command itself is missing, fails, or errors. A malformed, missing, or infrastructure-error result must fail closed rather than become `clean`, `pass`, or an empty finding list. Severity is P0 when the path authorizes a release or mutation and P1 otherwise.
 
 Evidence traces the failure input to the success path. Do not flag a deliberately handled expected rejection whose result is asserted and whose unknown or infrastructure states remain distinct.
 
@@ -38,7 +38,7 @@ Evidence cites the assertion and the untested distinction. Do not flag a deliber
 
 Check whether tests read host `HOME`, `PATH`, `TMPDIR`, locale, timezone, credentials, Git configuration outside fixture repositories, network proxy variables, or tool-specific configuration without setting or clearing them in the fixture. Flag environment reads that change the verdict or target and are not represented in the fixture's declared inputs. Severity is P1 when host state can change authorization or target selection and P2 otherwise.
 
-Evidence names the environment key or implicit process state and the missing fixture declaration. A read of host `HOME`, `PATH`, or `TMPDIR` that the snippet does not first set or clear is a finding even when the snippet shown only stores or prints the value, because the fixture has not declared the input. Do not flag an explicitly supplied value that the fixture records and verifies.
+Evidence names the environment key or implicit process state and the missing fixture declaration. A read of host `HOME` or `PATH` that the snippet does not first set or clear is a finding even when the snippet shown only stores or prints the value, because the fixture has not declared the input. The temporary root is an exception: `mktemp`, `tempfile.gettempdir()`, `tempfile.TemporaryDirectory()`, and the process temporary directory are judged only under Shared temporary directories, and the host `TMPDIR`, `TEMP`, or `TMP` they consult is not a separate Hidden environment dependency unless the snippet uses the value for something else. Do not flag an explicitly supplied value that the fixture records and verifies.
 
 ### Fixture Git signing/hooks
 
@@ -53,7 +53,7 @@ Report each defect once, under the single class that owns it:
 - Git identity, signing, hooks, credential helpers, remote settings, and inherited global or system Git configuration of a fixture repository belong to Fixture Git signing/hooks. Do not also report that configuration as a hidden environment dependency. A Git command that actually contacts an external remote, such as `clone`, `fetch`, or `push`, is a separate Network isolation defect.
 - A configured remote, URL, or host name that the code never contacts is not a network defect. Network isolation needs a call or command that can reach an external host.
 - An ignored exit status, swallowed exception, or default-success value belongs to Verifier fail-open behavior. Report Assertion specificity only for a test assertion that can pass without the required behavior.
-- Hidden environment dependencies covers host state other than Git configuration that the snippet reads or that selects its target or verdict. Running a tool or `git` binary from `PATH` is not by itself an environment defect.
+- Hidden environment dependencies covers host state other than Git configuration that the snippet reads or that selects its target or verdict. Running a tool or `git` binary from `PATH` is not by itself an environment defect. Package-source settings such as `PIP_INDEX_URL` or `PIP_CONFIG_FILE` inherited by an install command belong to Network isolation when that command can reach an external index, not to this class.
 - Judge only the text shown. Do not report a class because unseen helper code might be unsafe.
 - A snippet is often a fragment written to show one defect. When another class owns that defect, do not also report Assertion specificity because the fragment lacks an assertion; report that class only for an assertion that is present and too weak.
 
