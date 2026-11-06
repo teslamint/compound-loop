@@ -199,12 +199,26 @@
       ]
     },
     {
-      "id": "C2-TI-GIT-FINAL-N1",
-      "class": "fixture-git-signing-hooks",
+      "id": "C2-TI-GIT-FINAL-P3",
+      "class": "verifier-fail-open",
       "kind": "holdout",
       "file": "fixture_test.sh",
       "source": "#!/usr/bin/env bash\nset -euo pipefail\nroot=$(mktemp -d)\ntrap 'rm -rf \"$root\"' EXIT\nmkdir \"$root/hooks\"\nexport GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1\ngit init -q \"$root/repo\"\ng() { git -C \"$root/repo\" -c user.name=Fixture -c user.email=fx@example.invalid -c commit.gpgsign=false -c core.hooksPath=\"$root/hooks\" \"$@\"; }\nprintf 'x\\n' > \"$root/repo/f\"\ng add f\ng commit -q -m seed\n[ -z \"$(ls -A \"$root/hooks\")\" ] && [ \"$(g log --format=%an:%s)\" = \"Fixture:seed\" ]\n",
-      "expected_findings": []
+      "expected_findings": [
+        {
+          "seed_id": "C2-TI-GIT-FINAL-P3",
+          "severity": "P1"
+        }
+      ]
+    }
+  ],
+  "label_corrections": [
+    {
+      "case_id": "C2-TI-GIT-FINAL-P3",
+      "was": "C2-TI-GIT-FINAL-N1",
+      "prior_label": "clean",
+      "corrected_label": "verifier-fail-open",
+      "evidence": "[ -z \"$(ls -A dir)\" ] returns exit 0 when ls is missing, reproduced"
     }
   ]
 }
