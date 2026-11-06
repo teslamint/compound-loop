@@ -644,6 +644,7 @@ SHIPPING_CLEANUP_COMMANDS = (
     "gh pr view <number> --json state --jq '.state'",
     "gh pr view <number> --json headRefName,headRefOid,isCrossRepository",
     "git worktree list --porcelain",
+    "git remote get-url --push origin",
     "git update-ref -d refs/heads/<branch> <headRefOid>",
     "git push --force-with-lease=<branch>:<headRefOid> origin --delete <branch>",
 )
