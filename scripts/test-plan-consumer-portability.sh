@@ -2655,11 +2655,16 @@ for fragment in (
     "<artifact_root>/briefs/U<N>-brief.md",
     "<artifact_root>/reports/U<N>-report.md",
     "<artifact_root>/reviews/U<N>-diff.txt",
+    "SSH_AUTH_SOCK",
+    "--format='%h %G? %GK'",
+    "including step 9 fix subagents",
+    "blocks the unit until that commit is re-signed",
+    "the orchestrator's own signing key",
 ):
     assert fragment in implementing, fragment
 
 schema = (plugin_root / "skills/planning/schemas/plan-schema.md").read_text(encoding="utf-8")
-for fragment in ("<artifact_root>/evidence/U<N>/", "executable probe", "exact partial durable state", "compensation owner"):
+for fragment in ("<artifact_root>/evidence/U<N>/", "executable probe", "exact partial durable state", "compensation owner", "escapes every literal `|` as `\\|`"):
     assert fragment in schema, fragment
 
 plan_filename_stem = "2026-08-23-001-fix-portable-plan"

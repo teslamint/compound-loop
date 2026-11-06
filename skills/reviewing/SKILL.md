@@ -98,6 +98,8 @@ For every full review, including every phase-gate review, dispatch the `test-int
 
 Full pipeline in `references/merge-pipeline.md` (fingerprint dedup, cross-lane promotion, mode-aware demotion, confidence gate last with the P0-at-50 exception, atomic artifact writes). Severity is **P0-P3 everywhere** -- the envelope's critical/important/minor `rollup` is a presentation-only projection, never a second severity scale.
 
+Grade severity by the success criterion the finding threatens, not by the size or reachability of the code path it sits in (`CONCEPTS.md`: threatened-criterion severity). A hole in an integrity mechanism the change exists to build, or a defect that defeats a named success criterion, is never below P1, however narrow its current blast radius.
+
 ## Step 6: Verification (dual path)
 
 - **Interactive** (default mode, standalone or phase-gate in a chat session): a validator wave -- one independent validator per surviving finding, budget cap 15 (never drop a P0/P1 to fit the cap; raise it instead). Protocol and infra-failure handling: `references/merge-pipeline.md`.

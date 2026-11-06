@@ -28,7 +28,7 @@
       "path": "skills/planning/SKILL.md",
       "heading": "## 14. Self-review",
       "text": "- **Discrimination check** — for every step that compares two things, run the step's own comparison on two controlled fixture pairs.",
-      "sha256": "1673a875cde4b2b361083b9cc0e2da35ef6480490bdda653946750f502f75799"
+      "sha256": "4352c76af3a93f1b4e75a373b6301ea4d7df0e12a2254bfbd5e5243b28bf8e55"
     },
     {
       "id": "release-loop-pending-gate",
@@ -63,7 +63,7 @@
       "path": "skills/shipping/SKILL.md",
       "heading": "### Release-loop pending disposition",
       "text": "For an interactive final disposition invoked by `release-loop`, atomically set `phase_status: waiting-user` and issue `pending_gate.id: ship-approval` before asking.",
-      "sha256": "189186385075041cb9c38d76922867ea2443fc7f43f412ff4c6bce326df07405"
+      "sha256": "580810b95c384a4a074dbdcc251e16b45d7fddb1b88cab92619e9e4b85a0d499"
     },
     {
       "id": "legacy-handoff-persistent-siblings",
